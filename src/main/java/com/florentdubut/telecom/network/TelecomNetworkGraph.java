@@ -118,6 +118,10 @@ public class TelecomNetworkGraph extends SavedData {
         return nodes.get(pos);
     }
 
+    public java.util.Collection<NetworkNode> getNodes() {
+        return nodes.values();
+    }
+
     public NetworkNode getNodeByIp(String ip) {
         for (NetworkNode node : nodes.values()) {
             if (ip.equals(node.getIpAddress())) {

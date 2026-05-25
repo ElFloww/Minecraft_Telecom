@@ -8,10 +8,25 @@ import net.minecraft.world.level.block.EntityBlock;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import org.jetbrains.annotations.Nullable;
+import net.minecraft.world.InteractionResult;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.phys.BlockHitResult;
+import com.florentdubut.telecom.client.ClientHooks;
 
 public class AntennaBlock extends Block implements EntityBlock {
     public AntennaBlock(Properties properties) {
         super(properties);
+    }
+
+    @Override
+    protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos, Player player, BlockHitResult hitResult) {
+        if (level.isClientSide) {
+            BlockEntity be = level.getBlockEntity(pos);
+            if (be instanceof AntennaBlockEntity antenna) {
+                ClientHooks.openAntennaScreen(antenna);
+            }
+        }
+        return InteractionResult.SUCCESS;
     }
 
     @Nullable

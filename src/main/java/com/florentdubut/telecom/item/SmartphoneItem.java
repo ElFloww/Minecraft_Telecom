@@ -16,9 +16,8 @@ public class SmartphoneItem extends Item {
 
     @Override
     public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand usedHand) {
-        if (!level.isClientSide() && player instanceof ServerPlayer serverPlayer) {
-            // Placeholder: Send message to player. Later we will open a Menu/GUI
-            serverPlayer.sendSystemMessage(Component.literal("Opening Smartphone Interface..."));
+        if (level.isClientSide()) {
+            com.florentdubut.telecom.client.ClientHooks.openSmartphoneScreen();
         }
         return InteractionResultHolder.sidedSuccess(player.getItemInHand(usedHand), level.isClientSide());
     }
