@@ -34,10 +34,10 @@ public class SignalPropagator {
         currentPower -= freeSpaceLoss;
         
         // Raycast to check for blocks between antenna and player
-        // Since Minecraft doesn't easily let us get all blocks intersected by a ray,
-        // we step along the vector manually to find blocks.
         Vec3 dir = end.subtract(start).normalize();
         int steps = (int) Math.ceil(distance);
+        int consecutiveSolidBlocks = 0;
+        
         for (int i = 0; i < steps; i++) {
             BlockPos currentBlock = BlockPos.containing(start.add(dir.scale(i)));
             if (currentBlock.equals(antennaPos) || currentBlock.equals(playerPos)) {
@@ -46,27 +46,36 @@ public class SignalPropagator {
             
             BlockState state = level.getBlockState(currentBlock);
             if (!state.isAir()) {
+                // Ignore non-solid blocks like grass, flowers, torches
+                if (state.getCollisionShape(level, currentBlock).isEmpty()) {
+                    consecutiveSolidBlocks = 0;
+                    continue;
+                }
+
                 // Determine material penalty
-                float penalty = getMaterialPenalty(state, freq);
-                currentPower -= penalty;
+                float frequencyMultiplier = freq.getFrequencyMhz() / 900f; 
+                
+                if (state.is(net.minecraft.tags.BlockTags.LEAVES) || !state.canOcclude()) {
+                    // Leaves, glass, etc.
+                    currentPower -= 1.0f * frequencyMultiplier; 
+                    consecutiveSolidBlocks = 0;
+                } else if (!state.getFluidState().isEmpty()) {
+                    // Water
+                    currentPower -= 3.0f * frequencyMultiplier;
+                    consecutiveSolidBlocks = 0;
+                } else {
+                    // Solid blocks (stone, wood, dirt)
+                    consecutiveSolidBlocks++;
+                    // Softer on first block, harder on thick walls
+                    float penalty = 2.0f * frequencyMultiplier + (1.5f * frequencyMultiplier * consecutiveSolidBlocks);
+                    currentPower -= penalty;
+                }
             } else {
                 currentPower -= freq.getBaseAttenuation();
+                consecutiveSolidBlocks = 0;
             }
         }
         
         return new SignalResult(freq, currentPower);
-    }
-
-    private static float getMaterialPenalty(BlockState state, TelecomFrequency freq) {
-        // High frequency = worse penetration
-        float frequencyMultiplier = freq.getFrequencyMhz() / 900f; 
-        
-        if (!state.getFluidState().isEmpty()) {
-            return 5.0f * frequencyMultiplier; // Water blocks signal heavily
-        } else if (!state.canOcclude()) {
-            return 1.0f * frequencyMultiplier; // Leaves, glass, etc.
-        } else {
-            return 10.0f * frequencyMultiplier; // Stone, dirt, solid blocks
-        }
     }
 }

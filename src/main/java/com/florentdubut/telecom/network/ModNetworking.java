@@ -58,7 +58,7 @@ public class ModNetworking {
                     
                     for (TelecomFrequency freq : TelecomFrequency.values()) {
                         if (antenna.isFrequencyEnabled(freq)) {
-                            int signal = (int) com.florentdubut.telecom.network.SignalPropagator.calculateSignal(level, antenna.getBlockPos(), player.blockPosition(), freq).powerDbm;
+                            int signal = (int) com.florentdubut.telecom.network.SignalPropagator.calculateSignal(level, antenna.getBlockPos(), player.blockPosition().above(), freq).powerDbm;
                             
                             if (signal > -120) { // Valid connection
                                 validFreqs.computeIfAbsent(freq.getTechnology(), k -> new java.util.ArrayList<>()).add(freq);
