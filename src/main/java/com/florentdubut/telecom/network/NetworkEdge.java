@@ -9,19 +9,25 @@ public class NetworkEdge {
     private int currentUsage; // To simulate saturation
     private int length; // Total length of cables, used for attenuation/latency
     private EdgeType type;
+    private java.util.List<BlockPos> pathBlocks;
 
     public enum EdgeType {
         COPPER,
         FIBER
     }
 
-    public NetworkEdge(BlockPos nodeA, BlockPos nodeB, int bandwidthMax, int length, EdgeType type) {
+    public NetworkEdge(BlockPos nodeA, BlockPos nodeB, int bandwidthMax, int length, EdgeType type, java.util.List<BlockPos> pathBlocks) {
         this.nodeA = nodeA;
         this.nodeB = nodeB;
         this.bandwidthMax = bandwidthMax;
         this.length = length;
         this.type = type;
+        this.pathBlocks = pathBlocks;
         this.currentUsage = 0;
+    }
+    
+    public java.util.List<BlockPos> getPathBlocks() {
+        return pathBlocks;
     }
 
     public BlockPos getNodeA() {

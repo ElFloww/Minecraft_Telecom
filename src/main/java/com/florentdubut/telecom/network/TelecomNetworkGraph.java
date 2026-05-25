@@ -52,7 +52,14 @@ public class TelecomNetworkGraph extends SavedData {
             int bandwidthMax = edgeTag.getInt("BandwidthMax");
             int length = edgeTag.getInt("Length");
             NetworkEdge.EdgeType type = NetworkEdge.EdgeType.valueOf(edgeTag.getString("Type"));
-            NetworkEdge edge = new NetworkEdge(nodeA, nodeB, bandwidthMax, length, type);
+            java.util.List<BlockPos> pathBlocks = new java.util.ArrayList<>();
+            if (edgeTag.contains("PathBlocks")) {
+                long[] blocks = edgeTag.getLongArray("PathBlocks");
+                for (long l : blocks) {
+                    pathBlocks.add(BlockPos.of(l));
+                }
+            }
+            NetworkEdge edge = new NetworkEdge(nodeA, nodeB, bandwidthMax, length, type, pathBlocks);
             graph.edges.add(edge);
         }
 
@@ -81,6 +88,13 @@ public class TelecomNetworkGraph extends SavedData {
             edgeTag.putInt("BandwidthMax", edge.getBandwidthMax());
             edgeTag.putInt("Length", edge.getLength());
             edgeTag.putString("Type", edge.getType().name());
+            if (edge.getPathBlocks() != null) {
+                long[] blocks = new long[edge.getPathBlocks().size()];
+                for(int j = 0; j < blocks.length; j++) {
+                    blocks[j] = edge.getPathBlocks().get(j).asLong();
+                }
+                edgeTag.putLongArray("PathBlocks", blocks);
+            }
             edgesTag.add(edgeTag);
         }
         tag.put("Edges", edgesTag);
@@ -132,7 +146,8 @@ public class TelecomNetworkGraph extends SavedData {
             PathStats stats = calculatePathStats(sourcePos, serverNode.getPosition());
             if (stats != null) {
                 TrafficSession session = new TrafficSession(sourcePos, serverNode.getPosition(), clientIp, targetDownBw, targetUpBw, 40); // 40 ticks = 2 seconds per phase
-                session.setPingMs(stats.pingMs() + extraPing);
+                session.setExtraPing(extraPing);
+                session.setPingMs(stats.pingMs());
                 activeSessions.add(session);
                 setDirty();
             }
@@ -152,6 +167,9 @@ public class TelecomNetworkGraph extends SavedData {
         Map<TrafficSession, List<NetworkEdge>> sessionPaths = new HashMap<>();
         Map<TrafficSession, Integer> sessionRequested = new HashMap<>();
         
+        Map<BlockPos, Integer> blockUsage = new HashMap<>();
+        Map<BlockPos, Integer> blockCapacity = new HashMap<>();
+
         for (TrafficSession session : activeSessions) {
             session.tick();
             
@@ -179,7 +197,7 @@ public class TelecomNetworkGraph extends SavedData {
                 continue;
             }
             
-            session.setPingMs(stats.pingMs());
+            session.setPingMs(stats.pingMs() + session.getExtraPing());
             
             if (session.getState() == TrafficSession.SessionState.DOWNLOAD || session.getState() == TrafficSession.SessionState.UPLOAD) {
                 int hardwareMax = stats.bandwidthMbps();
@@ -188,9 +206,15 @@ public class TelecomNetworkGraph extends SavedData {
                 if (path != null) {
                     sessionPaths.put(session, path);
                     sessionRequested.put(session, requested);
-                    // Accumulate requested usage to compute congestion
+                    // Accumulate requested usage to compute congestion PER BLOCK
                     for (NetworkEdge edge : path) {
                         edge.setCurrentUsage(edge.getCurrentUsage() + requested);
+                        if (edge.getPathBlocks() != null) {
+                            for (BlockPos pos : edge.getPathBlocks()) {
+                                blockUsage.put(pos, blockUsage.getOrDefault(pos, 0) + requested);
+                                blockCapacity.put(pos, edge.getBandwidthMax());
+                            }
+                        }
                     }
                 }
             }
@@ -203,7 +227,7 @@ public class TelecomNetworkGraph extends SavedData {
             }
         }
         
-        // Phase 2: Compute actual bandwidth considering congestion
+        // Phase 2: Compute actual bandwidth considering congestion per physical block
         for (Map.Entry<TrafficSession, Integer> entry : sessionRequested.entrySet()) {
             TrafficSession session = entry.getKey();
             int requested = entry.getValue();
@@ -211,10 +235,24 @@ public class TelecomNetworkGraph extends SavedData {
             
             float minRatio = 1.0f;
             for (NetworkEdge edge : path) {
-                if (edge.getCurrentUsage() > edge.getBandwidthMax()) {
-                    float ratio = (float) edge.getBandwidthMax() / edge.getCurrentUsage();
-                    if (ratio < minRatio) {
-                        minRatio = ratio;
+                if (edge.getPathBlocks() != null) {
+                    for (BlockPos pos : edge.getPathBlocks()) {
+                        int usage = blockUsage.getOrDefault(pos, 0);
+                        int cap = blockCapacity.getOrDefault(pos, edge.getBandwidthMax());
+                        if (usage > cap) {
+                            float ratio = (float) cap / usage;
+                            if (ratio < minRatio) {
+                                minRatio = ratio;
+                            }
+                        }
+                    }
+                } else {
+                    // Fallback to edge usage
+                    if (edge.getCurrentUsage() > edge.getBandwidthMax()) {
+                        float ratio = (float) edge.getBandwidthMax() / edge.getCurrentUsage();
+                        if (ratio < minRatio) {
+                            minRatio = ratio;
+                        }
                     }
                 }
             }

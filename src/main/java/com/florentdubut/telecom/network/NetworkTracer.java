@@ -34,7 +34,7 @@ public class NetworkTracer {
             Queue<TraceStep> queue = new LinkedList<>();
             Set<BlockPos> visited = new HashSet<>();
             
-            queue.add(new TraceStep(startPos, 0, NetworkEdge.EdgeType.FIBER)); // Start with fiber, downgrade to copper if needed
+            queue.add(new TraceStep(startPos, 0, NetworkEdge.EdgeType.FIBER, new ArrayList<>())); // Start with fiber, downgrade to copper if needed
             visited.add(startPos);
             
             while (!queue.isEmpty()) {
@@ -62,7 +62,9 @@ public class NetworkTracer {
                             discoveredEdges.add(edgeKey1);
                             
                             int bandwidth = current.type == NetworkEdge.EdgeType.COPPER ? 1000 : 10000;
-                            NetworkEdge edge = new NetworkEdge(startPos, neighbor, bandwidth, current.distance + 1, current.type);
+                            List<BlockPos> finalPath = new ArrayList<>(current.pathBlocks);
+                            finalPath.add(neighbor);
+                            NetworkEdge edge = new NetworkEdge(startPos, neighbor, bandwidth, current.distance + 1, current.type, finalPath);
                             graph.addEdge(edge);
                         }
                         visited.add(neighbor);
@@ -76,7 +78,9 @@ public class NetworkTracer {
                     if (isCopper || isFiber) {
                         visited.add(neighbor);
                         NetworkEdge.EdgeType nextType = isCopper ? NetworkEdge.EdgeType.COPPER : current.type;
-                        queue.add(new TraceStep(neighbor, current.distance + 1, nextType));
+                        List<BlockPos> newPath = new ArrayList<>(current.pathBlocks);
+                        newPath.add(neighbor);
+                        queue.add(new TraceStep(neighbor, current.distance + 1, nextType, newPath));
                     }
                 }
             }
@@ -125,11 +129,13 @@ public class NetworkTracer {
         final BlockPos pos;
         final int distance;
         final NetworkEdge.EdgeType type;
+        final List<BlockPos> pathBlocks;
 
-        TraceStep(BlockPos pos, int distance, NetworkEdge.EdgeType type) {
+        TraceStep(BlockPos pos, int distance, NetworkEdge.EdgeType type, List<BlockPos> pathBlocks) {
             this.pos = pos;
             this.distance = distance;
             this.type = type;
+            this.pathBlocks = pathBlocks;
         }
     }
 }

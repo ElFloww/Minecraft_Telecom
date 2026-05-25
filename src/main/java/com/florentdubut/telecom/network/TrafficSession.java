@@ -23,6 +23,7 @@ public class TrafficSession {
     private int actualBandwidth; // actual bandwidth achieved in the last tick
     private final String clientIp; // IP of the client (Router or Phone)
     private int pingMs;
+    private int extraPing;
 
     public TrafficSession(BlockPos sourcePos, BlockPos destPos, String clientIp, int targetDownBw, int targetUpBw, int totalTicksPerPhase) {
         this.sessionId = UUID.randomUUID();
@@ -36,6 +37,7 @@ public class TrafficSession {
         this.clientIp = clientIp;
         this.actualBandwidth = 0;
         this.pingMs = 0;
+        this.extraPing = 0;
     }
 
     public UUID getSessionId() {
@@ -96,6 +98,14 @@ public class TrafficSession {
     
     public void setPingMs(int pingMs) {
         this.pingMs = pingMs;
+    }
+    
+    public int getExtraPing() {
+        return extraPing;
+    }
+    
+    public void setExtraPing(int extraPing) {
+        this.extraPing = extraPing;
     }
 
     public void tick() {
