@@ -522,6 +522,12 @@ public class TelecomNetworkGraph extends SavedData {
             if (edge.getType() == NetworkEdge.EdgeType.FIBER) {
                 totalPing += length * 0.05f;
                 minBandwidth = Math.min(minBandwidth, 10000); // 10 Gbps stable
+            } else if (edge.getType() == NetworkEdge.EdgeType.MEDIUM_FIBER) {
+                totalPing += length * 0.02f;
+                minBandwidth = Math.min(minBandwidth, 100000); // 100 Gbps
+            } else if (edge.getType() == NetworkEdge.EdgeType.BIG_FIBER) {
+                totalPing += length * 0.01f;
+                minBandwidth = Math.min(minBandwidth, 1000000); // 1000 Gbps
             } else if (edge.getType() == NetworkEdge.EdgeType.COPPER) {
                 totalPing += length * 0.2f;
                 distanceCu += length;
