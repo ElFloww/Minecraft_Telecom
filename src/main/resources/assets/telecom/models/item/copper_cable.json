@@ -1,1 +1,3 @@
-{ "parent": "telecom:block/copper_cable" }
+{
+  "parent": "telecom:block/copper_cable_core"
+}

@@ -1,7 +1,7 @@
 {
   "variants": {
     "": {
-      "model": "telecom:block/antenna"
+      "model": "telecom:block/server"
     }
   }
 }

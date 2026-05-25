@@ -1,1 +1,7 @@
-{ "variants": { "": { "model": "telecom:block/router" } } }
+{
+  "variants": {
+    "": {
+      "model": "telecom:block/router"
+    }
+  }
+}

@@ -1,1 +1,6 @@
-{ "parent": "minecraft:item/generated", "textures": { "layer0": "telecom:item/smartphone" } }
+{
+  "parent": "minecraft:item/generated",
+  "textures": {
+    "layer0": "telecom:item/smartphone"
+  }
+}

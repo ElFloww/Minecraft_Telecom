@@ -1,1 +1,3 @@
-{ "parent": "telecom:block/router" }
+{
+  "parent": "telecom:block/router"
+}
