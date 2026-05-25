@@ -171,7 +171,8 @@ public class TelecomNetworkGraph extends SavedData {
         if (!nodes.isEmpty()) {
             for (NetworkNode node : nodes.values()) {
                 if (node.getType() == NetworkNode.NodeType.ROUTER) {
-                    if (Math.random() < 0.01) {
+                    // Reduced probability to 0.5% (was 1%)
+                    if (Math.random() < 0.005) {
                         boolean hasSession = false;
                         for (TrafficSession s : activeSessions) {
                             if (s.getSourcePos().equals(node.getPosition())) {
@@ -180,8 +181,9 @@ public class TelecomNetworkGraph extends SavedData {
                             }
                         }
                         if (!hasSession) {
-                            int randDown = 10 + (int)(Math.random() * 2000); 
-                            int randUp = 5 + (int)(Math.random() * 500); 
+                            // Reduced bandwidth consumption significantly
+                            int randDown = 1 + (int)(Math.random() * 200); // 1 to 200 Mbps (was 10-2000)
+                            int randUp = 1 + (int)(Math.random() * 50); // 1 to 50 Mbps (was 5-500)
                             startSpeedtest(node.getPosition(), node.getIpAddress() != null ? node.getIpAddress() : "0.0.0.0", randDown, randUp, 0, true);
                         }
                     }
@@ -195,7 +197,8 @@ public class TelecomNetworkGraph extends SavedData {
                                player.getOffhandItem().is(com.florentdubut.telecom.registry.ModItems.SMARTPHONE.get()) || 
                                player.getMainHandItem().is(com.florentdubut.telecom.registry.ModItems.SMARTPHONE.get());
             
-            if (hasPhone && Math.random() < 0.01) {
+            // Reduced probability to 0.5%
+            if (hasPhone && Math.random() < 0.005) {
                 // Find nearest antenna for this player
                 com.florentdubut.telecom.block.entity.AntennaBlockEntity bestAntenna = null;
                 float bestSignal = -1000f;
@@ -227,8 +230,9 @@ public class TelecomNetworkGraph extends SavedData {
                         }
                     }
                     if (!hasSession) {
-                        int randDown = 1 + (int)(Math.random() * 500); 
-                        int randUp = 1 + (int)(Math.random() * 100); 
+                        // Very low consumption for phones (e.g., messaging, small loading)
+                        int randDown = 1 + (int)(Math.random() * 20); // 1 to 20 Mbps (was 1-500)
+                        int randUp = 1 + (int)(Math.random() * 5); // 1 to 5 Mbps (was 1-100)
                         int extraPing = 20 + (int)(Math.random() * 50);
                         startSpeedtest(bestAntenna.getBlockPos(), bestIp, randDown, randUp, extraPing, true);
                     }
