@@ -132,14 +132,23 @@ public class TelecomNetworkGraph extends SavedData {
         setDirty();
     }
 
-    private final it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap actualBlockUsageDown = new it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap();
-    private final it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap actualBlockUsageUp = new it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap();
-
     public int getActualBlockUsageDown(BlockPos pos) {
-        return actualBlockUsageDown.getOrDefault(pos.asLong(), 0);
+        int sum = 0;
+        for (NetworkEdge edge : edges) {
+            if (edge.getPathBlocks() != null && edge.getPathBlocks().contains(pos)) {
+                sum += edge.getCurrentUsageDown();
+            }
+        }
+        return sum;
     }
     public int getActualBlockUsageUp(BlockPos pos) {
-        return actualBlockUsageUp.getOrDefault(pos.asLong(), 0);
+        int sum = 0;
+        for (NetworkEdge edge : edges) {
+            if (edge.getPathBlocks() != null && edge.getPathBlocks().contains(pos)) {
+                sum += edge.getCurrentUsageUp();
+            }
+        }
+        return sum;
     }
 
     private final List<TrafficSession> activeSessions = new ArrayList<>();
@@ -264,10 +273,9 @@ public class TelecomNetworkGraph extends SavedData {
         // Reset current usage
         for (NetworkEdge edge : edges) {
             edge.setCurrentUsage(0);
+            edge.setCurrentUsageDown(0);
+            edge.setCurrentUsageUp(0);
         }
-        
-        it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap blockUsageDown = new it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap();
-        it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap blockUsageUp = new it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap();
         
         totalBandwidthUp = 0;
         totalBandwidthDown = 0;
@@ -275,8 +283,6 @@ public class TelecomNetworkGraph extends SavedData {
         List<TrafficSession> toRemove = new ArrayList<>();
         Map<TrafficSession, List<NetworkEdge>> sessionPaths = new HashMap<>();
         Map<TrafficSession, Integer> sessionRequested = new HashMap<>();
-        
-        it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap blockCapacity = new it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap();
 
         for (TrafficSession session : activeSessions) {
             session.tick();
@@ -316,20 +322,9 @@ public class TelecomNetworkGraph extends SavedData {
                 if (path != null) {
                     sessionPaths.put(session, path);
                     sessionRequested.put(session, requested);
-                    // Accumulate requested usage to compute congestion PER BLOCK
+                    // Accumulate requested usage to compute congestion
                     for (NetworkEdge edge : path) {
                         edge.setCurrentUsage(edge.getCurrentUsage() + requested);
-                        if (edge.getPathBlocks() != null) {
-                            for (BlockPos pos : edge.getPathBlocks()) {
-                                long posLong = pos.asLong();
-                                if (session.getState() == TrafficSession.SessionState.DOWNLOAD) {
-                                    blockUsageDown.put(posLong, blockUsageDown.getOrDefault(posLong, 0) + requested);
-                                } else {
-                                    blockUsageUp.put(posLong, blockUsageUp.getOrDefault(posLong, 0) + requested);
-                                }
-                                blockCapacity.put(posLong, edge.getBandwidthMax());
-                            }
-                        }
                     }
                 }
             }
@@ -342,7 +337,7 @@ public class TelecomNetworkGraph extends SavedData {
             }
         }
         
-        // Phase 2: Compute actual bandwidth considering congestion per physical block
+        // Phase 2: Compute actual bandwidth considering congestion per edge
         for (Map.Entry<TrafficSession, Integer> entry : sessionRequested.entrySet()) {
             TrafficSession session = entry.getKey();
             int requested = entry.getValue();
@@ -350,25 +345,10 @@ public class TelecomNetworkGraph extends SavedData {
             
             float minRatio = 1.0f;
             for (NetworkEdge edge : path) {
-                if (edge.getPathBlocks() != null) {
-                    for (BlockPos pos : edge.getPathBlocks()) {
-                        long posLong = pos.asLong();
-                        int usage = session.getState() == TrafficSession.SessionState.DOWNLOAD ? blockUsageDown.getOrDefault(posLong, 0) : blockUsageUp.getOrDefault(posLong, 0);
-                        int cap = blockCapacity.getOrDefault(posLong, edge.getBandwidthMax());
-                        if (usage > cap) {
-                            float ratio = (float) cap / usage;
-                            if (ratio < minRatio) {
-                                minRatio = ratio;
-                            }
-                        }
-                    }
-                } else {
-                    // Fallback to edge usage
-                    if (edge.getCurrentUsage() > edge.getBandwidthMax()) {
-                        float ratio = (float) edge.getBandwidthMax() / edge.getCurrentUsage();
-                        if (ratio < minRatio) {
-                            minRatio = ratio;
-                        }
+                if (edge.getCurrentUsage() > edge.getBandwidthMax()) {
+                    float ratio = (float) edge.getBandwidthMax() / edge.getCurrentUsage();
+                    if (ratio < minRatio) {
+                        minRatio = ratio;
                     }
                 }
             }
@@ -386,24 +366,15 @@ public class TelecomNetworkGraph extends SavedData {
             }
         }
         
-        // Edge usage is kept for the Network Tool until the next tick
-        actualBlockUsageDown.clear();
-        actualBlockUsageUp.clear();
         for (Map.Entry<TrafficSession, Integer> entry : sessionRequested.entrySet()) {
             TrafficSession session = entry.getKey();
             int actual = session.getActualBandwidth();
             List<NetworkEdge> path = sessionPaths.get(session);
             for(NetworkEdge edge : path) {
-                edge.setCurrentUsage(edge.getCurrentUsage() + actual);
-                if (edge.getPathBlocks() != null) {
-                    for (BlockPos pos : edge.getPathBlocks()) {
-                        long posLong = pos.asLong();
-                        if (session.getState() == TrafficSession.SessionState.DOWNLOAD) {
-                            actualBlockUsageDown.put(posLong, actualBlockUsageDown.getOrDefault(posLong, 0) + actual);
-                        } else {
-                            actualBlockUsageUp.put(posLong, actualBlockUsageUp.getOrDefault(posLong, 0) + actual);
-                        }
-                    }
+                if (session.getState() == TrafficSession.SessionState.DOWNLOAD) {
+                    edge.setCurrentUsageDown(edge.getCurrentUsageDown() + actual);
+                } else {
+                    edge.setCurrentUsageUp(edge.getCurrentUsageUp() + actual);
                 }
             }
         }

@@ -52,6 +52,25 @@ public class NetworkEdge {
         this.currentUsage = currentUsage;
     }
 
+    private int currentUsageDown;
+    private int currentUsageUp;
+
+    public int getCurrentUsageDown() {
+        return currentUsageDown;
+    }
+
+    public void setCurrentUsageDown(int currentUsageDown) {
+        this.currentUsageDown = currentUsageDown;
+    }
+
+    public int getCurrentUsageUp() {
+        return currentUsageUp;
+    }
+
+    public void setCurrentUsageUp(int currentUsageUp) {
+        this.currentUsageUp = currentUsageUp;
+    }
+
     public int getLength() {
         return length;
     }
