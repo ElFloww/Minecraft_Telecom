@@ -87,7 +87,7 @@ public class ModNetworking {
                                     
                                     for (TelecomFrequency f : freqs) {
                                         if (signals.get(f) > maxSignal) maxSignal = signals.get(f);
-                                        bands.add(f.getBandName().equals("-") ? f.getFrequencyLabel() : f.getBandName());
+                                        bands.add(f.getFrequencyLabel());
                                     }
                                     
                                     String techName = tech + (freqs.size() > 1 ? "+" : "");
