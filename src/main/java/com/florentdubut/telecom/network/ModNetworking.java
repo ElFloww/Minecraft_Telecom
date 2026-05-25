@@ -54,31 +54,34 @@ public class ModNetworking {
                 
                 AntennaBlockEntity bestAntenna = null;
                 int bestSignal = -1000;
-                String bestTech = "";
+                TelecomFrequency bestTech = null;
 
                 for (NetworkNode node : graph.getNodes()) {
                     if (node.getType() == NetworkNode.NodeType.ANTENNA) {
                         BlockEntity be = level.getBlockEntity(node.getPosition());
                         if (be instanceof AntennaBlockEntity antenna) {
-                            TelecomFrequency freqToUse = TelecomFrequency.G3_900;
-                            if (antenna.is5GEnabled()) freqToUse = TelecomFrequency.G5_3500;
-                            else if (antenna.is4GEnabled()) freqToUse = TelecomFrequency.G4_800;
-                            
-                            int signal = (int) com.florentdubut.telecom.network.SignalPropagator.calculateSignal(level, antenna.getBlockPos(), player.blockPosition(), freqToUse).powerDbm;
-                            
-                            if (signal > bestSignal && signal > -120) { // -120 is total disconnect
-                                bestSignal = signal;
-                                bestAntenna = antenna;
-                                if (antenna.is5GEnabled()) bestTech = "5G";
-                                else if (antenna.is4GEnabled()) bestTech = "4G";
-                                else if (antenna.is3GEnabled()) bestTech = "3G";
+                            for (TelecomFrequency freq : TelecomFrequency.values()) {
+                                if (antenna.isFrequencyEnabled(freq)) {
+                                    int signal = (int) com.florentdubut.telecom.network.SignalPropagator.calculateSignal(level, antenna.getBlockPos(), player.blockPosition(), freq).powerDbm;
+                                    
+                                    if (signal > -120) { // Valid connection
+                                        if (bestTech == null || 
+                                            (freq.getPerformanceScore() > bestTech.getPerformanceScore()) || 
+                                            (freq.getPerformanceScore() == bestTech.getPerformanceScore() && signal > bestSignal)) {
+                                            
+                                            bestSignal = signal;
+                                            bestAntenna = antenna;
+                                            bestTech = freq;
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
                 }
 
-                if (bestAntenna != null) {
-                    PacketDistributor.sendToPlayer(player, new NetworkScanResponsePayload(true, bestAntenna.getAntennaName(), bestSignal, bestTech));
+                if (bestAntenna != null && bestTech != null) {
+                    PacketDistributor.sendToPlayer(player, new NetworkScanResponsePayload(true, bestAntenna.getAntennaName(), bestSignal, bestTech.getTechnology() + " " + bestTech.getFrequencyLabel()));
                 } else {
                     PacketDistributor.sendToPlayer(player, new NetworkScanResponsePayload(false, "No Service", -120, ""));
                 }
@@ -100,9 +103,7 @@ public class ModNetworking {
                 BlockEntity be = level.getBlockEntity(pos);
                 if (be instanceof AntennaBlockEntity antenna) {
                     antenna.setAntennaName(payload.name());
-                    antenna.set3GEnabled(payload.is3G());
-                    antenna.set4GEnabled(payload.is4G());
-                    antenna.set5GEnabled(payload.is5G());
+                    antenna.setEnabledFrequenciesMask(payload.enabledFrequenciesMask());
                 }
             }
         });

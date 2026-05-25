@@ -3,6 +3,7 @@ package com.florentdubut.telecom.block.entity;
 import com.florentdubut.telecom.registry.ModBlockEntities;
 import com.florentdubut.telecom.network.NetworkNode;
 import com.florentdubut.telecom.network.TelecomNetworkGraph;
+import com.florentdubut.telecom.network.TelecomFrequency;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
@@ -14,9 +15,8 @@ import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket;
 
 public class AntennaBlockEntity extends BlockEntity {
     private String antennaName = "Relay-" + (int)(Math.random() * 10000);
-    private boolean is3GEnabled = true;
-    private boolean is4GEnabled = true;
-    private boolean is5GEnabled = false;
+    // Bitmask of enabled frequencies. e.g., if bit 0 is 1, then TelecomFrequency.values()[0] is enabled.
+    private int enabledFrequenciesMask = 0;
 
     public AntennaBlockEntity(BlockPos pos, BlockState state) {
         super(ModBlockEntities.ANTENNA_BE.get(), pos, state);
@@ -41,9 +41,7 @@ public class AntennaBlockEntity extends BlockEntity {
     protected void saveAdditional(CompoundTag tag, net.minecraft.core.HolderLookup.Provider registries) {
         super.saveAdditional(tag, registries);
         tag.putString("antennaName", antennaName);
-        tag.putBoolean("is3GEnabled", is3GEnabled);
-        tag.putBoolean("is4GEnabled", is4GEnabled);
-        tag.putBoolean("is5GEnabled", is5GEnabled);
+        tag.putInt("enabledFrequenciesMask", enabledFrequenciesMask);
     }
 
     @Override
@@ -52,9 +50,7 @@ public class AntennaBlockEntity extends BlockEntity {
         if (tag.contains("antennaName")) {
             antennaName = tag.getString("antennaName");
         }
-        is3GEnabled = tag.getBoolean("is3GEnabled");
-        is4GEnabled = tag.getBoolean("is4GEnabled");
-        is5GEnabled = tag.getBoolean("is5GEnabled");
+        enabledFrequenciesMask = tag.getInt("enabledFrequenciesMask");
     }
 
     @Override
@@ -79,32 +75,16 @@ public class AntennaBlockEntity extends BlockEntity {
         if (level != null) level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 3);
     }
 
-    public boolean is3GEnabled() {
-        return is3GEnabled;
+    public int getEnabledFrequenciesMask() {
+        return enabledFrequenciesMask;
     }
 
-    public void set3GEnabled(boolean enabled) {
-        this.is3GEnabled = enabled;
-        setChanged();
-        if (level != null) level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 3);
+    public boolean isFrequencyEnabled(TelecomFrequency freq) {
+        return (enabledFrequenciesMask & (1 << freq.ordinal())) != 0;
     }
 
-    public boolean is4GEnabled() {
-        return is4GEnabled;
-    }
-
-    public void set4GEnabled(boolean enabled) {
-        this.is4GEnabled = enabled;
-        setChanged();
-        if (level != null) level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 3);
-    }
-
-    public boolean is5GEnabled() {
-        return is5GEnabled;
-    }
-
-    public void set5GEnabled(boolean enabled) {
-        this.is5GEnabled = enabled;
+    public void setEnabledFrequenciesMask(int mask) {
+        this.enabledFrequenciesMask = mask;
         setChanged();
         if (level != null) level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 3);
     }

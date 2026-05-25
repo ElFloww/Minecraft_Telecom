@@ -1,6 +1,7 @@
 package com.florentdubut.telecom.client.gui;
 
 import com.florentdubut.telecom.block.entity.AntennaBlockEntity;
+import com.florentdubut.telecom.network.TelecomFrequency;
 import com.florentdubut.telecom.network.packet.AntennaConfigPayload;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
@@ -9,13 +10,13 @@ import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 import net.neoforged.neoforge.network.PacketDistributor;
+import java.util.HashMap;
+import java.util.Map;
 
 public class AntennaScreen extends Screen {
     private final AntennaBlockEntity blockEntity;
     private EditBox nameBox;
-    private Checkbox box3G;
-    private Checkbox box4G;
-    private Checkbox box5G;
+    private final Map<TelecomFrequency, Checkbox> checkboxes = new HashMap<>();
 
     public AntennaScreen(AntennaBlockEntity blockEntity) {
         super(Component.literal("Antenna Configuration"));
@@ -28,42 +29,61 @@ public class AntennaScreen extends Screen {
         int centerX = this.width / 2;
         int centerY = this.height / 2;
 
-        this.nameBox = new EditBox(this.font, centerX - 100, centerY - 60, 200, 20, Component.literal("Name"));
+        this.nameBox = new EditBox(this.font, centerX - 100, centerY - 100, 200, 20, Component.literal("Name"));
         this.nameBox.setValue(blockEntity.getAntennaName());
         this.nameBox.setMaxLength(32);
         this.addRenderableWidget(this.nameBox);
 
-        this.box3G = Checkbox.builder(Component.literal("Enable 3G (900MHz)"), this.font)
-                .pos(centerX - 100, centerY - 30)
-                .selected(blockEntity.is3GEnabled())
-                .build();
-        this.addRenderableWidget(this.box3G);
+        // Layout variables
+        int startX = centerX - 180;
+        int startY = centerY - 60;
+        int colWidth = 90;
+        int rowHeight = 20;
 
-        this.box4G = Checkbox.builder(Component.literal("Enable 4G (800/2600MHz)"), this.font)
-                .pos(centerX - 100, centerY - 10)
-                .selected(blockEntity.is4GEnabled())
-                .build();
-        this.addRenderableWidget(this.box4G);
+        int[] colOffsets = new int[]{0, 0, 0, 0}; // Track rows per col (2G, 3G, 4G, 5G)
 
-        this.box5G = Checkbox.builder(Component.literal("Enable 5G (3500MHz)"), this.font)
-                .pos(centerX - 100, centerY + 10)
-                .selected(blockEntity.is5GEnabled())
-                .build();
-        this.addRenderableWidget(this.box5G);
+        for (TelecomFrequency freq : TelecomFrequency.values()) {
+            int colIndex = 0;
+            if (freq.getTechnology().equals("3G")) colIndex = 1;
+            else if (freq.getTechnology().equals("4G")) colIndex = 2;
+            else if (freq.getTechnology().equals("5G")) colIndex = 3;
+
+            int x = startX + (colIndex * colWidth);
+            int y = startY + (colOffsets[colIndex] * rowHeight);
+
+            String label = freq.getFrequencyLabel();
+            if (!freq.getBandName().equals("-")) {
+                label += " (" + freq.getBandName() + ")";
+            }
+
+            Checkbox box = Checkbox.builder(Component.literal(label), this.font)
+                    .pos(x, y)
+                    .selected(blockEntity.isFrequencyEnabled(freq))
+                    .build();
+            
+            this.addRenderableWidget(box);
+            checkboxes.put(freq, box);
+            colOffsets[colIndex]++;
+        }
 
         this.addRenderableWidget(Button.builder(Component.literal("Save"), button -> saveAndClose())
-                .bounds(centerX - 50, centerY + 40, 100, 20)
+                .bounds(centerX - 50, centerY + 90, 100, 20)
                 .build());
     }
 
     private void saveAndClose() {
-        // Send packet to server
+        int mask = 0;
+        for (TelecomFrequency freq : TelecomFrequency.values()) {
+            Checkbox box = checkboxes.get(freq);
+            if (box != null && box.selected()) {
+                mask |= (1 << freq.ordinal());
+            }
+        }
+
         AntennaConfigPayload payload = new AntennaConfigPayload(
             blockEntity.getBlockPos(),
             nameBox.getValue(),
-            box3G.selected(),
-            box4G.selected(),
-            box5G.selected()
+            mask
         );
         PacketDistributor.sendToServer(payload);
         this.onClose();
@@ -73,7 +93,17 @@ public class AntennaScreen extends Screen {
     public void render(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
         this.renderBackground(guiGraphics, mouseX, mouseY, partialTick);
         super.render(guiGraphics, mouseX, mouseY, partialTick);
-        guiGraphics.drawCenteredString(this.font, this.title, this.width / 2, this.height / 2 - 80, 0xFFFFFF);
+        
+        int centerX = this.width / 2;
+        int centerY = this.height / 2;
+        
+        guiGraphics.drawCenteredString(this.font, this.title, centerX, centerY - 120, 0xFFFFFF);
+
+        // Column Headers
+        guiGraphics.drawString(this.font, "2G (GSM)", centerX - 180, centerY - 75, 0xAAAAAA);
+        guiGraphics.drawString(this.font, "3G (UMTS)", centerX - 90, centerY - 75, 0xAAAAAA);
+        guiGraphics.drawString(this.font, "4G (LTE)", centerX, centerY - 75, 0xAAAAAA);
+        guiGraphics.drawString(this.font, "5G (NR)", centerX + 90, centerY - 75, 0xAAAAAA);
     }
     
     @Override
