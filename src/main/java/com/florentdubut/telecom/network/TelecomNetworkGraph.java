@@ -142,20 +142,22 @@ public class TelecomNetworkGraph extends SavedData {
     private int totalBandwidthUp = 0;
     private int totalBandwidthDown = 0;
 
-    public void startSpeedtest(BlockPos sourcePos, String clientIp, int targetDownBw, int targetUpBw, int extraPing) {
-        if (getSessionByIp(clientIp) != null) return; // Prevent multiple speedtests from the same client
+    public void startSpeedtest(BlockPos sourcePos, String clientIp, int targetDownBw, int targetUpBw, int extraPing, boolean isPassive) {
+        if (!isPassive && getSessionByIp(clientIp) != null) return; // Prevent multiple speedtests from the same client
         
+        // Find a server to connect to
         NetworkNode serverNode = null;
-        for (NetworkNode n : nodes.values()) {
-            if (n.getType() == NetworkNode.NodeType.SERVER) {
-                serverNode = n;
+        for (NetworkNode node : nodes.values()) {
+            if (node.getType() == NetworkNode.NodeType.SERVER) {
+                serverNode = node;
                 break;
             }
         }
+        
         if (serverNode != null) {
             PathStats stats = calculatePathStats(sourcePos, serverNode.getPosition());
             if (stats != null) {
-                TrafficSession session = new TrafficSession(sourcePos, serverNode.getPosition(), clientIp, targetDownBw, targetUpBw, 100); // 100 ticks = 5 seconds per phase
+                TrafficSession session = new TrafficSession(sourcePos, serverNode.getPosition(), clientIp, targetDownBw, targetUpBw, 100, isPassive); // 100 ticks = 5 seconds per phase
                 session.setExtraPing(extraPing);
                 session.setPingMs(stats.pingMs());
                 activeSessions.add(session);
@@ -164,7 +166,80 @@ public class TelecomNetworkGraph extends SavedData {
         }
     }
 
+    private void tickPassiveTraffic(ServerLevel level) {
+        // Routers
+        if (!nodes.isEmpty()) {
+            for (NetworkNode node : nodes.values()) {
+                if (node.getType() == NetworkNode.NodeType.ROUTER) {
+                    if (Math.random() < 0.01) {
+                        boolean hasSession = false;
+                        for (TrafficSession s : activeSessions) {
+                            if (s.getSourcePos().equals(node.getPosition())) {
+                                hasSession = true;
+                                break;
+                            }
+                        }
+                        if (!hasSession) {
+                            int randDown = 10 + (int)(Math.random() * 2000); 
+                            int randUp = 5 + (int)(Math.random() * 500); 
+                            startSpeedtest(node.getPosition(), node.getIpAddress() != null ? node.getIpAddress() : "0.0.0.0", randDown, randUp, 0, true);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Smartphones (Players)
+        for (net.minecraft.server.level.ServerPlayer player : level.players()) {
+            boolean hasPhone = player.getInventory().contains(new net.minecraft.world.item.ItemStack(com.florentdubut.telecom.registry.ModItems.SMARTPHONE.get())) ||
+                               player.getOffhandItem().is(com.florentdubut.telecom.registry.ModItems.SMARTPHONE.get()) || 
+                               player.getMainHandItem().is(com.florentdubut.telecom.registry.ModItems.SMARTPHONE.get());
+            
+            if (hasPhone && Math.random() < 0.01) {
+                // Find nearest antenna for this player
+                com.florentdubut.telecom.block.entity.AntennaBlockEntity bestAntenna = null;
+                float bestSignal = -1000f;
+                String bestIp = null;
+                for (NetworkNode node : nodes.values()) {
+                    if (node.getType() == NetworkNode.NodeType.ANTENNA) {
+                        net.minecraft.world.level.block.entity.BlockEntity be = level.getBlockEntity(node.getPosition());
+                        if (be instanceof com.florentdubut.telecom.block.entity.AntennaBlockEntity antenna) {
+                            for (com.florentdubut.telecom.network.TelecomFrequency freq : com.florentdubut.telecom.network.TelecomFrequency.values()) {
+                                if (antenna.isFrequencyEnabled(freq)) {
+                                    float signal = com.florentdubut.telecom.network.SignalPropagator.calculateSignal(level, antenna.getBlockPos(), player.blockPosition().above(), freq).powerDbm;
+                                    if (signal > -120f && signal > bestSignal) {
+                                        bestSignal = signal;
+                                        bestAntenna = antenna;
+                                        bestIp = "10.0." + (antenna.getBlockPos().getX() % 255) + "." + (player.getId() % 255);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                if (bestAntenna != null) {
+                    boolean hasSession = false;
+                    for (TrafficSession s : activeSessions) {
+                        if (s.getClientIp() != null && s.getClientIp().equals(bestIp)) {
+                            hasSession = true;
+                            break;
+                        }
+                    }
+                    if (!hasSession) {
+                        int randDown = 1 + (int)(Math.random() * 500); 
+                        int randUp = 1 + (int)(Math.random() * 100); 
+                        int extraPing = 20 + (int)(Math.random() * 50);
+                        startSpeedtest(bestAntenna.getBlockPos(), bestIp, randDown, randUp, extraPing, true);
+                    }
+                }
+            }
+        }
+    }
+
     public void tickTraffic(ServerLevel level) {
+        tickPassiveTraffic(level);
+
         // Auto-migrate old graphs without pathBlocks
         boolean needsRecalculation = false;
         for (NetworkEdge edge : edges) {
@@ -201,9 +276,11 @@ public class TelecomNetworkGraph extends SavedData {
             if (session.getState() == TrafficSession.SessionState.FINISHED) {
                 toRemove.add(session);
                 // Broadcast finished state
-                com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload update = new com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload(
-                    session.getClientIp(), "FINISHED", session.getPingMs(), 0, session.getTicksElapsed(), session.getTotalTicksPerPhase());
-                net.neoforged.neoforge.network.PacketDistributor.sendToAllPlayers(update);
+                if (!session.isPassive()) {
+                    com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload update = new com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload(
+                        session.getClientIp(), "FINISHED", session.getPingMs(), 0, session.getTicksElapsed(), session.getTotalTicksPerPhase());
+                    net.neoforged.neoforge.network.PacketDistributor.sendToAllPlayers(update);
+                }
                 
                 // Save results to RouterBlockEntity if applicable
                 NetworkNode node = getNodeByIp(session.getClientIp());
@@ -249,7 +326,7 @@ public class TelecomNetworkGraph extends SavedData {
             }
             
             // Broadcast state
-            if (session.getTicksElapsed() % 2 == 0) { // Every 2 ticks to reduce spam
+            if (!session.isPassive() && session.getTicksElapsed() % 2 == 0) { // Every 2 ticks to reduce spam
                 com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload update = new com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload(
                     session.getClientIp(), session.getState().name(), session.getPingMs(), session.getActualBandwidth(), session.getTicksElapsed(), session.getTotalTicksPerPhase());
                 net.neoforged.neoforge.network.PacketDistributor.sendToAllPlayers(update);

@@ -24,8 +24,9 @@ public class TrafficSession {
     private final String clientIp; // IP of the client (Router or Phone)
     private int pingMs;
     private int extraPing;
+    private final boolean isPassive;
 
-    public TrafficSession(BlockPos sourcePos, BlockPos destPos, String clientIp, int targetDownBw, int targetUpBw, int totalTicksPerPhase) {
+    public TrafficSession(BlockPos sourcePos, BlockPos destPos, String clientIp, int targetDownBw, int targetUpBw, int totalTicksPerPhase, boolean isPassive) {
         this.sessionId = UUID.randomUUID();
         this.sourcePos = sourcePos;
         this.destPos = destPos;
@@ -38,6 +39,11 @@ public class TrafficSession {
         this.actualBandwidth = 0;
         this.pingMs = 0;
         this.extraPing = 0;
+        this.isPassive = isPassive;
+    }
+
+    public boolean isPassive() {
+        return isPassive;
     }
 
     public UUID getSessionId() {
