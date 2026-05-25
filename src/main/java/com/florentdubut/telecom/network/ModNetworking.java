@@ -73,6 +73,12 @@ public class ModNetworking {
             com.florentdubut.telecom.network.packet.NetworkToolSyncPayload.STREAM_CODEC,
             ModNetworking::handleNetworkToolSync
         );
+
+        registrar.playToClient(
+            com.florentdubut.telecom.network.packet.ServerBandwidthUpdatePayload.TYPE,
+            com.florentdubut.telecom.network.packet.ServerBandwidthUpdatePayload.STREAM_CODEC,
+            ModNetworking::handleServerBandwidthUpdate
+        );
     }
 
     public static void scanForPlayer(ServerPlayer player) {
