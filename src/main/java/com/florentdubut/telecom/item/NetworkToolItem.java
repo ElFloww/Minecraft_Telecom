@@ -73,7 +73,7 @@ public class NetworkToolItem extends Item {
                         
                         net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(
                             (net.minecraft.server.level.ServerPlayer) context.getPlayer(),
-                            new com.florentdubut.telecom.network.packet.NetworkToolSyncPayload(typeStr, edge.getLength(), edge.getBandwidthMax(), usagePercent)
+                            new com.florentdubut.telecom.network.packet.NetworkToolSyncPayload(clickedPos, typeStr, edge.getLength(), edge.getBandwidthMax(), usagePercent)
                         );
                         return InteractionResult.SUCCESS;
                     }

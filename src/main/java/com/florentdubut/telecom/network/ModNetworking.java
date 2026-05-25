@@ -44,6 +44,12 @@ public class ModNetworking {
             ModNetworking::handleStartSpeedtest
         );
 
+        registrar.playToServer(
+            com.florentdubut.telecom.network.packet.NetworkToolRefreshRequestPayload.TYPE,
+            com.florentdubut.telecom.network.packet.NetworkToolRefreshRequestPayload.STREAM_CODEC,
+            ModNetworking::handleNetworkToolRefreshRequest
+        );
+
         registrar.playToClient(
             com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload.TYPE,
             com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload.STREAM_CODEC,
@@ -202,9 +208,39 @@ public class ModNetworking {
         });
     }
 
-    private static void handleNetworkToolSync(final com.florentdubut.telecom.network.packet.NetworkToolSyncPayload payload, final IPayloadContext context) {
+    private static void handleNetworkToolRefreshRequest(com.florentdubut.telecom.network.packet.NetworkToolRefreshRequestPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
-            net.minecraft.client.Minecraft.getInstance().setScreen(new com.florentdubut.telecom.client.gui.NetworkToolScreen(payload));
+            net.minecraft.server.level.ServerPlayer player = (net.minecraft.server.level.ServerPlayer) context.player();
+            if (player != null) {
+                com.florentdubut.telecom.network.TelecomNetworkGraph graph = com.florentdubut.telecom.network.TelecomNetworkGraph.get(player.serverLevel());
+                net.minecraft.core.BlockPos clickedPos = payload.clickedPos();
+                
+                // Find the edge containing this block
+                for (com.florentdubut.telecom.network.NetworkEdge edge : graph.getEdges()) {
+                    if (edge.getPathBlocks() != null && edge.getPathBlocks().contains(clickedPos)) {
+                        String typeStr = edge.getType() == com.florentdubut.telecom.network.NetworkEdge.EdgeType.FIBER ? "Fiber Optic" : "Copper ADSL";
+                        int usage = graph.getBlockUsage(clickedPos);
+                        int usagePercent = (int) (((float) usage / edge.getBandwidthMax()) * 100);
+                        if (usagePercent > 100) usagePercent = 100;
+                        
+                        net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(
+                            player,
+                            new com.florentdubut.telecom.network.packet.NetworkToolSyncPayload(clickedPos, typeStr, edge.getLength(), edge.getBandwidthMax(), usagePercent)
+                        );
+                        return;
+                    }
+                }
+            }
+        });
+    }
+
+    private static void handleNetworkToolSync(com.florentdubut.telecom.network.packet.NetworkToolSyncPayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> {
+            if (net.minecraft.client.Minecraft.getInstance().screen instanceof com.florentdubut.telecom.client.gui.NetworkToolScreen screen) {
+                screen.updatePayload(payload);
+            } else {
+                net.minecraft.client.Minecraft.getInstance().setScreen(new com.florentdubut.telecom.client.gui.NetworkToolScreen(payload));
+            }
         });
     }
 

@@ -6,13 +6,29 @@ import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 
 public class NetworkToolScreen extends Screen {
-    private final NetworkToolSyncPayload payload;
+    private NetworkToolSyncPayload payload;
     private final int imageWidth = 200;
     private final int imageHeight = 120;
+    private int tickCounter = 0;
 
     public NetworkToolScreen(NetworkToolSyncPayload payload) {
         super(Component.literal("Network Diagnostic Tool"));
         this.payload = payload;
+    }
+
+    public void updatePayload(NetworkToolSyncPayload payload) {
+        this.payload = payload;
+    }
+
+    @Override
+    public void tick() {
+        super.tick();
+        tickCounter++;
+        if (tickCounter % 10 == 0) { // Refresh every 0.5s
+            net.neoforged.neoforge.network.PacketDistributor.sendToServer(
+                new com.florentdubut.telecom.network.packet.NetworkToolRefreshRequestPayload(payload.clickedPos())
+            );
+        }
     }
 
     @Override
