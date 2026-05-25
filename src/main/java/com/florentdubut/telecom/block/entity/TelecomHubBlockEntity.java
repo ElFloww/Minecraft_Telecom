@@ -41,7 +41,7 @@ public class TelecomHubBlockEntity extends BlockEntity {
         if (level != null && !level.isClientSide()) {
             TelecomNetworkGraph graph = TelecomNetworkGraph.get((net.minecraft.server.level.ServerLevel) level);
             graph.removeNode(worldPosition);
-            com.florentdubut.telecom.network.NetworkTracer.recalculateNetwork((net.minecraft.server.level.ServerLevel) level);
+            com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation((net.minecraft.server.level.ServerLevel) level);
         }
     }
 }

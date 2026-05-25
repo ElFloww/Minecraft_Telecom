@@ -63,7 +63,7 @@ public class RouterBlockEntity extends BlockEntity {
             NetworkNode node = new NetworkNode(worldPosition, NetworkNode.NodeType.ROUTER);
             graph.addNode(node);
             
-            com.florentdubut.telecom.network.NetworkTracer.recalculateNetwork(serverLevel);
+            com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel);
         }
     }
 
@@ -71,7 +71,7 @@ public class RouterBlockEntity extends BlockEntity {
         if (level instanceof ServerLevel serverLevel) {
             TelecomNetworkGraph graph = TelecomNetworkGraph.get(serverLevel);
             graph.removeNode(worldPosition);
-            com.florentdubut.telecom.network.NetworkTracer.recalculateNetwork(serverLevel);
+            com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel);
         }
     }
 }

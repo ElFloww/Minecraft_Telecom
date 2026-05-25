@@ -27,7 +27,7 @@ public class AntennaBlockEntity extends BlockEntity {
             TelecomNetworkGraph graph = TelecomNetworkGraph.get(serverLevel);
             NetworkNode node = new NetworkNode(worldPosition, NetworkNode.NodeType.ANTENNA);
             graph.addNode(node);
-            com.florentdubut.telecom.network.NetworkTracer.recalculateNetwork(serverLevel);
+            com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel);
         }
     }
 
@@ -35,7 +35,7 @@ public class AntennaBlockEntity extends BlockEntity {
         if (level instanceof ServerLevel serverLevel) {
             TelecomNetworkGraph graph = TelecomNetworkGraph.get(serverLevel);
             graph.removeNode(worldPosition);
-            com.florentdubut.telecom.network.NetworkTracer.recalculateNetwork(serverLevel);
+            com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel);
         }
     }
 

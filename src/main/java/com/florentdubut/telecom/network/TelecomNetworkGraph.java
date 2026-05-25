@@ -106,6 +106,12 @@ public class TelecomNetworkGraph extends SavedData {
         return level.getDataStorage().computeIfAbsent(factory(), DATA_NAME);
     }
 
+    private boolean needsRecalculation = false;
+
+    public void markForRecalculation() {
+        this.needsRecalculation = true;
+    }
+
     public void addNode(NetworkNode node) {
         nodes.put(node.getPosition(), node);
         pathCache.clear();
@@ -257,15 +263,8 @@ public class TelecomNetworkGraph extends SavedData {
     public void tickTraffic(ServerLevel level) {
         tickPassiveTraffic(level);
 
-        // Auto-migrate old graphs without pathBlocks
-        boolean needsRecalculation = false;
-        for (NetworkEdge edge : edges) {
-            if (edge.getPathBlocks() == null || edge.getPathBlocks().isEmpty()) {
-                needsRecalculation = true;
-                break;
-            }
-        }
         if (needsRecalculation) {
+            needsRecalculation = false;
             NetworkTracer.recalculateNetwork(level);
             return; // Skip this tick, it will resume next tick
         }

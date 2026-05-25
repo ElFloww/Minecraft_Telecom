@@ -10,6 +10,10 @@ import java.util.*;
 
 public class NetworkTracer {
 
+    public static void scheduleRecalculation(ServerLevel level) {
+        TelecomNetworkGraph.get(level).markForRecalculation();
+    }
+
     // Call this whenever a cable, server, router, or antenna is placed or broken
     public static void recalculateNetwork(ServerLevel level) {
         TelecomNetworkGraph graph = TelecomNetworkGraph.get(level);

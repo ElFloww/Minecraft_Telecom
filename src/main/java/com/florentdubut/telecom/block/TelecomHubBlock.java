@@ -82,7 +82,7 @@ public class TelecomHubBlock extends Block implements EntityBlock, TelecomBlock 
     public void onPlace(BlockState state, Level level, BlockPos pos, BlockState oldState, boolean isMoving) {
         super.onPlace(state, level, pos, oldState, isMoving);
         if (!level.isClientSide()) {
-            com.florentdubut.telecom.network.NetworkTracer.recalculateNetwork((net.minecraft.server.level.ServerLevel) level);
+            com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation((net.minecraft.server.level.ServerLevel) level);
         }
     }
 }
