@@ -62,9 +62,10 @@ public class ServerBlock extends Block implements EntityBlock {
                 }
             }
             
-            int bandwidth = graph.getTotalBandwidthUsage();
+            int bandwidthDown = graph.getTotalBandwidthDown();
+            int bandwidthUp = graph.getTotalBandwidthUp();
             
-            net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(serverPlayer, new com.florentdubut.telecom.network.packet.ServerGuiSyncPayload(routers, antennas, phones, bandwidth));
+            net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(serverPlayer, new com.florentdubut.telecom.network.packet.ServerGuiSyncPayload(routers, antennas, phones, bandwidthDown, bandwidthUp));
         }
         return net.minecraft.world.InteractionResult.sidedSuccess(level.isClientSide);
     }

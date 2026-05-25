@@ -7,12 +7,21 @@ import net.minecraft.network.chat.Component;
 
 public class ServerScreen extends Screen {
     private final ServerGuiSyncPayload payload;
+    private int totalDown;
+    private int totalUp;
     private final int imageWidth = 256;
-    private final int imageHeight = 160;
+    private final int imageHeight = 175;
 
     public ServerScreen(ServerGuiSyncPayload payload) {
         super(Component.literal("Telecom Server Dashboard"));
         this.payload = payload;
+        this.totalDown = payload.totalBandwidthDown();
+        this.totalUp = payload.totalBandwidthUp();
+    }
+
+    public void updateBandwidth(int down, int up) {
+        this.totalDown = down;
+        this.totalUp = up;
     }
 
     @Override
@@ -52,10 +61,12 @@ public class ServerScreen extends Screen {
 
         // Bandwidth
         int maxCapacity = 100000; // 100 Gbps
-        guiGraphics.drawString(this.font, "Core Load: " + payload.totalBandwidthUsage() + " Mbps / " + maxCapacity + " Mbps", startX + 10, startY + 120, 0xFFAA00);
+        guiGraphics.drawString(this.font, "Core Load:", startX + 10, startY + 120, 0xFFAA00);
+        guiGraphics.drawString(this.font, "Down: " + totalDown + " Mbps / " + maxCapacity + " Mbps", startX + 20, startY + 133, 0x00FFFF);
+        guiGraphics.drawString(this.font, "Up: " + totalUp + " Mbps / " + maxCapacity + " Mbps", startX + 20, startY + 146, 0xFF8800);
         
-        int percent = (int)(((float)payload.totalBandwidthUsage() / maxCapacity) * 100);
-        guiGraphics.drawString(this.font, "CPU/Network Usage: " + percent + "%", startX + 10, startY + 135, percent > 80 ? 0xFF0000 : 0x00FF00);
+        int percent = (int)(((float)(totalDown + totalUp) / maxCapacity) * 100);
+        guiGraphics.drawString(this.font, "Network Usage: " + percent + "%", startX + 10, startY + 160, percent > 80 ? 0xFF0000 : 0x00FF00);
 
         guiGraphics.pose().popPose();
         

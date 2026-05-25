@@ -115,7 +115,8 @@ public class TelecomNetworkGraph extends SavedData {
     }
 
     private final List<TrafficSession> activeSessions = new ArrayList<>();
-    private int totalBandwidthUsage = 0;
+    private int totalBandwidthUp = 0;
+    private int totalBandwidthDown = 0;
 
     public void startSpeedtest(BlockPos sourcePos, String clientIp, int targetBandwidth) {
         NetworkNode serverNode = null;
@@ -137,9 +138,12 @@ public class TelecomNetworkGraph extends SavedData {
             edge.setCurrentUsage(0);
         }
         
-        totalBandwidthUsage = 0;
+        totalBandwidthUp = 0;
+        totalBandwidthDown = 0;
         
         List<TrafficSession> toRemove = new ArrayList<>();
+        Map<TrafficSession, List<NetworkEdge>> sessionPaths = new HashMap<>();
+        Map<TrafficSession, Integer> sessionRequested = new HashMap<>();
         
         for (TrafficSession session : activeSessions) {
             session.tick();
@@ -164,27 +168,15 @@ public class TelecomNetworkGraph extends SavedData {
             if (session.getState() == TrafficSession.SessionState.DOWNLOAD || session.getState() == TrafficSession.SessionState.UPLOAD) {
                 int hardwareMax = stats.bandwidthMbps();
                 int requested = Math.min(session.getTargetBandwidth(), hardwareMax);
-                int actual = requested;
-                
-                // Add load to edges
                 List<NetworkEdge> path = findShortestPath(session.getSourcePos(), session.getDestPos());
                 if (path != null) {
+                    sessionPaths.put(session, path);
+                    sessionRequested.put(session, requested);
+                    // Accumulate requested usage to compute congestion
                     for (NetworkEdge edge : path) {
-                        int newUsage = edge.getCurrentUsage() + requested;
-                        edge.setCurrentUsage(newUsage);
-                        
-                        if (newUsage > edge.getBandwidthMax()) {
-                            float ratio = (float)edge.getBandwidthMax() / newUsage;
-                            actual = (int)(actual * ratio);
-                        }
+                        edge.setCurrentUsage(edge.getCurrentUsage() + requested);
                     }
                 }
-                
-                // Realistic oscillation (92% to 100%)
-                actual = (int)(actual * (0.92f + Math.random() * 0.08f));
-                
-                session.setActualBandwidth(actual);
-                totalBandwidthUsage += actual;
             }
             
             // Broadcast state
@@ -195,11 +187,61 @@ public class TelecomNetworkGraph extends SavedData {
             }
         }
         
+        // Phase 2: Compute actual bandwidth considering congestion
+        for (Map.Entry<TrafficSession, Integer> entry : sessionRequested.entrySet()) {
+            TrafficSession session = entry.getKey();
+            int requested = entry.getValue();
+            List<NetworkEdge> path = sessionPaths.get(session);
+            
+            float minRatio = 1.0f;
+            for (NetworkEdge edge : path) {
+                if (edge.getCurrentUsage() > edge.getBandwidthMax()) {
+                    float ratio = (float) edge.getBandwidthMax() / edge.getCurrentUsage();
+                    if (ratio < minRatio) {
+                        minRatio = ratio;
+                    }
+                }
+            }
+            
+            int actual = (int)(requested * minRatio);
+            // Realistic oscillation (92% to 100%)
+            actual = (int)(actual * (0.92f + Math.random() * 0.08f));
+            
+            session.setActualBandwidth(actual);
+            
+            if (session.getState() == TrafficSession.SessionState.DOWNLOAD) {
+                totalBandwidthDown += actual;
+            } else if (session.getState() == TrafficSession.SessionState.UPLOAD) {
+                totalBandwidthUp += actual;
+            }
+        }
+        
+        // Phase 3: Set true usage on edges for Network Tool
+        for (NetworkEdge edge : edges) {
+            edge.setCurrentUsage(0);
+        }
+        for (Map.Entry<TrafficSession, Integer> entry : sessionRequested.entrySet()) {
+            TrafficSession session = entry.getKey();
+            int actual = session.getActualBandwidth();
+            for (NetworkEdge edge : sessionPaths.get(session)) {
+                edge.setCurrentUsage(edge.getCurrentUsage() + actual);
+            }
+        }
+        
         activeSessions.removeAll(toRemove);
+        
+        // Broadcast total bandwidth to all players
+        if (level.getGameTime() % 4 == 0) {
+            net.neoforged.neoforge.network.PacketDistributor.sendToAllPlayers(new com.florentdubut.telecom.network.packet.ServerBandwidthUpdatePayload(totalBandwidthDown, totalBandwidthUp));
+        }
     }
-
-    public int getTotalBandwidthUsage() {
-        return totalBandwidthUsage;
+    
+    public int getTotalBandwidthUp() {
+        return totalBandwidthUp;
+    }
+    
+    public int getTotalBandwidthDown() {
+        return totalBandwidthDown;
     }
     
     public TrafficSession getSessionByIp(String ip) {

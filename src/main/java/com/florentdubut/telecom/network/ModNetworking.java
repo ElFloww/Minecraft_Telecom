@@ -226,4 +226,13 @@ public class ModNetworking {
             }
         });
     }
+
+    private static void handleServerBandwidthUpdate(final com.florentdubut.telecom.network.packet.ServerBandwidthUpdatePayload payload, final IPayloadContext context) {
+        context.enqueueWork(() -> {
+            net.minecraft.client.gui.screens.Screen screen = net.minecraft.client.Minecraft.getInstance().screen;
+            if (screen instanceof com.florentdubut.telecom.client.gui.ServerScreen serverScreen) {
+                serverScreen.updateBandwidth(payload.totalBandwidthDown(), payload.totalBandwidthUp());
+            }
+        });
+    }
 }
