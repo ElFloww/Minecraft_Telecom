@@ -11,11 +11,20 @@ public class ServerEvents {
 
     @SubscribeEvent
     public static void onServerTick(ServerTickEvent.Post event) {
-        event.getServer().getAllLevels().forEach(level -> {
-            com.florentdubut.telecom.network.TelecomNetworkGraph.get(level).tickTraffic(level);
-        });
+        int globalDown = 0;
+        int globalUp = 0;
+        for (net.minecraft.server.level.ServerLevel level : event.getServer().getAllLevels()) {
+            com.florentdubut.telecom.network.TelecomNetworkGraph graph = com.florentdubut.telecom.network.TelecomNetworkGraph.get(level);
+            graph.tickTraffic(level);
+            globalDown += graph.getTotalBandwidthDown();
+            globalUp += graph.getTotalBandwidthUp();
+        }
 
         tickCounter++;
+        if (tickCounter % 4 == 0) {
+            net.neoforged.neoforge.network.PacketDistributor.sendToAllPlayers(new com.florentdubut.telecom.network.packet.ServerBandwidthUpdatePayload(globalDown, globalUp));
+        }
+
         if (tickCounter >= 20) {
             tickCounter = 0;
             for (net.minecraft.server.level.ServerPlayer player : event.getServer().getPlayerList().getPlayers()) {

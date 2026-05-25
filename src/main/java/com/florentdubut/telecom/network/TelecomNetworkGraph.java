@@ -156,6 +156,15 @@ public class TelecomNetworkGraph extends SavedData {
                 com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload update = new com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload(
                     session.getClientIp(), "FINISHED", session.getPingMs(), 0, session.getTicksElapsed(), session.getTotalTicksPerPhase());
                 net.neoforged.neoforge.network.PacketDistributor.sendToAllPlayers(update);
+                
+                // Save results to RouterBlockEntity if applicable
+                NetworkNode node = getNodeByIp(session.getClientIp());
+                if (node != null && node.getType() == NetworkNode.NodeType.ROUTER) {
+                    net.minecraft.world.level.block.entity.BlockEntity be = level.getBlockEntity(node.getPosition());
+                    if (be instanceof com.florentdubut.telecom.block.entity.RouterBlockEntity router) {
+                        router.setLastSpeedtestResults(session.getFinalDownBw(), session.getFinalUpBw(), session.getPingMs());
+                    }
+                }
                 continue;
             }
             
@@ -232,10 +241,6 @@ public class TelecomNetworkGraph extends SavedData {
         
         activeSessions.removeAll(toRemove);
         
-        // Broadcast total bandwidth to all players
-        if (level.getGameTime() % 4 == 0) {
-            net.neoforged.neoforge.network.PacketDistributor.sendToAllPlayers(new com.florentdubut.telecom.network.packet.ServerBandwidthUpdatePayload(totalBandwidthDown, totalBandwidthUp));
-        }
     }
     
     public int getTotalBandwidthUp() {
@@ -380,6 +385,12 @@ public class TelecomNetworkGraph extends SavedData {
         
         // Base latency
         totalPing += 1.0f; 
+        
+        // Add mobile latency if source is an antenna
+        NetworkNode srcNode = getNode(sourcePos);
+        if (srcNode != null && srcNode.getType() == NetworkNode.NodeType.ANTENNA) {
+            totalPing += 25.0f + (Math.random() * 15.0f); // 25 to 40 ms extra latency for mobile
+        }
         
         if (minBandwidth == Integer.MAX_VALUE) minBandwidth = 0;
         

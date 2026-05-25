@@ -74,9 +74,17 @@ public class TrafficSession {
         return actualBandwidth;
     }
 
+    private int finalDownBw;
+    private int finalUpBw;
+
     public void setActualBandwidth(int actualBandwidth) {
         this.actualBandwidth = actualBandwidth;
+        if (state == SessionState.DOWNLOAD) finalDownBw = actualBandwidth;
+        else if (state == SessionState.UPLOAD) finalUpBw = actualBandwidth;
     }
+
+    public int getFinalDownBw() { return finalDownBw; }
+    public int getFinalUpBw() { return finalUpBw; }
 
     public String getClientIp() {
         return clientIp;

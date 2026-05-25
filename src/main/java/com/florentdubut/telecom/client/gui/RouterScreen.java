@@ -38,6 +38,14 @@ public class RouterScreen extends Screen {
     public RouterScreen(RouterGuiSyncPayload payload) {
         super(Component.literal("Router Interface"));
         this.payload = payload;
+        
+        if (payload.lastPing() > 0) {
+            this.lastDownBw = payload.lastDownBw();
+            this.lastUpBw = payload.lastUpBw();
+            this.currentSpeedtestData = new com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload(
+                payload.ipAddress(), "FINISHED", payload.lastPing(), 0, 40, 40
+            );
+        }
     }
 
     @Override

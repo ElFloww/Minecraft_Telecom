@@ -11,6 +11,10 @@ import net.minecraft.server.level.ServerLevel;
 public class RouterBlockEntity extends BlockEntity {
     private int configuredMaxDown = 1000;
     private int configuredMaxUp = 1000;
+    
+    private int lastDownBw = 0;
+    private int lastUpBw = 0;
+    private int lastPing = 0;
 
     public RouterBlockEntity(BlockPos pos, BlockState state) {
         super(ModBlockEntities.ROUTER_BE.get(), pos, state);
@@ -21,12 +25,26 @@ public class RouterBlockEntity extends BlockEntity {
 
     public int getConfiguredMaxUp() { return configuredMaxUp; }
     public void setConfiguredMaxUp(int val) { this.configuredMaxUp = val; setChanged(); }
+    
+    public int getLastDownBw() { return lastDownBw; }
+    public int getLastUpBw() { return lastUpBw; }
+    public int getLastPing() { return lastPing; }
+    
+    public void setLastSpeedtestResults(int down, int up, int ping) {
+        this.lastDownBw = down;
+        this.lastUpBw = up;
+        this.lastPing = ping;
+        setChanged();
+    }
 
     @Override
     protected void saveAdditional(net.minecraft.nbt.CompoundTag tag, net.minecraft.core.HolderLookup.Provider registries) {
         super.saveAdditional(tag, registries);
         tag.putInt("ConfiguredMaxDown", configuredMaxDown);
         tag.putInt("ConfiguredMaxUp", configuredMaxUp);
+        tag.putInt("LastDownBw", lastDownBw);
+        tag.putInt("LastUpBw", lastUpBw);
+        tag.putInt("LastPing", lastPing);
     }
 
     @Override
@@ -34,6 +52,9 @@ public class RouterBlockEntity extends BlockEntity {
         super.loadAdditional(tag, registries);
         if (tag.contains("ConfiguredMaxDown")) configuredMaxDown = tag.getInt("ConfiguredMaxDown");
         if (tag.contains("ConfiguredMaxUp")) configuredMaxUp = tag.getInt("ConfiguredMaxUp");
+        if (tag.contains("LastDownBw")) lastDownBw = tag.getInt("LastDownBw");
+        if (tag.contains("LastUpBw")) lastUpBw = tag.getInt("LastUpBw");
+        if (tag.contains("LastPing")) lastPing = tag.getInt("LastPing");
     }
 
     public void onPlaced() {

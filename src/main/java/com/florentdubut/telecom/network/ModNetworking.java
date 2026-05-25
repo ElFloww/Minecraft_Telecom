@@ -86,7 +86,7 @@ public class ModNetworking {
         TelecomNetworkGraph graph = TelecomNetworkGraph.get(level);
         
         AntennaBlockEntity bestAntenna = null;
-        int bestSignal = -1000;
+        float bestSignal = -1000f;
         String finalTechLabel = "";
 
         for (NetworkNode node : graph.getNodes()) {
@@ -100,13 +100,13 @@ public class ModNetworking {
                     
                     // Group valid frequencies by tech
                     java.util.Map<String, java.util.List<TelecomFrequency>> validFreqs = new java.util.HashMap<>();
-                    java.util.Map<TelecomFrequency, Integer> signals = new java.util.HashMap<>();
+                    java.util.Map<TelecomFrequency, Float> signals = new java.util.HashMap<>();
                     
                     for (TelecomFrequency freq : TelecomFrequency.values()) {
                         if (antenna.isFrequencyEnabled(freq)) {
-                            int signal = (int) com.florentdubut.telecom.network.SignalPropagator.calculateSignal(level, antenna.getBlockPos(), player.blockPosition().above(), freq).powerDbm;
+                            float signal = com.florentdubut.telecom.network.SignalPropagator.calculateSignal(level, antenna.getBlockPos(), player.blockPosition().above(), freq).powerDbm;
                             
-                            if (signal > -120) { // Valid connection
+                            if (signal > -120f) { // Valid connection
                                 validFreqs.computeIfAbsent(freq.getTechnology(), k -> new java.util.ArrayList<>()).add(freq);
                                 signals.put(freq, signal);
                             }
@@ -119,7 +119,7 @@ public class ModNetworking {
                         if (validFreqs.containsKey(tech)) {
                             java.util.List<TelecomFrequency> freqs = validFreqs.get(tech);
                             
-                            int maxSignal = -1000;
+                            float maxSignal = -1000f;
                             java.util.List<String> bands = new java.util.ArrayList<>();
                             
                             for (TelecomFrequency f : freqs) {
@@ -177,7 +177,7 @@ public class ModNetworking {
             
             // Generate a virtual mobile IP address
             String mobileIp = "10.0." + (bestAntenna.getBlockPos().getX() % 255) + "." + (player.getId() % 255);
-            PacketDistributor.sendToPlayer(player, new NetworkScanResponsePayload(true, bestAntenna.getAntennaName(), bestSignal, finalTechLabel, mobileIp, bestAntenna.getBlockPos(), maxDown, maxUp));
+            PacketDistributor.sendToPlayer(player, new NetworkScanResponsePayload(true, bestAntenna.getAntennaName(), (int)bestSignal, finalTechLabel, mobileIp, bestAntenna.getBlockPos(), maxDown, maxUp));
         } else {
             PacketDistributor.sendToPlayer(player, new NetworkScanResponsePayload(false, "No Service", -120, "", "", BlockPos.ZERO, 0, 0));
         }
