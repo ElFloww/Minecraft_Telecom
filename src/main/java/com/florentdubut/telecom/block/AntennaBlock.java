@@ -1,0 +1,46 @@
+package com.florentdubut.telecom.block;
+
+import com.florentdubut.telecom.block.entity.AntennaBlockEntity;
+import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.EntityBlock;
+import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.block.state.BlockState;
+import org.jetbrains.annotations.Nullable;
+
+public class AntennaBlock extends Block implements EntityBlock {
+    public AntennaBlock(Properties properties) {
+        super(properties);
+    }
+
+    @Nullable
+    @Override
+    public BlockEntity newBlockEntity(BlockPos pos, BlockState state) {
+        return new AntennaBlockEntity(pos, state);
+    }
+
+    @Override
+    public void onPlace(BlockState state, Level level, BlockPos pos, BlockState oldState, boolean isMoving) {
+        super.onPlace(state, level, pos, oldState, isMoving);
+        if (!level.isClientSide()) {
+            BlockEntity be = level.getBlockEntity(pos);
+            if (be instanceof AntennaBlockEntity antenna) {
+                antenna.onPlaced();
+            }
+        }
+    }
+
+    @Override
+    public void onRemove(BlockState state, Level level, BlockPos pos, BlockState newState, boolean isMoving) {
+        if (state.getBlock() != newState.getBlock()) {
+            if (!level.isClientSide()) {
+                BlockEntity be = level.getBlockEntity(pos);
+                if (be instanceof AntennaBlockEntity antenna) {
+                    antenna.onRemoved();
+                }
+            }
+            super.onRemove(state, level, pos, newState, isMoving);
+        }
+    }
+}
