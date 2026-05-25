@@ -180,6 +180,9 @@ public class TelecomNetworkGraph extends SavedData {
                     }
                 }
                 
+                // Realistic oscillation (92% to 100%)
+                actual = (int)(actual * (0.92f + Math.random() * 0.08f));
+                
                 session.setActualBandwidth(actual);
                 totalBandwidthUsage += actual;
             }

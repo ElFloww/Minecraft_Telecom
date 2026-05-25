@@ -11,6 +11,9 @@ public class SmartphoneSpeedtestScreen extends Screen {
     private final Screen parentScreen;
     private boolean speedtestActive = false;
     private com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload currentSpeedtestData = null;
+    
+    private int lastDownBw = 0;
+    private int lastUpBw = 0;
 
     public SmartphoneSpeedtestScreen(Screen parentScreen) {
         super(Component.literal("Speedtest"));
@@ -20,6 +23,12 @@ public class SmartphoneSpeedtestScreen extends Screen {
     public void updateSpeedtestProgress(com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload payload) {
         this.speedtestActive = !payload.state().equals("FINISHED");
         this.currentSpeedtestData = payload;
+        
+        if (payload.state().equals("DOWNLOAD")) {
+            this.lastDownBw = payload.actualBandwidth();
+        } else if (payload.state().equals("UPLOAD")) {
+            this.lastUpBw = payload.actualBandwidth();
+        }
     }
 
     @Override
@@ -37,7 +46,7 @@ public class SmartphoneSpeedtestScreen extends Screen {
 
         this.addRenderableWidget(Button.builder(Component.literal("Start Test"), b -> {
             com.florentdubut.telecom.network.packet.NetworkScanResponsePayload scan = SmartphoneHUD.latestScan;
-            if (scan != null && scan.found() && (System.currentTimeMillis() - SmartphoneHUD.lastScanTime) < 5000) {
+            if (scan != null && scan.found()) {
                 // Determine max theoretically possible for mobile based on tech
                 int maxBw = 100;
                 if (scan.tech().contains("5G")) maxBw = 1000;
@@ -49,6 +58,10 @@ public class SmartphoneSpeedtestScreen extends Screen {
                     scan.ipAddress(), 
                     maxBw
                 ));
+                this.lastDownBw = 0;
+                this.lastUpBw = 0;
+            } else {
+                net.minecraft.client.Minecraft.getInstance().player.sendSystemMessage(Component.literal("No Network Signal!"));
             }
         }).bounds(startX + 30, startY + 220, 100, 20).build());
         
@@ -79,7 +92,7 @@ public class SmartphoneSpeedtestScreen extends Screen {
         // Status bar
         guiGraphics.fill(startX, startY, startX + screenW, startY + 15, 0x88000000);
         com.florentdubut.telecom.network.packet.NetworkScanResponsePayload scan = SmartphoneHUD.latestScan;
-        if (scan != null && scan.found() && (System.currentTimeMillis() - SmartphoneHUD.lastScanTime) < 5000) {
+        if (scan != null && scan.found()) {
             guiGraphics.drawString(this.font, scan.tech(), startX + 5, startY + 4, 0xFFFFFF);
         } else {
             guiGraphics.drawString(this.font, "No Service", startX + 5, startY + 4, 0xFF5555);
@@ -87,22 +100,17 @@ public class SmartphoneSpeedtestScreen extends Screen {
 
         guiGraphics.drawCenteredString(this.font, "SPEEDTEST", startX + screenW / 2, startY + 45, 0xFFFFFF);
         
-        if (speedtestActive && currentSpeedtestData != null) {
-            guiGraphics.drawCenteredString(this.font, "Testing: " + currentSpeedtestData.state(), startX + screenW / 2, startY + 70, 0xAAAAAA);
+        if (currentSpeedtestData != null) {
+            guiGraphics.drawCenteredString(this.font, speedtestActive ? "Testing: " + currentSpeedtestData.state() : "FINISHED", startX + screenW / 2, startY + 70, speedtestActive ? 0xAAAAAA : 0x00FF00);
             
             guiGraphics.drawString(this.font, "Ping: " + currentSpeedtestData.pingMs() + " ms", startX + 20, startY + 90, 0x00FF00);
             
             if (currentSpeedtestData.state().equals("DOWNLOAD") || currentSpeedtestData.state().equals("UPLOAD") || currentSpeedtestData.state().equals("FINISHED")) {
-                if (currentSpeedtestData.state().equals("DOWNLOAD")) {
-                    guiGraphics.drawString(this.font, "Down: " + currentSpeedtestData.actualBandwidth() + " Mbps", startX + 20, startY + 110, 0x00FFFF);
-                } else {
-                    guiGraphics.drawString(this.font, "Up: " + currentSpeedtestData.actualBandwidth() + " Mbps", startX + 20, startY + 130, 0xFF8800);
-                }
+                guiGraphics.drawString(this.font, "Down: " + this.lastDownBw + " Mbps", startX + 20, startY + 110, 0x00FFFF);
             }
-        } else if (!speedtestActive && currentSpeedtestData != null) {
-            guiGraphics.drawCenteredString(this.font, "FINISHED", startX + screenW / 2, startY + 70, 0x00FF00);
-            guiGraphics.drawString(this.font, "Ping: " + currentSpeedtestData.pingMs() + " ms", startX + 20, startY + 90, 0x00FF00);
-            guiGraphics.drawString(this.font, "Down: " + currentSpeedtestData.actualBandwidth() + " Mbps", startX + 20, startY + 110, 0x00FFFF);
+            if (currentSpeedtestData.state().equals("UPLOAD") || currentSpeedtestData.state().equals("FINISHED")) {
+                guiGraphics.drawString(this.font, "Up: " + this.lastUpBw + " Mbps", startX + 20, startY + 130, 0xFF8800);
+            }
         }
 
         guiGraphics.pose().pushPose();

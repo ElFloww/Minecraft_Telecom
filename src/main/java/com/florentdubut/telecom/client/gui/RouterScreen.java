@@ -18,10 +18,19 @@ public class RouterScreen extends Screen {
 
     private boolean speedtestActive = false;
     private com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload currentSpeedtestData = null;
+    private int lastDownBw = 0;
+    private int lastUpBw = 0;
 
     public void updateSpeedtestProgress(com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload payload) {
         this.speedtestActive = !payload.state().equals("FINISHED");
         this.currentSpeedtestData = payload;
+        this.currentSpeedtestData = payload;
+        
+        if (payload.state().equals("DOWNLOAD")) {
+            this.lastDownBw = payload.actualBandwidth();
+        } else if (payload.state().equals("UPLOAD")) {
+            this.lastUpBw = payload.actualBandwidth();
+        }
     }
 
     public RouterScreen(RouterGuiSyncPayload payload) {
@@ -60,6 +69,8 @@ public class RouterScreen extends Screen {
                 int confDown = payload.configuredMaxDown();
                 try { confDown = Integer.parseInt(downBox.getValue()); } catch (NumberFormatException ignored) {}
                 PacketDistributor.sendToServer(new com.florentdubut.telecom.network.packet.StartSpeedtestPayload(payload.pos(), payload.ipAddress(), confDown));
+                this.lastDownBw = 0;
+                this.lastUpBw = 0;
             }
         }).bounds(startX + 20, startY + 145, 100, 20).build());
     }
@@ -120,27 +131,25 @@ public class RouterScreen extends Screen {
 
         guiGraphics.drawString(this.font, "Press ESC to save and close", startX + 130, startY + 150, 0x555555);
 
-        // Speedtest overlay logic
-        if (speedtestActive && currentSpeedtestData != null) {
-            guiGraphics.fill(startX + 125, startY + 30, startX + boxWidth - 10, startY + 85, 0xFF111111);
-            guiGraphics.renderOutline(startX + 125, startY + 30, boxWidth - 135, 55, 0xFF555555);
+        // Speedtest overlay logic (shifted right)
+        int stX = startX + 265;
+        int stY = startY + 30;
+        int stW = 120;
+        int stH = 100;
+        
+        if (currentSpeedtestData != null) {
+            guiGraphics.fill(stX, stY, stX + stW, stY + stH, 0xFF111111);
+            guiGraphics.renderOutline(stX, stY, stW, stH, 0xFF555555);
             
-            guiGraphics.drawString(this.font, "SPEEDTEST: " + currentSpeedtestData.state(), startX + 130, startY + 35, 0xFFFFFF);
-            
-            guiGraphics.drawString(this.font, "Ping: " + currentSpeedtestData.pingMs() + " ms", startX + 130, startY + 50, 0x00FF00);
+            guiGraphics.drawString(this.font, speedtestActive ? "TESTING: " + currentSpeedtestData.state() : "FINISHED", stX + 10, stY + 10, 0xFFFFFF);
+            guiGraphics.drawString(this.font, "Ping: " + currentSpeedtestData.pingMs() + " ms", stX + 10, stY + 30, 0x00FF00);
             
             if (currentSpeedtestData.state().equals("DOWNLOAD") || currentSpeedtestData.state().equals("UPLOAD") || currentSpeedtestData.state().equals("FINISHED")) {
-                if (currentSpeedtestData.state().equals("DOWNLOAD")) {
-                    guiGraphics.drawString(this.font, "Down: " + currentSpeedtestData.actualBandwidth() + " Mbps", startX + 130, startY + 62, 0x00FFFF);
-                } else {
-                    guiGraphics.drawString(this.font, "Up: " + currentSpeedtestData.actualBandwidth() + " Mbps", startX + 130, startY + 74, 0xFF8800);
-                }
+                guiGraphics.drawString(this.font, "Down: " + this.lastDownBw + " Mbps", stX + 10, stY + 50, 0x00FFFF);
             }
-        } else if (!speedtestActive && currentSpeedtestData != null) {
-            guiGraphics.fill(startX + 125, startY + 30, startX + boxWidth - 10, startY + 85, 0xFF111111);
-            guiGraphics.renderOutline(startX + 125, startY + 30, boxWidth - 135, 55, 0xFF555555);
-            guiGraphics.drawString(this.font, "SPEEDTEST FINISHED", startX + 130, startY + 35, 0xFFFFFF);
-            guiGraphics.drawString(this.font, "Ping: " + currentSpeedtestData.pingMs() + " ms", startX + 130, startY + 50, 0x00FF00);
+            if (currentSpeedtestData.state().equals("UPLOAD") || currentSpeedtestData.state().equals("FINISHED")) {
+                guiGraphics.drawString(this.font, "Up: " + this.lastUpBw + " Mbps", stX + 10, stY + 70, 0xFF8800);
+            }
         }
 
         guiGraphics.pose().popPose();
