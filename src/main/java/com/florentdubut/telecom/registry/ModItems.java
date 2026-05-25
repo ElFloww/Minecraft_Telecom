@@ -48,4 +48,7 @@ public class ModItems {
 
     public static final DeferredItem<Item> NETWORK_TOOL = ITEMS.register("network_tool",
             () -> new com.florentdubut.telecom.item.NetworkToolItem(new Item.Properties().stacksTo(1)));
+
+    public static final DeferredItem<Item> NETWORK_MAP = ITEMS.register("network_map",
+            () -> new com.florentdubut.telecom.item.NetworkMapItem(new Item.Properties().stacksTo(1)));
 }

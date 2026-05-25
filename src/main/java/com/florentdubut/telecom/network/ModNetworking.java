@@ -56,6 +56,18 @@ public class ModNetworking {
             ModNetworking::handleSpeedtestUpdate
         );
 
+        registrar.playToServer(
+            com.florentdubut.telecom.network.packet.RequestNetworkMapPayload.TYPE,
+            com.florentdubut.telecom.network.packet.RequestNetworkMapPayload.STREAM_CODEC,
+            ModNetworking::handleRequestNetworkMap
+        );
+
+        registrar.playToClient(
+            com.florentdubut.telecom.network.packet.NetworkMapResponsePayload.TYPE,
+            com.florentdubut.telecom.network.packet.NetworkMapResponsePayload.STREAM_CODEC,
+            ModNetworking::handleNetworkMapResponse
+        );
+
         registrar.playToClient(
             NetworkScanResponsePayload.TYPE,
             NetworkScanResponsePayload.STREAM_CODEC,
@@ -296,6 +308,48 @@ public class ModNetworking {
             net.minecraft.client.gui.screens.Screen screen = net.minecraft.client.Minecraft.getInstance().screen;
             if (screen instanceof com.florentdubut.telecom.client.gui.ServerScreen serverScreen) {
                 serverScreen.updateBandwidth(payload.totalBandwidthDown(), payload.totalBandwidthUp());
+            }
+        });
+    }
+
+    private static void handleRequestNetworkMap(final com.florentdubut.telecom.network.packet.RequestNetworkMapPayload payload, final IPayloadContext context) {
+        context.enqueueWork(() -> {
+            net.minecraft.server.level.ServerLevel level = (net.minecraft.server.level.ServerLevel) context.player().level();
+            TelecomNetworkGraph graph = TelecomNetworkGraph.get(level);
+            if (graph != null) {
+                java.util.List<com.florentdubut.telecom.network.packet.MapNodeData> nodesData = new java.util.ArrayList<>();
+                for (com.florentdubut.telecom.network.NetworkNode node : graph.getNodes()) {
+                    String extraInfo = "";
+                    if (node.getType() == com.florentdubut.telecom.network.NetworkNode.NodeType.ANTENNA) {
+                        net.minecraft.world.level.block.entity.BlockEntity be = level.getBlockEntity(node.getPosition());
+                        if (be instanceof com.florentdubut.telecom.block.entity.AntennaBlockEntity antenna) {
+                            java.util.List<String> techs = new java.util.ArrayList<>();
+                            for (com.florentdubut.telecom.network.TelecomFrequency freq : com.florentdubut.telecom.network.TelecomFrequency.values()) {
+                                if (antenna.isFrequencyEnabled(freq)) {
+                                    techs.add(freq.getTechnology());
+                                }
+                            }
+                            // remove duplicates and join
+                            extraInfo = String.join(", ", techs.stream().distinct().toList());
+                        }
+                    }
+                    nodesData.add(new com.florentdubut.telecom.network.packet.MapNodeData(
+                        node.getPosition(),
+                        node.getType().name(),
+                        node.getIpAddress() != null ? node.getIpAddress() : "",
+                        extraInfo
+                    ));
+                }
+                context.reply(new com.florentdubut.telecom.network.packet.NetworkMapResponsePayload(nodesData));
+            }
+        });
+    }
+
+    private static void handleNetworkMapResponse(final com.florentdubut.telecom.network.packet.NetworkMapResponsePayload payload, final IPayloadContext context) {
+        context.enqueueWork(() -> {
+            net.minecraft.client.gui.screens.Screen screen = net.minecraft.client.Minecraft.getInstance().screen;
+            if (screen instanceof com.florentdubut.telecom.client.gui.NetworkMapScreen mapScreen) {
+                mapScreen.receiveData(payload.nodes());
             }
         });
     }
