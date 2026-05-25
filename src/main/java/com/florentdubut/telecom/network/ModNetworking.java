@@ -32,6 +32,12 @@ public class ModNetworking {
             ModNetworking::handleAntennaConfig
         );
 
+        registrar.playToServer(
+            com.florentdubut.telecom.network.packet.RouterConfigPayload.TYPE,
+            com.florentdubut.telecom.network.packet.RouterConfigPayload.STREAM_CODEC,
+            ModNetworking::handleRouterConfig
+        );
+
         registrar.playToClient(
             NetworkScanResponsePayload.TYPE,
             NetworkScanResponsePayload.STREAM_CODEC,
@@ -170,6 +176,20 @@ public class ModNetworking {
                 if (be instanceof AntennaBlockEntity antenna) {
                     antenna.setAntennaName(payload.name());
                     antenna.setEnabledFrequenciesMask(payload.enabledFrequenciesMask());
+                }
+            }
+        });
+    }
+
+    private static void handleRouterConfig(final com.florentdubut.telecom.network.packet.RouterConfigPayload payload, final IPayloadContext context) {
+        context.enqueueWork(() -> {
+            Level level = context.player().level();
+            BlockPos pos = payload.pos();
+            if (level.isLoaded(pos)) {
+                BlockEntity be = level.getBlockEntity(pos);
+                if (be instanceof com.florentdubut.telecom.block.entity.RouterBlockEntity router) {
+                    router.setConfiguredMaxDown(payload.configuredMaxDown());
+                    router.setConfiguredMaxUp(payload.configuredMaxUp());
                 }
             }
         });

@@ -66,10 +66,18 @@ public class RouterBlock extends Block implements EntityBlock {
                     }
                 }
                 
+                int maxDown = 1000;
+                int maxUp = 1000;
+                BlockEntity be = level.getBlockEntity(pos);
+                if (be instanceof RouterBlockEntity routerBE) {
+                    maxDown = routerBE.getConfiguredMaxDown();
+                    maxUp = routerBE.getConfiguredMaxUp();
+                }
+
                 String safeIp = node.getIpAddress() != null ? node.getIpAddress() : "";
                 net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(
                     serverPlayer, 
-                    new com.florentdubut.telecom.network.packet.RouterGuiSyncPayload(isConnected, safeIp, ping, bandwidth)
+                    new com.florentdubut.telecom.network.packet.RouterGuiSyncPayload(pos, isConnected, safeIp, ping, bandwidth, maxDown, maxUp)
                 );
             }
         }

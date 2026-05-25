@@ -1,22 +1,64 @@
 package com.florentdubut.telecom.client.gui;
 
 import com.florentdubut.telecom.network.packet.RouterGuiSyncPayload;
+import com.florentdubut.telecom.network.packet.RouterConfigPayload;
 import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
+import net.neoforged.neoforge.network.PacketDistributor;
 
 public class RouterScreen extends Screen {
 
     private final RouterGuiSyncPayload payload;
+    private int localMaxDown;
+    private int localMaxUp;
 
     public RouterScreen(RouterGuiSyncPayload payload) {
         super(Component.literal("Router Interface"));
         this.payload = payload;
+        this.localMaxDown = payload.configuredMaxDown();
+        this.localMaxUp = payload.configuredMaxUp();
     }
 
     @Override
     public boolean isPauseScreen() {
         return false;
+    }
+
+    @Override
+    protected void init() {
+        super.init();
+        int centerX = this.width / 2;
+        int centerY = this.height / 2;
+        int startX = centerX - 120;
+        int startY = centerY - 80;
+
+        // Downlink buttons
+        this.addRenderableWidget(Button.builder(Component.literal("-"), b -> {
+            localMaxDown = Math.max(10, localMaxDown - 100);
+        }).bounds(startX + 140, startY + 95, 20, 15).build());
+
+        this.addRenderableWidget(Button.builder(Component.literal("+"), b -> {
+            localMaxDown = Math.min(100000, localMaxDown + 100);
+        }).bounds(startX + 200, startY + 95, 20, 15).build());
+
+        // Uplink buttons
+        this.addRenderableWidget(Button.builder(Component.literal("-"), b -> {
+            localMaxUp = Math.max(10, localMaxUp - 100);
+        }).bounds(startX + 140, startY + 115, 20, 15).build());
+
+        this.addRenderableWidget(Button.builder(Component.literal("+"), b -> {
+            localMaxUp = Math.min(100000, localMaxUp + 100);
+        }).bounds(startX + 200, startY + 115, 20, 15).build());
+    }
+
+    @Override
+    public void onClose() {
+        if (localMaxDown != payload.configuredMaxDown() || localMaxUp != payload.configuredMaxUp()) {
+            PacketDistributor.sendToServer(new RouterConfigPayload(payload.pos(), localMaxDown, localMaxUp));
+        }
+        super.onClose();
     }
 
     @Override
@@ -51,30 +93,25 @@ public class RouterScreen extends Screen {
         // Status
         String statusText = payload.isConnected() ? "CONNECTED TO NETWORK" : "OFFLINE";
         int statusColor = payload.isConnected() ? 0x00FF00 : 0xFF0000;
-        guiGraphics.drawString(this.font, "Status: " + statusText, startX + 20, startY + 40, statusColor);
+        guiGraphics.drawString(this.font, "Status: " + statusText, startX + 20, startY + 30, statusColor);
 
         // IP Address
-        guiGraphics.drawString(this.font, "IP Address: " + (!payload.ipAddress().isEmpty() ? payload.ipAddress() : "N/A"), startX + 20, startY + 60, 0xCCCCCC);
+        guiGraphics.drawString(this.font, "IP Address: " + (!payload.ipAddress().isEmpty() ? payload.ipAddress() : "N/A"), startX + 20, startY + 45, 0xCCCCCC);
 
         // Ping
-        guiGraphics.drawString(this.font, "Ping: " + (payload.isConnected() ? payload.pingMs() + " ms" : "---"), startX + 20, startY + 80, 0xCCCCCC);
+        guiGraphics.drawString(this.font, "Ping: " + (payload.isConnected() ? payload.pingMs() + " ms" : "---"), startX + 20, startY + 60, 0xCCCCCC);
 
-        // Bandwidth
-        guiGraphics.drawString(this.font, "Max Bandwidth: " + (payload.isConnected() ? payload.bandwidthMbps() + " Mbps" : "---"), startX + 20, startY + 100, 0xCCCCCC);
+        // Max Hardware Bandwidth
+        guiGraphics.drawString(this.font, "Hardware Max: " + (payload.isConnected() ? payload.bandwidthMbps() + " Mbps" : "---"), startX + 20, startY + 75, 0xCCCCCC);
         
-        // Live Traffic Simulation
-        if (payload.isConnected()) {
-            long time = System.currentTimeMillis();
-            // Create some deterministic but fluctuating "live" traffic numbers based on time and ping
-            int baseTraffic = Math.min(payload.bandwidthMbps(), 150);
-            int variationDown = (int)((Math.sin(time / 500.0) * 0.5 + 0.5) * baseTraffic);
-            int variationUp = (int)((Math.cos(time / 400.0) * 0.5 + 0.5) * (baseTraffic / 2));
-            
-            guiGraphics.drawString(this.font, "Download: " + variationDown + " Mbps", startX + 20, startY + 115, 0x00FFFF);
-            guiGraphics.drawString(this.font, "Upload: " + variationUp + " Mbps", startX + 120, startY + 115, 0xFF8800);
-        }
+        // Plan Config
+        guiGraphics.drawString(this.font, "Plan Max Down:", startX + 20, startY + 100, 0x00FFFF);
+        guiGraphics.drawCenteredString(this.font, localMaxDown + " Mbps", startX + 180, startY + 100, 0xFFFFFF);
 
-        guiGraphics.drawString(this.font, "Press ESC to close", startX + 20, startY + 140, 0x555555);
+        guiGraphics.drawString(this.font, "Plan Max Up:", startX + 20, startY + 120, 0xFF8800);
+        guiGraphics.drawCenteredString(this.font, localMaxUp + " Mbps", startX + 180, startY + 120, 0xFFFFFF);
+
+        guiGraphics.drawString(this.font, "Press ESC to save and close", startX + 20, startY + 145, 0x555555);
 
         guiGraphics.pose().popPose();
 
