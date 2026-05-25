@@ -212,4 +212,36 @@ public class TelecomNetworkGraph extends SavedData {
         
         return path;
     }
+
+    public record PathStats(int pingMs, int bandwidthMbps) {}
+
+    public PathStats calculatePathStats(BlockPos sourcePos, BlockPos destPos) {
+        List<NetworkEdge> path = findShortestPath(sourcePos, destPos);
+        if (path == null) return null;
+        
+        float totalPing = 0;
+        int minBandwidth = Integer.MAX_VALUE;
+        int distanceCu = 0;
+        
+        for (NetworkEdge edge : path) {
+            int length = edge.getLength();
+            if (edge.getType() == NetworkEdge.EdgeType.FIBER) {
+                totalPing += length * 0.05f;
+                minBandwidth = Math.min(minBandwidth, 10000); // 10 Gbps stable
+            } else if (edge.getType() == NetworkEdge.EdgeType.COPPER) {
+                totalPing += length * 0.2f;
+                distanceCu += length;
+                // Copper max is 1000 Mbps, but drops by 2 Mbps per block of copper in the path
+                int currentCuBw = Math.max(10, 1000 - (distanceCu * 2));
+                minBandwidth = Math.min(minBandwidth, currentCuBw);
+            }
+        }
+        
+        // Base latency
+        totalPing += 1.0f; 
+        
+        if (minBandwidth == Integer.MAX_VALUE) minBandwidth = 0;
+        
+        return new PathStats(Math.max(1, (int)totalPing), minBandwidth);
+    }
 }

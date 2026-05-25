@@ -35,7 +35,7 @@ public class SmartphoneHUD {
         int startY = 10;
 
         // Background box
-        guiGraphics.fill(startX, startY, width - 10, startY + 40, 0xAA000000);
+        guiGraphics.fill(startX, startY, width - 10, startY + 50, 0xAA000000);
 
         if (latestScan == null) {
             guiGraphics.drawString(font, "Scanning...", startX + 5, startY + 5, 0xAAAAAA);
@@ -45,6 +45,8 @@ public class SmartphoneHUD {
             
             int signal = latestScan.signalStrength();
             guiGraphics.drawString(font, signal + " dBm", startX + 5, startY + 25, 0xAAAAAA);
+            
+            guiGraphics.drawString(font, "IP: " + latestScan.ipAddress(), startX + 5, startY + 35, 0x00FFFF);
 
             // Draw Signal Bars
             int bars = 0;

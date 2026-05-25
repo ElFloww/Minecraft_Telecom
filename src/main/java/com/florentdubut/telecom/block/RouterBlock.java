@@ -54,10 +54,13 @@ public class RouterBlock extends Block implements EntityBlock {
                     }
                     
                     if (serverNode != null) {
-                        // TODO: Implement actual Dijkstra pathfinding distance for Ping/Bandwidth calculation
-                        // For now, approximate
-                        ping = 15; // 15ms base
-                        bandwidth = 1000; // 1000 Mbps base
+                        com.florentdubut.telecom.network.TelecomNetworkGraph.PathStats stats = graph.calculatePathStats(pos, serverNode.getPosition());
+                        if (stats != null) {
+                            ping = stats.pingMs();
+                            bandwidth = stats.bandwidthMbps();
+                        } else {
+                            isConnected = false;
+                        }
                     } else {
                         isConnected = false;
                     }

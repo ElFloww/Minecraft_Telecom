@@ -54,8 +54,20 @@ public class RouterScreen extends Screen {
         guiGraphics.drawString(this.font, "Ping: " + (payload.isConnected() ? payload.pingMs() + " ms" : "---"), startX + 20, startY + 80, 0xCCCCCC);
 
         // Bandwidth
-        guiGraphics.drawString(this.font, "Bandwidth Max: " + (payload.isConnected() ? payload.bandwidthMbps() + " Mbps" : "---"), startX + 20, startY + 100, 0xCCCCCC);
+        guiGraphics.drawString(this.font, "Max Bandwidth: " + (payload.isConnected() ? payload.bandwidthMbps() + " Mbps" : "---"), startX + 20, startY + 100, 0xCCCCCC);
         
-        guiGraphics.drawString(this.font, "Press ESC to close", startX + 20, startY + 135, 0x555555);
+        // Live Traffic Simulation
+        if (payload.isConnected()) {
+            long time = System.currentTimeMillis();
+            // Create some deterministic but fluctuating "live" traffic numbers based on time and ping
+            int baseTraffic = Math.min(payload.bandwidthMbps(), 150);
+            int variationDown = (int)((Math.sin(time / 500.0) * 0.5 + 0.5) * baseTraffic);
+            int variationUp = (int)((Math.cos(time / 400.0) * 0.5 + 0.5) * (baseTraffic / 2));
+            
+            guiGraphics.drawString(this.font, "Download: " + variationDown + " Mbps", startX + 20, startY + 115, 0x00FFFF);
+            guiGraphics.drawString(this.font, "Upload: " + variationUp + " Mbps", startX + 120, startY + 115, 0xFF8800);
+        }
+
+        guiGraphics.drawString(this.font, "Press ESC to close", startX + 20, startY + 140, 0x555555);
     }
 }

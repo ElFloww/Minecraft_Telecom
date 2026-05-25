@@ -116,9 +116,11 @@ public class ModNetworking {
         }
 
         if (bestAntenna != null && !finalTechLabel.isEmpty()) {
-            PacketDistributor.sendToPlayer(player, new NetworkScanResponsePayload(true, bestAntenna.getAntennaName(), bestSignal, finalTechLabel));
+            // Generate a virtual mobile IP address
+            String mobileIp = "10.0." + (bestAntenna.getBlockPos().getX() % 255) + "." + (player.getId() % 255);
+            PacketDistributor.sendToPlayer(player, new NetworkScanResponsePayload(true, bestAntenna.getAntennaName(), bestSignal, finalTechLabel, mobileIp));
         } else {
-            PacketDistributor.sendToPlayer(player, new NetworkScanResponsePayload(false, "No Service", -120, ""));
+            PacketDistributor.sendToPlayer(player, new NetworkScanResponsePayload(false, "No Service", -120, "", ""));
         }
     }
 
