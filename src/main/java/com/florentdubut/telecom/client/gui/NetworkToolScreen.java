@@ -22,7 +22,8 @@ public class NetworkToolScreen extends Screen {
 
     @Override
     public void render(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
-        this.renderBackground(guiGraphics, mouseX, mouseY, partialTick);
+        // Draw a light dimming layer without blurring the cables
+        guiGraphics.fillGradient(0, 0, this.width, this.height, 0x80000000, 0xA0000000);
 
         int startX = (this.width - this.imageWidth) / 2;
         int startY = (this.height - this.imageHeight) / 2;
