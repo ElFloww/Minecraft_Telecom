@@ -18,18 +18,20 @@ public class TrafficSession {
     private SessionState state;
     private int ticksElapsed;
     private final int totalTicksPerPhase;
-    private int targetBandwidth; // requested bandwidth
+    private int targetDownBw; // requested download bandwidth
+    private int targetUpBw;   // requested upload bandwidth
     private int actualBandwidth; // actual bandwidth achieved in the last tick
     private final String clientIp; // IP of the client (Router or Phone)
     private int pingMs;
 
-    public TrafficSession(BlockPos sourcePos, BlockPos destPos, String clientIp, int targetBandwidth, int totalTicksPerPhase) {
+    public TrafficSession(BlockPos sourcePos, BlockPos destPos, String clientIp, int targetDownBw, int targetUpBw, int totalTicksPerPhase) {
         this.sessionId = UUID.randomUUID();
         this.sourcePos = sourcePos;
         this.destPos = destPos;
         this.state = SessionState.PING;
         this.ticksElapsed = 0;
-        this.targetBandwidth = targetBandwidth;
+        this.targetDownBw = targetDownBw;
+        this.targetUpBw = targetUpBw;
         this.totalTicksPerPhase = totalTicksPerPhase;
         this.clientIp = clientIp;
         this.actualBandwidth = 0;
@@ -60,8 +62,12 @@ public class TrafficSession {
         return totalTicksPerPhase;
     }
 
-    public int getTargetBandwidth() {
-        return targetBandwidth;
+    public int getTargetDownBw() {
+        return targetDownBw;
+    }
+    
+    public int getTargetUpBw() {
+        return targetUpBw;
     }
 
     public int getActualBandwidth() {

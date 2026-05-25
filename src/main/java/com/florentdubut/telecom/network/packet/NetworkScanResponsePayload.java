@@ -9,17 +9,30 @@ import net.minecraft.resources.ResourceLocation;
 
 import net.minecraft.core.BlockPos;
 
-public record NetworkScanResponsePayload(boolean found, String name, int signalStrength, String tech, String ipAddress, BlockPos antennaPos) implements CustomPacketPayload {
+public record NetworkScanResponsePayload(boolean found, String name, int signalStrength, String tech, String ipAddress, BlockPos antennaPos, int maxDown, int maxUp) implements CustomPacketPayload {
     public static final Type<NetworkScanResponsePayload> TYPE = new Type<>(ResourceLocation.fromNamespaceAndPath(TelecomMod.MODID, "network_scan_response"));
 
-    public static final StreamCodec<FriendlyByteBuf, NetworkScanResponsePayload> STREAM_CODEC = StreamCodec.composite(
-        ByteBufCodecs.BOOL, NetworkScanResponsePayload::found,
-        ByteBufCodecs.STRING_UTF8, NetworkScanResponsePayload::name,
-        ByteBufCodecs.INT, NetworkScanResponsePayload::signalStrength,
-        ByteBufCodecs.STRING_UTF8, NetworkScanResponsePayload::tech,
-        ByteBufCodecs.STRING_UTF8, NetworkScanResponsePayload::ipAddress,
-        BlockPos.STREAM_CODEC, NetworkScanResponsePayload::antennaPos,
-        NetworkScanResponsePayload::new
+    public static final StreamCodec<FriendlyByteBuf, NetworkScanResponsePayload> STREAM_CODEC = StreamCodec.of(
+        (buf, payload) -> {
+            buf.writeBoolean(payload.found());
+            buf.writeUtf(payload.name());
+            buf.writeInt(payload.signalStrength());
+            buf.writeUtf(payload.tech());
+            buf.writeUtf(payload.ipAddress());
+            buf.writeBlockPos(payload.antennaPos());
+            buf.writeInt(payload.maxDown());
+            buf.writeInt(payload.maxUp());
+        },
+        buf -> new NetworkScanResponsePayload(
+            buf.readBoolean(),
+            buf.readUtf(),
+            buf.readInt(),
+            buf.readUtf(),
+            buf.readUtf(),
+            buf.readBlockPos(),
+            buf.readInt(),
+            buf.readInt()
+        )
     );
 
     @Override

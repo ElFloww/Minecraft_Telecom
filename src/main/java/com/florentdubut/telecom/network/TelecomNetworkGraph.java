@@ -118,7 +118,9 @@ public class TelecomNetworkGraph extends SavedData {
     private int totalBandwidthUp = 0;
     private int totalBandwidthDown = 0;
 
-    public void startSpeedtest(BlockPos sourcePos, String clientIp, int targetBandwidth) {
+    public void startSpeedtest(BlockPos sourcePos, String clientIp, int targetDownBw, int targetUpBw) {
+        if (getSessionByIp(clientIp) != null) return; // Prevent multiple speedtests from the same client
+        
         NetworkNode serverNode = null;
         for (NetworkNode n : nodes.values()) {
             if (n.getType() == NetworkNode.NodeType.SERVER) {
@@ -127,7 +129,7 @@ public class TelecomNetworkGraph extends SavedData {
             }
         }
         if (serverNode != null) {
-            TrafficSession session = new TrafficSession(sourcePos, serverNode.getPosition(), clientIp, targetBandwidth, 40); // 40 ticks = 2 seconds per phase
+            TrafficSession session = new TrafficSession(sourcePos, serverNode.getPosition(), clientIp, targetDownBw, targetUpBw, 40); // 40 ticks = 2 seconds per phase
             activeSessions.add(session);
         }
     }
@@ -167,7 +169,7 @@ public class TelecomNetworkGraph extends SavedData {
             
             if (session.getState() == TrafficSession.SessionState.DOWNLOAD || session.getState() == TrafficSession.SessionState.UPLOAD) {
                 int hardwareMax = stats.bandwidthMbps();
-                int requested = Math.min(session.getTargetBandwidth(), hardwareMax);
+                int requested = Math.min(session.getState() == TrafficSession.SessionState.DOWNLOAD ? session.getTargetDownBw() : session.getTargetUpBw(), hardwareMax);
                 List<NetworkEdge> path = findShortestPath(session.getSourcePos(), session.getDestPos());
                 if (path != null) {
                     sessionPaths.put(session, path);

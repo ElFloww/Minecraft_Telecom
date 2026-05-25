@@ -47,18 +47,14 @@ public class SmartphoneSpeedtestScreen extends Screen {
         int startY = (this.height - screenH) / 2;
 
         this.addRenderableWidget(Button.builder(Component.literal("Start Test"), b -> {
+            if (this.speedtestActive) return;
             com.florentdubut.telecom.network.packet.NetworkScanResponsePayload scan = SmartphoneHUD.latestScan;
             if (scan != null && scan.found()) {
-                // Determine max theoretically possible for mobile based on tech
-                int maxBw = 100;
-                if (scan.tech().contains("5G")) maxBw = 1000;
-                else if (scan.tech().contains("4G")) maxBw = 300;
-                else if (scan.tech().contains("3G")) maxBw = 42;
-                
                 PacketDistributor.sendToServer(new com.florentdubut.telecom.network.packet.StartSpeedtestPayload(
                     scan.antennaPos(), 
                     scan.ipAddress(), 
-                    maxBw
+                    scan.maxDown(),
+                    scan.maxUp()
                 ));
                 this.speedtestActive = true;
                 this.currentSpeedtestData = null;

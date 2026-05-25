@@ -67,10 +67,15 @@ public class RouterScreen extends Screen {
         this.addRenderableWidget(this.upBox);
 
         this.addRenderableWidget(Button.builder(Component.literal("Run Speedtest"), b -> {
+            if (this.speedtestActive) return;
             if (payload.isConnected()) {
                 int confDown = payload.configuredMaxDown();
+                int confUp = payload.configuredMaxUp();
                 try { confDown = Integer.parseInt(downBox.getValue()); } catch (NumberFormatException ignored) {}
-                PacketDistributor.sendToServer(new com.florentdubut.telecom.network.packet.StartSpeedtestPayload(payload.pos(), payload.ipAddress(), confDown));
+                try { confUp = Integer.parseInt(upBox.getValue()); } catch (NumberFormatException ignored) {}
+                PacketDistributor.sendToServer(new com.florentdubut.telecom.network.packet.StartSpeedtestPayload(payload.pos(), payload.ipAddress(), confDown, confUp));
+                this.speedtestActive = true;
+                this.currentSpeedtestData = null;
                 this.lastDownBw = 0;
                 this.lastUpBw = 0;
             }

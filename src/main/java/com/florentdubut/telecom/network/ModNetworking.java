@@ -152,11 +152,34 @@ public class ModNetworking {
         }
 
         if (bestAntenna != null && !finalTechLabel.isEmpty()) {
+            // Recompute max capacities for the selected tech and frequencies
+            int maxDown = 0;
+            int maxUp = 0;
+            
+            String selectedTech = finalTechLabel.substring(0, 2);
+            for (TelecomFrequency freq : TelecomFrequency.values()) {
+                if (freq.getTechnology().equals(selectedTech) && finalTechLabel.contains(freq.getFrequencyLabel())) {
+                    // Base speed per frequency
+                    maxDown += freq.getMaxSpeedMb();
+                    
+                    // Upload is typically much slower on mobile networks
+                    if (selectedTech.equals("5G")) maxUp += freq.getMaxSpeedMb() * 0.15f;
+                    else if (selectedTech.equals("4G")) maxUp += freq.getMaxSpeedMb() * 0.25f;
+                    else if (selectedTech.equals("3G")) maxUp += freq.getMaxSpeedMb() * 0.1f;
+                    else maxUp += freq.getMaxSpeedMb() * 0.05f;
+                }
+            }
+            
+            // Signal degradation: -50 dBm is perfect (1.0x), -120 dBm is unusable (0.01x)
+            float signalQuality = Math.max(0.01f, Math.min(1.0f, (bestSignal + 120) / 70.0f));
+            maxDown = (int)(maxDown * signalQuality);
+            maxUp = Math.max(1, (int)(maxUp * signalQuality));
+            
             // Generate a virtual mobile IP address
             String mobileIp = "10.0." + (bestAntenna.getBlockPos().getX() % 255) + "." + (player.getId() % 255);
-            PacketDistributor.sendToPlayer(player, new NetworkScanResponsePayload(true, bestAntenna.getAntennaName(), bestSignal, finalTechLabel, mobileIp, bestAntenna.getBlockPos()));
+            PacketDistributor.sendToPlayer(player, new NetworkScanResponsePayload(true, bestAntenna.getAntennaName(), bestSignal, finalTechLabel, mobileIp, bestAntenna.getBlockPos(), maxDown, maxUp));
         } else {
-            PacketDistributor.sendToPlayer(player, new NetworkScanResponsePayload(false, "No Service", -120, "", "", BlockPos.ZERO));
+            PacketDistributor.sendToPlayer(player, new NetworkScanResponsePayload(false, "No Service", -120, "", "", BlockPos.ZERO, 0, 0));
         }
     }
 
@@ -217,7 +240,7 @@ public class ModNetworking {
         context.enqueueWork(() -> {
             if (context.player().level() instanceof ServerLevel serverLevel) {
                 com.florentdubut.telecom.network.TelecomNetworkGraph graph = com.florentdubut.telecom.network.TelecomNetworkGraph.get(serverLevel);
-                graph.startSpeedtest(payload.sourcePos(), payload.clientIp(), payload.targetBandwidth());
+                graph.startSpeedtest(payload.sourcePos(), payload.clientIp(), payload.targetDownBw(), payload.targetUpBw());
             }
         });
     }
