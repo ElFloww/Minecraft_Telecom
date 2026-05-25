@@ -43,6 +43,18 @@ public class ModNetworking {
             com.florentdubut.telecom.network.packet.RouterGuiSyncPayload.STREAM_CODEC,
             ModNetworking::handleRouterGuiSync
         );
+
+        registrar.playToClient(
+            com.florentdubut.telecom.network.packet.ServerGuiSyncPayload.TYPE,
+            com.florentdubut.telecom.network.packet.ServerGuiSyncPayload.STREAM_CODEC,
+            ModNetworking::handleServerGuiSync
+        );
+
+        registrar.playToClient(
+            com.florentdubut.telecom.network.packet.NetworkToolSyncPayload.TYPE,
+            com.florentdubut.telecom.network.packet.NetworkToolSyncPayload.STREAM_CODEC,
+            ModNetworking::handleNetworkToolSync
+        );
     }
 
     public static void scanForPlayer(ServerPlayer player) {
@@ -134,6 +146,18 @@ public class ModNetworking {
     private static void handleRouterGuiSync(final com.florentdubut.telecom.network.packet.RouterGuiSyncPayload payload, final IPayloadContext context) {
         context.enqueueWork(() -> {
             net.minecraft.client.Minecraft.getInstance().setScreen(new com.florentdubut.telecom.client.gui.RouterScreen(payload));
+        });
+    }
+
+    private static void handleServerGuiSync(final com.florentdubut.telecom.network.packet.ServerGuiSyncPayload payload, final IPayloadContext context) {
+        context.enqueueWork(() -> {
+            net.minecraft.client.Minecraft.getInstance().setScreen(new com.florentdubut.telecom.client.gui.ServerScreen(payload));
+        });
+    }
+
+    private static void handleNetworkToolSync(final com.florentdubut.telecom.network.packet.NetworkToolSyncPayload payload, final IPayloadContext context) {
+        context.enqueueWork(() -> {
+            net.minecraft.client.Minecraft.getInstance().setScreen(new com.florentdubut.telecom.client.gui.NetworkToolScreen(payload));
         });
     }
 

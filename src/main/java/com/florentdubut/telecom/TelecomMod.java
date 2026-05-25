@@ -37,6 +37,7 @@ public class TelecomMod {
                 output.accept(ModItems.SERVER.get());
                 output.accept(ModItems.ANTENNA.get());
                 output.accept(ModItems.SMARTPHONE.get());
+                output.accept(ModItems.NETWORK_TOOL.get());
             }).build());
 
     public TelecomMod(IEventBus modEventBus) {
