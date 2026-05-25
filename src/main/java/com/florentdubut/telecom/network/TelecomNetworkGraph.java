@@ -151,7 +151,7 @@ public class TelecomNetworkGraph extends SavedData {
         if (serverNode != null) {
             PathStats stats = calculatePathStats(sourcePos, serverNode.getPosition());
             if (stats != null) {
-                TrafficSession session = new TrafficSession(sourcePos, serverNode.getPosition(), clientIp, targetDownBw, targetUpBw, 40); // 40 ticks = 2 seconds per phase
+                TrafficSession session = new TrafficSession(sourcePos, serverNode.getPosition(), clientIp, targetDownBw, targetUpBw, 100); // 100 ticks = 5 seconds per phase
                 session.setExtraPing(extraPing);
                 session.setPingMs(stats.pingMs());
                 activeSessions.add(session);
