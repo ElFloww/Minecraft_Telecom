@@ -66,8 +66,9 @@ public class NetworkToolItem extends Item {
                         
                         // We found the edge! Send Payload
                         String typeStr = edge.getType() == NetworkEdge.EdgeType.FIBER ? "Fiber Optic" : "Copper ADSL";
-                        // Simulate usage
-                        int usagePercent = (edge.getType() == NetworkEdge.EdgeType.COPPER) ? (int)(Math.random() * 80) : (int)(Math.random() * 10);
+                        // Real usage from traffic session
+                        int usagePercent = (int) (((float) edge.getCurrentUsage() / edge.getBandwidthMax()) * 100);
+                        if (usagePercent > 100) usagePercent = 100;
                         
                         net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(
                             (net.minecraft.server.level.ServerPlayer) context.getPlayer(),

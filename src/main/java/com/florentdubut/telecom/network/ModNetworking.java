@@ -38,6 +38,18 @@ public class ModNetworking {
             ModNetworking::handleRouterConfig
         );
 
+        registrar.playToServer(
+            com.florentdubut.telecom.network.packet.StartSpeedtestPayload.TYPE,
+            com.florentdubut.telecom.network.packet.StartSpeedtestPayload.STREAM_CODEC,
+            ModNetworking::handleStartSpeedtest
+        );
+
+        registrar.playToClient(
+            com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload.TYPE,
+            com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload.STREAM_CODEC,
+            ModNetworking::handleSpeedtestUpdate
+        );
+
         registrar.playToClient(
             NetworkScanResponsePayload.TYPE,
             NetworkScanResponsePayload.STREAM_CODEC,
@@ -191,6 +203,26 @@ public class ModNetworking {
                     router.setConfiguredMaxDown(payload.configuredMaxDown());
                     router.setConfiguredMaxUp(payload.configuredMaxUp());
                 }
+            }
+        });
+    }
+
+    private static void handleStartSpeedtest(final com.florentdubut.telecom.network.packet.StartSpeedtestPayload payload, final IPayloadContext context) {
+        context.enqueueWork(() -> {
+            if (context.player().level() instanceof ServerLevel serverLevel) {
+                com.florentdubut.telecom.network.TelecomNetworkGraph graph = com.florentdubut.telecom.network.TelecomNetworkGraph.get(serverLevel);
+                graph.startSpeedtest(payload.sourcePos(), payload.clientIp(), payload.targetBandwidth());
+            }
+        });
+    }
+
+    private static void handleSpeedtestUpdate(final com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload payload, final IPayloadContext context) {
+        context.enqueueWork(() -> {
+            net.minecraft.client.gui.screens.Screen screen = net.minecraft.client.Minecraft.getInstance().screen;
+            if (screen instanceof com.florentdubut.telecom.client.gui.RouterScreen routerScreen) {
+                routerScreen.updateSpeedtestProgress(payload);
+            } else if (screen instanceof com.florentdubut.telecom.client.gui.SmartphoneSpeedtestScreen phoneScreen) {
+                phoneScreen.updateSpeedtestProgress(payload);
             }
         });
     }

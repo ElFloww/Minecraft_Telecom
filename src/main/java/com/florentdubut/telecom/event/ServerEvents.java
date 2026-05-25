@@ -11,6 +11,10 @@ public class ServerEvents {
 
     @SubscribeEvent
     public static void onServerTick(ServerTickEvent.Post event) {
+        event.getServer().getAllLevels().forEach(level -> {
+            com.florentdubut.telecom.network.TelecomNetworkGraph.get(level).tickTraffic(level);
+        });
+
         tickCounter++;
         if (tickCounter >= 20) {
             tickCounter = 0;

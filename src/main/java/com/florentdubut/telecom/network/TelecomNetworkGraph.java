@@ -114,6 +114,100 @@ public class TelecomNetworkGraph extends SavedData {
         setDirty();
     }
 
+    private final List<TrafficSession> activeSessions = new ArrayList<>();
+    private int totalBandwidthUsage = 0;
+
+    public void startSpeedtest(BlockPos sourcePos, String clientIp, int targetBandwidth) {
+        NetworkNode serverNode = null;
+        for (NetworkNode n : nodes.values()) {
+            if (n.getType() == NetworkNode.NodeType.SERVER) {
+                serverNode = n;
+                break;
+            }
+        }
+        if (serverNode != null) {
+            TrafficSession session = new TrafficSession(sourcePos, serverNode.getPosition(), clientIp, targetBandwidth, 40); // 40 ticks = 2 seconds per phase
+            activeSessions.add(session);
+        }
+    }
+
+    public void tickTraffic(ServerLevel level) {
+        // Reset current usage on all edges
+        for (NetworkEdge edge : edges) {
+            edge.setCurrentUsage(0);
+        }
+        
+        totalBandwidthUsage = 0;
+        
+        List<TrafficSession> toRemove = new ArrayList<>();
+        
+        for (TrafficSession session : activeSessions) {
+            session.tick();
+            
+            if (session.getState() == TrafficSession.SessionState.FINISHED) {
+                toRemove.add(session);
+                // Broadcast finished state
+                com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload update = new com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload(
+                    "FINISHED", session.getPingMs(), 0, session.getTicksElapsed(), session.getTotalTicksPerPhase());
+                net.neoforged.neoforge.network.PacketDistributor.sendToAllPlayers(update);
+                continue;
+            }
+            
+            PathStats stats = calculatePathStats(session.getSourcePos(), session.getDestPos());
+            if (stats == null) {
+                toRemove.add(session); // Path broken
+                continue;
+            }
+            
+            session.setPingMs(stats.pingMs());
+            
+            if (session.getState() == TrafficSession.SessionState.DOWNLOAD || session.getState() == TrafficSession.SessionState.UPLOAD) {
+                int hardwareMax = stats.bandwidthMbps();
+                int requested = Math.min(session.getTargetBandwidth(), hardwareMax);
+                int actual = requested;
+                
+                // Add load to edges
+                List<NetworkEdge> path = findShortestPath(session.getSourcePos(), session.getDestPos());
+                if (path != null) {
+                    for (NetworkEdge edge : path) {
+                        int newUsage = edge.getCurrentUsage() + requested;
+                        edge.setCurrentUsage(newUsage);
+                        
+                        if (newUsage > edge.getBandwidthMax()) {
+                            float ratio = (float)edge.getBandwidthMax() / newUsage;
+                            actual = (int)(actual * ratio);
+                        }
+                    }
+                }
+                
+                session.setActualBandwidth(actual);
+                totalBandwidthUsage += actual;
+            }
+            
+            // Broadcast state
+            if (session.getTicksElapsed() % 2 == 0) { // Every 2 ticks to reduce spam
+                com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload update = new com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload(
+                    session.getState().name(), session.getPingMs(), session.getActualBandwidth(), session.getTicksElapsed(), session.getTotalTicksPerPhase());
+                net.neoforged.neoforge.network.PacketDistributor.sendToAllPlayers(update);
+            }
+        }
+        
+        activeSessions.removeAll(toRemove);
+    }
+
+    public int getTotalBandwidthUsage() {
+        return totalBandwidthUsage;
+    }
+    
+    public TrafficSession getSessionByIp(String ip) {
+        for (TrafficSession s : activeSessions) {
+            if (s.getClientIp() != null && s.getClientIp().equals(ip)) {
+                return s;
+            }
+        }
+        return null;
+    }
+
     public NetworkNode getNode(BlockPos pos) {
         return nodes.get(pos);
     }

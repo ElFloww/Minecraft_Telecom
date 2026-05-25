@@ -16,6 +16,9 @@ public class SmartphoneItem extends Item {
 
     @Override
     public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand usedHand) {
-        return InteractionResultHolder.pass(player.getItemInHand(usedHand));
+        if (level.isClientSide) {
+            net.minecraft.client.Minecraft.getInstance().setScreen(new com.florentdubut.telecom.client.gui.SmartphoneScreen());
+        }
+        return InteractionResultHolder.sidedSuccess(player.getItemInHand(usedHand), level.isClientSide());
     }
 }

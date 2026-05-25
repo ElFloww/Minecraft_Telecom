@@ -17,7 +17,12 @@ public class RouterScreen extends Screen {
     private EditBox upBox;
 
     private boolean speedtestActive = false;
-    private long speedtestStartTime = 0;
+    private com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload currentSpeedtestData = null;
+
+    public void updateSpeedtestProgress(com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload payload) {
+        this.speedtestActive = !payload.state().equals("FINISHED");
+        this.currentSpeedtestData = payload;
+    }
 
     public RouterScreen(RouterGuiSyncPayload payload) {
         super(Component.literal("Router Interface"));
@@ -52,8 +57,9 @@ public class RouterScreen extends Screen {
 
         this.addRenderableWidget(Button.builder(Component.literal("Run Speedtest"), b -> {
             if (payload.isConnected()) {
-                speedtestActive = true;
-                speedtestStartTime = System.currentTimeMillis();
+                int confDown = payload.configuredMaxDown();
+                try { confDown = Integer.parseInt(downBox.getValue()); } catch (NumberFormatException ignored) {}
+                PacketDistributor.sendToServer(new com.florentdubut.telecom.network.packet.StartSpeedtestPayload(payload.pos(), payload.ipAddress(), confDown));
             }
         }).bounds(startX + 20, startY + 145, 100, 20).build());
     }
@@ -115,46 +121,26 @@ public class RouterScreen extends Screen {
         guiGraphics.drawString(this.font, "Press ESC to save and close", startX + 130, startY + 150, 0x555555);
 
         // Speedtest overlay logic
-        if (speedtestActive) {
-            long elapsed = System.currentTimeMillis() - speedtestStartTime;
+        if (speedtestActive && currentSpeedtestData != null) {
             guiGraphics.fill(startX + 125, startY + 30, startX + boxWidth - 10, startY + 85, 0xFF111111);
             guiGraphics.renderOutline(startX + 125, startY + 30, boxWidth - 135, 55, 0xFF555555);
             
-            guiGraphics.drawString(this.font, "SPEEDTEST", startX + 130, startY + 35, 0xFFFFFF);
+            guiGraphics.drawString(this.font, "SPEEDTEST: " + currentSpeedtestData.state(), startX + 130, startY + 35, 0xFFFFFF);
             
-            // Phase 1: Ping (0-1s)
-            int displayPing = 0;
-            if (elapsed < 1000) {
-                displayPing = (int) (Math.random() * 50) + payload.pingMs();
-                guiGraphics.drawString(this.font, "Ping: Testing...", startX + 130, startY + 50, 0xAAAAAA);
-            } else {
-                displayPing = payload.pingMs();
-                guiGraphics.drawString(this.font, "Ping: " + displayPing + " ms", startX + 130, startY + 50, 0x00FF00);
+            guiGraphics.drawString(this.font, "Ping: " + currentSpeedtestData.pingMs() + " ms", startX + 130, startY + 50, 0x00FF00);
+            
+            if (currentSpeedtestData.state().equals("DOWNLOAD") || currentSpeedtestData.state().equals("UPLOAD") || currentSpeedtestData.state().equals("FINISHED")) {
+                if (currentSpeedtestData.state().equals("DOWNLOAD")) {
+                    guiGraphics.drawString(this.font, "Down: " + currentSpeedtestData.actualBandwidth() + " Mbps", startX + 130, startY + 62, 0x00FFFF);
+                } else {
+                    guiGraphics.drawString(this.font, "Up: " + currentSpeedtestData.actualBandwidth() + " Mbps", startX + 130, startY + 74, 0xFF8800);
+                }
             }
-            
-            int confDown = payload.configuredMaxDown();
-            try { confDown = Integer.parseInt(downBox.getValue()); } catch (NumberFormatException ignored) {}
-            int actualMaxDown = Math.min(payload.bandwidthMbps(), confDown);
-
-            int confUp = payload.configuredMaxUp();
-            try { confUp = Integer.parseInt(upBox.getValue()); } catch (NumberFormatException ignored) {}
-            int actualMaxUp = Math.min(payload.bandwidthMbps(), confUp);
-            
-            // Phase 2: Downlink (1-3s)
-            if (elapsed > 1000 && elapsed < 3000) {
-                int fluctuatingDown = (int) (actualMaxDown * (0.8 + Math.random() * 0.2));
-                guiGraphics.drawString(this.font, "Down: " + fluctuatingDown + " Mbps", startX + 130, startY + 62, 0x00FFFF);
-            } else if (elapsed >= 3000) {
-                guiGraphics.drawString(this.font, "Down: " + actualMaxDown + " Mbps", startX + 130, startY + 62, 0x00FFFF);
-            }
-            
-            // Phase 3: Uplink (3-5s)
-            if (elapsed > 3000 && elapsed < 5000) {
-                int fluctuatingUp = (int) (actualMaxUp * (0.8 + Math.random() * 0.2));
-                guiGraphics.drawString(this.font, "Up: " + fluctuatingUp + " Mbps", startX + 130, startY + 74, 0xFF8800);
-            } else if (elapsed >= 5000) {
-                guiGraphics.drawString(this.font, "Up: " + actualMaxUp + " Mbps", startX + 130, startY + 74, 0xFF8800);
-            }
+        } else if (!speedtestActive && currentSpeedtestData != null) {
+            guiGraphics.fill(startX + 125, startY + 30, startX + boxWidth - 10, startY + 85, 0xFF111111);
+            guiGraphics.renderOutline(startX + 125, startY + 30, boxWidth - 135, 55, 0xFF555555);
+            guiGraphics.drawString(this.font, "SPEEDTEST FINISHED", startX + 130, startY + 35, 0xFFFFFF);
+            guiGraphics.drawString(this.font, "Ping: " + currentSpeedtestData.pingMs() + " ms", startX + 130, startY + 50, 0x00FF00);
         }
 
         guiGraphics.pose().popPose();

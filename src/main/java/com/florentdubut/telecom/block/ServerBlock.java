@@ -62,7 +62,7 @@ public class ServerBlock extends Block implements EntityBlock {
                 }
             }
             
-            int bandwidth = (routers * 150) + (antennas * 50) + (phones * 15); // Simulated bandwidth
+            int bandwidth = graph.getTotalBandwidthUsage();
             
             net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(serverPlayer, new com.florentdubut.telecom.network.packet.ServerGuiSyncPayload(routers, antennas, phones, bandwidth));
         }

@@ -1,0 +1,99 @@
+package com.florentdubut.telecom.network;
+
+import net.minecraft.core.BlockPos;
+
+import java.util.UUID;
+
+public class TrafficSession {
+    public enum SessionState {
+        PING,
+        DOWNLOAD,
+        UPLOAD,
+        FINISHED
+    }
+
+    private final UUID sessionId;
+    private final BlockPos sourcePos;
+    private final BlockPos destPos;
+    private SessionState state;
+    private int ticksElapsed;
+    private final int totalTicksPerPhase;
+    private int targetBandwidth; // requested bandwidth
+    private int actualBandwidth; // actual bandwidth achieved in the last tick
+    private final String clientIp; // IP of the client (Router or Phone)
+    private int pingMs;
+
+    public TrafficSession(BlockPos sourcePos, BlockPos destPos, String clientIp, int targetBandwidth, int totalTicksPerPhase) {
+        this.sessionId = UUID.randomUUID();
+        this.sourcePos = sourcePos;
+        this.destPos = destPos;
+        this.state = SessionState.PING;
+        this.ticksElapsed = 0;
+        this.targetBandwidth = targetBandwidth;
+        this.totalTicksPerPhase = totalTicksPerPhase;
+        this.clientIp = clientIp;
+        this.actualBandwidth = 0;
+        this.pingMs = 0;
+    }
+
+    public UUID getSessionId() {
+        return sessionId;
+    }
+
+    public BlockPos getSourcePos() {
+        return sourcePos;
+    }
+
+    public BlockPos getDestPos() {
+        return destPos;
+    }
+
+    public SessionState getState() {
+        return state;
+    }
+
+    public int getTicksElapsed() {
+        return ticksElapsed;
+    }
+
+    public int getTotalTicksPerPhase() {
+        return totalTicksPerPhase;
+    }
+
+    public int getTargetBandwidth() {
+        return targetBandwidth;
+    }
+
+    public int getActualBandwidth() {
+        return actualBandwidth;
+    }
+
+    public void setActualBandwidth(int actualBandwidth) {
+        this.actualBandwidth = actualBandwidth;
+    }
+
+    public String getClientIp() {
+        return clientIp;
+    }
+    
+    public int getPingMs() {
+        return pingMs;
+    }
+    
+    public void setPingMs(int pingMs) {
+        this.pingMs = pingMs;
+    }
+
+    public void tick() {
+        ticksElapsed++;
+        if (ticksElapsed >= totalTicksPerPhase) {
+            ticksElapsed = 0;
+            switch (state) {
+                case PING -> state = SessionState.DOWNLOAD;
+                case DOWNLOAD -> state = SessionState.UPLOAD;
+                case UPLOAD -> state = SessionState.FINISHED;
+                default -> {}
+            }
+        }
+    }
+}
