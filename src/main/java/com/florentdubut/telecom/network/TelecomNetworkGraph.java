@@ -161,6 +161,19 @@ public class TelecomNetworkGraph extends SavedData {
     }
 
     public void tickTraffic(ServerLevel level) {
+        // Auto-migrate old graphs without pathBlocks
+        boolean needsRecalculation = false;
+        for (NetworkEdge edge : edges) {
+            if (edge.getPathBlocks() == null || edge.getPathBlocks().isEmpty()) {
+                needsRecalculation = true;
+                break;
+            }
+        }
+        if (needsRecalculation) {
+            NetworkTracer.recalculateNetwork(level);
+            return; // Skip this tick, it will resume next tick
+        }
+
         // Reset current usage
         for (NetworkEdge edge : edges) {
             edge.setCurrentUsage(0);
