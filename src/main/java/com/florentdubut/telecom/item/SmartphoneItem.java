@@ -16,9 +16,6 @@ public class SmartphoneItem extends Item {
 
     @Override
     public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand usedHand) {
-        if (level.isClientSide()) {
-            com.florentdubut.telecom.client.ClientHooks.openSmartphoneScreen();
-        }
-        return InteractionResultHolder.sidedSuccess(player.getItemInHand(usedHand), level.isClientSide());
+        return InteractionResultHolder.pass(player.getItemInHand(usedHand));
     }
 }

@@ -12,12 +12,11 @@ public class ClientHooks {
     }
 
     public static void openSmartphoneScreen() {
-        Minecraft.getInstance().setScreen(new com.florentdubut.telecom.client.gui.SmartphoneScreen());
+        // No longer used
     }
 
     public static void updateSmartphoneScreen(NetworkScanResponsePayload payload) {
-        if (Minecraft.getInstance().screen instanceof com.florentdubut.telecom.client.gui.SmartphoneScreen phone) {
-            phone.updateNetworkInfo(payload);
-        }
+        com.florentdubut.telecom.client.gui.SmartphoneHUD.latestScan = payload;
+        com.florentdubut.telecom.client.gui.SmartphoneHUD.lastScanTime = System.currentTimeMillis();
     }
 }
