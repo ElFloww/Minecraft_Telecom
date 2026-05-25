@@ -154,9 +154,9 @@ public class ModNetworking {
         if (bestAntenna != null && !finalTechLabel.isEmpty()) {
             // Generate a virtual mobile IP address
             String mobileIp = "10.0." + (bestAntenna.getBlockPos().getX() % 255) + "." + (player.getId() % 255);
-            PacketDistributor.sendToPlayer(player, new NetworkScanResponsePayload(true, bestAntenna.getAntennaName(), bestSignal, finalTechLabel, mobileIp));
+            PacketDistributor.sendToPlayer(player, new NetworkScanResponsePayload(true, bestAntenna.getAntennaName(), bestSignal, finalTechLabel, mobileIp, bestAntenna.getBlockPos()));
         } else {
-            PacketDistributor.sendToPlayer(player, new NetworkScanResponsePayload(false, "No Service", -120, "", ""));
+            PacketDistributor.sendToPlayer(player, new NetworkScanResponsePayload(false, "No Service", -120, "", "", BlockPos.ZERO));
         }
     }
 

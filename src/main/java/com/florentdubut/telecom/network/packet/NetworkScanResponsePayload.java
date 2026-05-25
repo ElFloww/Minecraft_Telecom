@@ -7,7 +7,9 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
-public record NetworkScanResponsePayload(boolean found, String name, int signalStrength, String tech, String ipAddress) implements CustomPacketPayload {
+import net.minecraft.core.BlockPos;
+
+public record NetworkScanResponsePayload(boolean found, String name, int signalStrength, String tech, String ipAddress, BlockPos antennaPos) implements CustomPacketPayload {
     public static final Type<NetworkScanResponsePayload> TYPE = new Type<>(ResourceLocation.fromNamespaceAndPath(TelecomMod.MODID, "network_scan_response"));
 
     public static final StreamCodec<FriendlyByteBuf, NetworkScanResponsePayload> STREAM_CODEC = StreamCodec.composite(
@@ -16,6 +18,7 @@ public record NetworkScanResponsePayload(boolean found, String name, int signalS
         ByteBufCodecs.INT, NetworkScanResponsePayload::signalStrength,
         ByteBufCodecs.STRING_UTF8, NetworkScanResponsePayload::tech,
         ByteBufCodecs.STRING_UTF8, NetworkScanResponsePayload::ipAddress,
+        BlockPos.STREAM_CODEC, NetworkScanResponsePayload::antennaPos,
         NetworkScanResponsePayload::new
     );
 

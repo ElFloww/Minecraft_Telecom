@@ -152,7 +152,7 @@ public class TelecomNetworkGraph extends SavedData {
                 toRemove.add(session);
                 // Broadcast finished state
                 com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload update = new com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload(
-                    "FINISHED", session.getPingMs(), 0, session.getTicksElapsed(), session.getTotalTicksPerPhase());
+                    session.getClientIp(), "FINISHED", session.getPingMs(), 0, session.getTicksElapsed(), session.getTotalTicksPerPhase());
                 net.neoforged.neoforge.network.PacketDistributor.sendToAllPlayers(update);
                 continue;
             }
@@ -182,7 +182,7 @@ public class TelecomNetworkGraph extends SavedData {
             // Broadcast state
             if (session.getTicksElapsed() % 2 == 0) { // Every 2 ticks to reduce spam
                 com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload update = new com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload(
-                    session.getState().name(), session.getPingMs(), session.getActualBandwidth(), session.getTicksElapsed(), session.getTotalTicksPerPhase());
+                    session.getClientIp(), session.getState().name(), session.getPingMs(), session.getActualBandwidth(), session.getTicksElapsed(), session.getTotalTicksPerPhase());
                 net.neoforged.neoforge.network.PacketDistributor.sendToAllPlayers(update);
             }
         }

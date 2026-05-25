@@ -21,6 +21,8 @@ public class SmartphoneSpeedtestScreen extends Screen {
     }
     
     public void updateSpeedtestProgress(com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload payload) {
+        if (SmartphoneHUD.latestScan == null || !payload.clientIp().equals(SmartphoneHUD.latestScan.ipAddress())) return;
+        
         this.speedtestActive = !payload.state().equals("FINISHED");
         this.currentSpeedtestData = payload;
         
@@ -54,10 +56,12 @@ public class SmartphoneSpeedtestScreen extends Screen {
                 else if (scan.tech().contains("3G")) maxBw = 42;
                 
                 PacketDistributor.sendToServer(new com.florentdubut.telecom.network.packet.StartSpeedtestPayload(
-                    net.minecraft.client.Minecraft.getInstance().player.blockPosition(), 
+                    scan.antennaPos(), 
                     scan.ipAddress(), 
                     maxBw
                 ));
+                this.speedtestActive = true;
+                this.currentSpeedtestData = null;
                 this.lastDownBw = 0;
                 this.lastUpBw = 0;
             } else {

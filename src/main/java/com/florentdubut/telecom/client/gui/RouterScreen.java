@@ -22,6 +22,8 @@ public class RouterScreen extends Screen {
     private int lastUpBw = 0;
 
     public void updateSpeedtestProgress(com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload payload) {
+        if (!payload.clientIp().equals(this.payload.ipAddress())) return;
+        
         this.speedtestActive = !payload.state().equals("FINISHED");
         this.currentSpeedtestData = payload;
         this.currentSpeedtestData = payload;
