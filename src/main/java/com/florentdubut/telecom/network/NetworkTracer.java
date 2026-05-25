@@ -34,7 +34,7 @@ public class NetworkTracer {
             Queue<TraceStep> queue = new LinkedList<>();
             Set<BlockPos> visited = new HashSet<>();
             
-            queue.add(new TraceStep(startPos, 0, NetworkEdge.EdgeType.FIBER, new ArrayList<>())); // Start with fiber, downgrade to copper if needed
+            queue.add(new TraceStep(startPos, 0, NetworkEdge.EdgeType.BIG_FIBER, new ArrayList<>())); // Start with max fiber, downgrade as needed
             visited.add(startPos);
             
             while (!queue.isEmpty()) {
@@ -61,7 +61,11 @@ public class NetworkTracer {
                         if (!discoveredEdges.contains(edgeKey1) && !discoveredEdges.contains(edgeKey2)) {
                             discoveredEdges.add(edgeKey1);
                             
-                            int bandwidth = current.type == NetworkEdge.EdgeType.COPPER ? 1000 : 10000;
+                            int bandwidth = 1000000; // Big Fiber
+                            if (current.type == NetworkEdge.EdgeType.MEDIUM_FIBER) bandwidth = 100000;
+                            else if (current.type == NetworkEdge.EdgeType.FIBER) bandwidth = 10000;
+                            else if (current.type == NetworkEdge.EdgeType.COPPER) bandwidth = 1000;
+
                             List<BlockPos> finalPath = new ArrayList<>(current.pathBlocks);
                             finalPath.add(neighbor);
                             NetworkEdge edge = new NetworkEdge(startPos, neighbor, bandwidth, current.distance + 1, current.type, finalPath);
@@ -74,10 +78,17 @@ public class NetworkTracer {
                     // Is it a cable?
                     boolean isCopper = state.is(ModBlocks.COPPER_CABLE.get());
                     boolean isFiber = state.is(ModBlocks.FIBER_CABLE.get());
+                    boolean isMediumFiber = state.is(ModBlocks.MEDIUM_FIBER_CABLE.get());
+                    boolean isBigFiber = state.is(ModBlocks.BIG_FIBER_CABLE.get());
                     
-                    if (isCopper || isFiber) {
+                    if (isCopper || isFiber || isMediumFiber || isBigFiber) {
                         visited.add(neighbor);
-                        NetworkEdge.EdgeType nextType = isCopper ? NetworkEdge.EdgeType.COPPER : current.type;
+                        NetworkEdge.EdgeType nextType = current.type;
+                        if (isCopper) nextType = NetworkEdge.EdgeType.COPPER;
+                        else if (isFiber && current.type != NetworkEdge.EdgeType.COPPER) nextType = NetworkEdge.EdgeType.FIBER;
+                        else if (isMediumFiber && current.type != NetworkEdge.EdgeType.COPPER && current.type != NetworkEdge.EdgeType.FIBER) nextType = NetworkEdge.EdgeType.MEDIUM_FIBER;
+                        else if (isBigFiber && current.type == NetworkEdge.EdgeType.BIG_FIBER) nextType = NetworkEdge.EdgeType.BIG_FIBER;
+
                         List<BlockPos> newPath = new ArrayList<>(current.pathBlocks);
                         newPath.add(neighbor);
                         queue.add(new TraceStep(neighbor, current.distance + 1, nextType, newPath));

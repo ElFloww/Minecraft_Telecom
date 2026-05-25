@@ -3,12 +3,13 @@ package com.florentdubut.telecom.block;
 import com.florentdubut.telecom.block.entity.ServerBlockEntity;
 import com.florentdubut.telecom.registry.ModBlockEntities;
 import net.minecraft.core.BlockPos;
+import net.minecraft.world.level.block.BaseEntityBlock;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.EntityBlock;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 
-public class ServerBlock extends Block implements EntityBlock {
+public class ServerBlock extends Block implements EntityBlock, TelecomBlock {
 
     public ServerBlock(Properties properties) {
         super(properties);

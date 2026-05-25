@@ -5,5 +5,11 @@
   "block.telecom.router": "Internet Router",
   "block.telecom.server": "Telecom Server",
   "block.telecom.antenna": "4G/5G Antenna",
-  "item.telecom.smartphone": "Smartphone"
+  "item.telecom.smartphone": "Smartphone",
+  "block.telecom.nro": "Optical Connection Node (NRO)",
+  "block.telecom.nra": "Subscriber Connection Node (NRA)",
+  "block.telecom.pm": "Mutualization Point (PM)",
+  "block.telecom.sr": "Sub-Distributor (SR)",
+  "block.telecom.medium_fiber_cable": "Medium Fiber Cable (100 Gbps)",
+  "block.telecom.big_fiber_cable": "Big Fiber Cable (1000 Gbps)"
 }

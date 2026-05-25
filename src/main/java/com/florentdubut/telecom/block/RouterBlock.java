@@ -9,7 +9,7 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import org.jetbrains.annotations.Nullable;
 
-public class RouterBlock extends Block implements EntityBlock {
+public class RouterBlock extends Block implements EntityBlock, TelecomBlock {
     public RouterBlock(Properties properties) {
         super(properties);
     }

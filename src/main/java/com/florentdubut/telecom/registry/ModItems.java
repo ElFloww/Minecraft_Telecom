@@ -25,6 +25,24 @@ public class ModItems {
     public static final DeferredItem<BlockItem> ANTENNA = ITEMS.register("antenna",
             () -> new BlockItem(ModBlocks.ANTENNA.get(), new Item.Properties()));
 
+    public static final DeferredItem<BlockItem> MEDIUM_FIBER_CABLE = ITEMS.register("medium_fiber_cable",
+            () -> new BlockItem(ModBlocks.MEDIUM_FIBER_CABLE.get(), new Item.Properties()));
+
+    public static final DeferredItem<BlockItem> BIG_FIBER_CABLE = ITEMS.register("big_fiber_cable",
+            () -> new BlockItem(ModBlocks.BIG_FIBER_CABLE.get(), new Item.Properties()));
+
+    public static final DeferredItem<BlockItem> NRO_BLOCK = ITEMS.register("nro",
+            () -> new BlockItem(ModBlocks.NRO_BLOCK.get(), new Item.Properties()));
+
+    public static final DeferredItem<BlockItem> NRA_BLOCK = ITEMS.register("nra",
+            () -> new BlockItem(ModBlocks.NRA_BLOCK.get(), new Item.Properties()));
+
+    public static final DeferredItem<BlockItem> PM_BLOCK = ITEMS.register("pm",
+            () -> new BlockItem(ModBlocks.PM_BLOCK.get(), new Item.Properties()));
+
+    public static final DeferredItem<BlockItem> SR_BLOCK = ITEMS.register("sr",
+            () -> new BlockItem(ModBlocks.SR_BLOCK.get(), new Item.Properties()));
+
     public static final DeferredItem<SmartphoneItem> SMARTPHONE = ITEMS.register("smartphone",
             () -> new SmartphoneItem(new Item.Properties().stacksTo(1)));
 

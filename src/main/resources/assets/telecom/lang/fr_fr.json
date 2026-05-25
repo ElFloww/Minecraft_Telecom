@@ -5,5 +5,11 @@
   "block.telecom.router": "Routeur Internet",
   "block.telecom.server": "Serveur Télécom",
   "block.telecom.antenna": "Antenne 4G/5G",
-  "item.telecom.smartphone": "Smartphone"
+  "item.telecom.smartphone": "Smartphone",
+  "block.telecom.nro": "Nœud de Raccordement Optique (NRO)",
+  "block.telecom.nra": "Nœud de Raccordement d'Abonnés (NRA)",
+  "block.telecom.pm": "Point de Mutualisation (PM)",
+  "block.telecom.sr": "Sous-Répartiteur (SR)",
+  "block.telecom.medium_fiber_cable": "Câble Fibre Optique Moyen (100 Gbps)",
+  "block.telecom.big_fiber_cable": "Gros Câble Fibre Optique (1000 Gbps)"
 }

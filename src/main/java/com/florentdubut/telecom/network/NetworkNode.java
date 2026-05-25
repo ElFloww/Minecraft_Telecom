@@ -8,13 +8,14 @@ public class NetworkNode {
     private NodeType type;
 
     public enum NodeType {
-        NRA,
-        NRO,
-        ROUTER,
-        BOX,
         SERVER,
+        ROUTER,
         ANTENNA,
-        MUTUALIZATION_POINT
+        PHONE,
+        NRO,
+        NRA,
+        PM,
+        SR
     }
 
     public NetworkNode(BlockPos position, NodeType type) {

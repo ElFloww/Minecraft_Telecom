@@ -66,9 +66,7 @@ public class CableBlock extends Block implements EntityBlock {
 
     private boolean connectsTo(BlockState state) {
         return state.getBlock() instanceof CableBlock || 
-               state.getBlock() instanceof RouterBlock || 
-               state.getBlock() instanceof ServerBlock || 
-               state.getBlock() instanceof AntennaBlock;
+               state.getBlock() instanceof TelecomBlock;
     }
 
     @Override

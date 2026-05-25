@@ -13,7 +13,7 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.phys.BlockHitResult;
 import com.florentdubut.telecom.client.ClientHooks;
 
-public class AntennaBlock extends Block implements EntityBlock {
+public class AntennaBlock extends Block implements EntityBlock, TelecomBlock {
     public AntennaBlock(Properties properties) {
         super(properties);
     }

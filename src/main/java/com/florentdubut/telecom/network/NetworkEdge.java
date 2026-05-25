@@ -13,7 +13,9 @@ public class NetworkEdge {
 
     public enum EdgeType {
         COPPER,
-        FIBER
+        FIBER,
+        MEDIUM_FIBER,
+        BIG_FIBER
     }
 
     public NetworkEdge(BlockPos nodeA, BlockPos nodeB, int bandwidthMax, int length, EdgeType type, java.util.List<BlockPos> pathBlocks) {

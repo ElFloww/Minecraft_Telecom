@@ -33,8 +33,14 @@ public class TelecomMod {
             .displayItems((parameters, output) -> {
                 output.accept(ModItems.COPPER_CABLE.get());
                 output.accept(ModItems.FIBER_CABLE.get());
-                output.accept(ModItems.ROUTER.get());
+                output.accept(ModItems.MEDIUM_FIBER_CABLE.get());
+                output.accept(ModItems.BIG_FIBER_CABLE.get());
                 output.accept(ModItems.SERVER.get());
+                output.accept(ModItems.NRO_BLOCK.get());
+                output.accept(ModItems.NRA_BLOCK.get());
+                output.accept(ModItems.PM_BLOCK.get());
+                output.accept(ModItems.SR_BLOCK.get());
+                output.accept(ModItems.ROUTER.get());
                 output.accept(ModItems.ANTENNA.get());
                 output.accept(ModItems.SMARTPHONE.get());
                 output.accept(ModItems.NETWORK_TOOL.get());

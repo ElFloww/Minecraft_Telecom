@@ -26,4 +26,22 @@ public class ModBlocks {
 
     public static final DeferredBlock<Block> ANTENNA = BLOCKS.register("antenna",
             () -> new AntennaBlock(BlockBehaviour.Properties.of().noOcclusion().strength(1.5f)));
+
+    public static final DeferredBlock<Block> MEDIUM_FIBER_CABLE = BLOCKS.register("medium_fiber_cable",
+            () -> new com.florentdubut.telecom.block.MediumFiberCableBlock(BlockBehaviour.Properties.of().noOcclusion().strength(1.0f)));
+
+    public static final DeferredBlock<Block> BIG_FIBER_CABLE = BLOCKS.register("big_fiber_cable",
+            () -> new com.florentdubut.telecom.block.BigFiberCableBlock(BlockBehaviour.Properties.of().noOcclusion().strength(1.0f)));
+
+    public static final DeferredBlock<Block> NRO_BLOCK = BLOCKS.register("nro",
+            () -> new com.florentdubut.telecom.block.TelecomHubBlock(BlockBehaviour.Properties.of().strength(1.5f), com.florentdubut.telecom.network.NetworkNode.NodeType.NRO, ModBlockEntities.TELECOM_HUB));
+
+    public static final DeferredBlock<Block> NRA_BLOCK = BLOCKS.register("nra",
+            () -> new com.florentdubut.telecom.block.TelecomHubBlock(BlockBehaviour.Properties.of().strength(1.5f), com.florentdubut.telecom.network.NetworkNode.NodeType.NRA, ModBlockEntities.TELECOM_HUB));
+
+    public static final DeferredBlock<Block> PM_BLOCK = BLOCKS.register("pm",
+            () -> new com.florentdubut.telecom.block.TelecomHubBlock(BlockBehaviour.Properties.of().strength(1.5f), com.florentdubut.telecom.network.NetworkNode.NodeType.PM, ModBlockEntities.TELECOM_HUB));
+
+    public static final DeferredBlock<Block> SR_BLOCK = BLOCKS.register("sr",
+            () -> new com.florentdubut.telecom.block.TelecomHubBlock(BlockBehaviour.Properties.of().strength(1.5f), com.florentdubut.telecom.network.NetworkNode.NodeType.SR, ModBlockEntities.TELECOM_HUB));
 }
