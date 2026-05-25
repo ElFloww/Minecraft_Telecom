@@ -219,13 +219,12 @@ public class ModNetworking {
                 for (com.florentdubut.telecom.network.NetworkEdge edge : graph.getEdges()) {
                     if (edge.getPathBlocks() != null && edge.getPathBlocks().contains(clickedPos)) {
                         String typeStr = edge.getType() == com.florentdubut.telecom.network.NetworkEdge.EdgeType.FIBER ? "Fiber Optic" : "Copper ADSL";
-                        int usage = graph.getBlockUsage(clickedPos);
-                        int usagePercent = (int) (((float) usage / edge.getBandwidthMax()) * 100);
-                        if (usagePercent > 100) usagePercent = 100;
+                        int usageDown = graph.getActualBlockUsageDown(clickedPos);
+                        int usageUp = graph.getActualBlockUsageUp(clickedPos);
                         
                         net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(
                             player,
-                            new com.florentdubut.telecom.network.packet.NetworkToolSyncPayload(clickedPos, typeStr, edge.getLength(), edge.getBandwidthMax(), usagePercent)
+                            new com.florentdubut.telecom.network.packet.NetworkToolSyncPayload(clickedPos, typeStr, edge.getLength(), edge.getBandwidthMax(), usageDown, usageUp)
                         );
                         return;
                     }

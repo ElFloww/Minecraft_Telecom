@@ -67,13 +67,12 @@ public class NetworkToolItem extends Item {
                         // We found the edge! Send Payload
                         String typeStr = edge.getType() == NetworkEdge.EdgeType.FIBER ? "Fiber Optic" : "Copper ADSL";
                         // Real usage from physical block
-                        int usage = graph.getBlockUsage(clickedPos);
-                        int usagePercent = (int) (((float) usage / edge.getBandwidthMax()) * 100);
-                        if (usagePercent > 100) usagePercent = 100;
+                        int usageDown = graph.getActualBlockUsageDown(clickedPos);
+                        int usageUp = graph.getActualBlockUsageUp(clickedPos);
                         
                         net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(
                             (net.minecraft.server.level.ServerPlayer) context.getPlayer(),
-                            new com.florentdubut.telecom.network.packet.NetworkToolSyncPayload(clickedPos, typeStr, edge.getLength(), edge.getBandwidthMax(), usagePercent)
+                            new com.florentdubut.telecom.network.packet.NetworkToolSyncPayload(clickedPos, typeStr, edge.getLength(), edge.getBandwidthMax(), usageDown, usageUp)
                         );
                         return InteractionResult.SUCCESS;
                     }

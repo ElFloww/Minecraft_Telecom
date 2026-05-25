@@ -9,7 +9,7 @@ import net.minecraft.resources.ResourceLocation;
 
 import net.minecraft.core.BlockPos;
 
-public record NetworkToolSyncPayload(BlockPos clickedPos, String edgeType, int length, int maxBandwidth, int usagePercent) implements CustomPacketPayload {
+public record NetworkToolSyncPayload(BlockPos clickedPos, String edgeType, int length, int maxBandwidth, int usageDown, int usageUp) implements CustomPacketPayload {
     public static final Type<NetworkToolSyncPayload> TYPE = new Type<>(ResourceLocation.fromNamespaceAndPath(TelecomMod.MODID, "network_tool_sync"));
 
     public static final StreamCodec<FriendlyByteBuf, NetworkToolSyncPayload> STREAM_CODEC = StreamCodec.composite(
@@ -17,7 +17,8 @@ public record NetworkToolSyncPayload(BlockPos clickedPos, String edgeType, int l
         ByteBufCodecs.STRING_UTF8, NetworkToolSyncPayload::edgeType,
         ByteBufCodecs.INT, NetworkToolSyncPayload::length,
         ByteBufCodecs.INT, NetworkToolSyncPayload::maxBandwidth,
-        ByteBufCodecs.INT, NetworkToolSyncPayload::usagePercent,
+        ByteBufCodecs.INT, NetworkToolSyncPayload::usageDown,
+        ByteBufCodecs.INT, NetworkToolSyncPayload::usageUp,
         NetworkToolSyncPayload::new
     );
 

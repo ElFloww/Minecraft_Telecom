@@ -62,13 +62,19 @@ public class NetworkToolScreen extends Screen {
         guiGraphics.drawString(this.font, "Length: " + payload.length() + " blocks", startX + 10, startY + 45, 0xCCCCCC);
         guiGraphics.drawString(this.font, "Max Bandwidth: " + payload.maxBandwidth() + " Mbps", startX + 10, startY + 60, 0xCCCCCC);
         
-        guiGraphics.drawString(this.font, "Load: " + payload.usagePercent() + "%", startX + 10, startY + 75, payload.usagePercent() > 80 ? 0xFF0000 : 0x00FF00);
+        float usageDownPct = (float) payload.usageDown() / payload.maxBandwidth() * 100f;
+        float usageUpPct = (float) payload.usageUp() / payload.maxBandwidth() * 100f;
 
-        // Progress bar
+        guiGraphics.drawString(this.font, "Down: " + payload.usageDown() + " Mbps (" + String.format("%.1f", usageDownPct) + "%)", startX + 10, startY + 75, 0x00FFFF);
         int barWidth = 180;
-        guiGraphics.fill(startX + 10, startY + 90, startX + 10 + barWidth, startY + 100, 0xFF444444);
-        int fillWidth = (int)(barWidth * (payload.usagePercent() / 100.0f));
-        guiGraphics.fill(startX + 10, startY + 90, startX + 10 + fillWidth, startY + 100, payload.usagePercent() > 80 ? 0xFFFF0000 : 0xFF00FF00);
+        guiGraphics.fill(startX + 10, startY + 85, startX + 10 + barWidth, startY + 90, 0xFF444444);
+        int fillWidthDown = (int)(barWidth * Math.min(1.0f, (float)payload.usageDown() / payload.maxBandwidth()));
+        guiGraphics.fill(startX + 10, startY + 85, startX + 10 + fillWidthDown, startY + 90, 0xFF00FFFF);
+
+        guiGraphics.drawString(this.font, "Up: " + payload.usageUp() + " Mbps (" + String.format("%.1f", usageUpPct) + "%)", startX + 10, startY + 95, 0xFF8800);
+        guiGraphics.fill(startX + 10, startY + 105, startX + 10 + barWidth, startY + 110, 0xFF444444);
+        int fillWidthUp = (int)(barWidth * Math.min(1.0f, (float)payload.usageUp() / payload.maxBandwidth()));
+        guiGraphics.fill(startX + 10, startY + 105, startX + 10 + fillWidthUp, startY + 110, 0xFFFF8800);
 
         guiGraphics.pose().popPose();
         
