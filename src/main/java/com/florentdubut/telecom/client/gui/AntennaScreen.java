@@ -52,9 +52,6 @@ public class AntennaScreen extends Screen {
             int y = startY + (colOffsets[colIndex] * rowHeight);
 
             String label = freq.getFrequencyLabel();
-            if (!freq.getBandName().equals("-")) {
-                label += " (" + freq.getBandName() + ")";
-            }
 
             Checkbox box = Checkbox.builder(Component.literal(label), this.font)
                     .pos(x, y)
