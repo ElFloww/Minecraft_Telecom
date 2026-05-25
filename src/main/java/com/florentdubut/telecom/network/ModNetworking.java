@@ -54,34 +54,68 @@ public class ModNetworking {
                 
                 AntennaBlockEntity bestAntenna = null;
                 int bestSignal = -1000;
-                TelecomFrequency bestTech = null;
+                String finalTechLabel = "";
 
                 for (NetworkNode node : graph.getNodes()) {
                     if (node.getType() == NetworkNode.NodeType.ANTENNA) {
                         BlockEntity be = level.getBlockEntity(node.getPosition());
                         if (be instanceof AntennaBlockEntity antenna) {
+                            
+                            // Group valid frequencies by tech
+                            java.util.Map<String, java.util.List<TelecomFrequency>> validFreqs = new java.util.HashMap<>();
+                            java.util.Map<TelecomFrequency, Integer> signals = new java.util.HashMap<>();
+                            
                             for (TelecomFrequency freq : TelecomFrequency.values()) {
                                 if (antenna.isFrequencyEnabled(freq)) {
                                     int signal = (int) com.florentdubut.telecom.network.SignalPropagator.calculateSignal(level, antenna.getBlockPos(), player.blockPosition(), freq).powerDbm;
                                     
                                     if (signal > -120) { // Valid connection
-                                        if (bestTech == null || 
-                                            (freq.getPerformanceScore() > bestTech.getPerformanceScore()) || 
-                                            (freq.getPerformanceScore() == bestTech.getPerformanceScore() && signal > bestSignal)) {
-                                            
-                                            bestSignal = signal;
-                                            bestAntenna = antenna;
-                                            bestTech = freq;
-                                        }
+                                        validFreqs.computeIfAbsent(freq.getTechnology(), k -> new java.util.ArrayList<>()).add(freq);
+                                        signals.put(freq, signal);
                                     }
+                                }
+                            }
+                            
+                            // Determine the best tech for this antenna
+                            String[] techOrder = {"5G", "4G", "3G", "2G"};
+                            for (String tech : techOrder) {
+                                if (validFreqs.containsKey(tech)) {
+                                    java.util.List<TelecomFrequency> freqs = validFreqs.get(tech);
+                                    
+                                    int maxSignal = -1000;
+                                    java.util.List<String> bands = new java.util.ArrayList<>();
+                                    
+                                    for (TelecomFrequency f : freqs) {
+                                        if (signals.get(f) > maxSignal) maxSignal = signals.get(f);
+                                        bands.add(f.getBandName().equals("-") ? f.getFrequencyLabel() : f.getBandName());
+                                    }
+                                    
+                                    String techName = tech + (freqs.size() > 1 ? "+" : "");
+                                    String fullLabel = techName + " (" + String.join(", ", bands) + ")";
+                                    
+                                    // If this antenna provides a better signal or better tech than the previous best antenna
+                                    // We'll score tech: 5G=4, 4G=3, etc.
+                                    int currentTechScore = 5 - java.util.Arrays.asList(techOrder).indexOf(tech);
+                                    int bestTechScore = 0;
+                                    if (finalTechLabel.contains("5G")) bestTechScore = 4;
+                                    else if (finalTechLabel.contains("4G")) bestTechScore = 3;
+                                    else if (finalTechLabel.contains("3G")) bestTechScore = 2;
+                                    else if (finalTechLabel.contains("2G")) bestTechScore = 1;
+                                    
+                                    if (currentTechScore > bestTechScore || (currentTechScore == bestTechScore && maxSignal > bestSignal)) {
+                                        bestSignal = maxSignal;
+                                        bestAntenna = antenna;
+                                        finalTechLabel = fullLabel;
+                                    }
+                                    break; // Only pick the highest tech for this antenna
                                 }
                             }
                         }
                     }
                 }
 
-                if (bestAntenna != null && bestTech != null) {
-                    PacketDistributor.sendToPlayer(player, new NetworkScanResponsePayload(true, bestAntenna.getAntennaName(), bestSignal, bestTech.getTechnology() + " " + bestTech.getFrequencyLabel()));
+                if (bestAntenna != null && !finalTechLabel.isEmpty()) {
+                    PacketDistributor.sendToPlayer(player, new NetworkScanResponsePayload(true, bestAntenna.getAntennaName(), bestSignal, finalTechLabel));
                 } else {
                     PacketDistributor.sendToPlayer(player, new NetworkScanResponsePayload(false, "No Service", -120, ""));
                 }
