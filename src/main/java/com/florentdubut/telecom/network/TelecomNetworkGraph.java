@@ -128,6 +128,12 @@ public class TelecomNetworkGraph extends SavedData {
         setDirty();
     }
 
+    private final Map<BlockPos, Integer> blockUsage = new HashMap<>();
+
+    public int getBlockUsage(BlockPos pos) {
+        return blockUsage.getOrDefault(pos, 0);
+    }
+
     private final List<TrafficSession> activeSessions = new ArrayList<>();
     private int totalBandwidthUp = 0;
     private int totalBandwidthDown = 0;
@@ -155,10 +161,11 @@ public class TelecomNetworkGraph extends SavedData {
     }
 
     public void tickTraffic(ServerLevel level) {
-        // Reset current usage on all edges
+        // Reset current usage
         for (NetworkEdge edge : edges) {
             edge.setCurrentUsage(0);
         }
+        blockUsage.clear();
         
         totalBandwidthUp = 0;
         totalBandwidthDown = 0;
@@ -167,7 +174,6 @@ public class TelecomNetworkGraph extends SavedData {
         Map<TrafficSession, List<NetworkEdge>> sessionPaths = new HashMap<>();
         Map<TrafficSession, Integer> sessionRequested = new HashMap<>();
         
-        Map<BlockPos, Integer> blockUsage = new HashMap<>();
         Map<BlockPos, Integer> blockCapacity = new HashMap<>();
 
         for (TrafficSession session : activeSessions) {
@@ -270,10 +276,7 @@ public class TelecomNetworkGraph extends SavedData {
             }
         }
         
-        // Phase 3: Set true usage on edges for Network Tool
-        for (NetworkEdge edge : edges) {
-            edge.setCurrentUsage(0);
-        }
+        // Edge usage is kept for the Network Tool until the next tick
         for (Map.Entry<TrafficSession, Integer> entry : sessionRequested.entrySet()) {
             TrafficSession session = entry.getKey();
             int actual = session.getActualBandwidth();
