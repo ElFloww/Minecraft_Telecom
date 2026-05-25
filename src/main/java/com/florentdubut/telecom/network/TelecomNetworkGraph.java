@@ -108,23 +108,27 @@ public class TelecomNetworkGraph extends SavedData {
 
     public void addNode(NetworkNode node) {
         nodes.put(node.getPosition(), node);
+        pathCache.clear();
         setDirty();
     }
 
     public void removeNode(BlockPos pos) {
         nodes.remove(pos);
         edges.removeIf(edge -> edge.getNodeA().equals(pos) || edge.getNodeB().equals(pos));
+        pathCache.clear();
         setDirty();
     }
 
     public void addEdge(NetworkEdge edge) {
         edges.add(edge);
+        pathCache.clear();
         setDirty();
     }
 
     public void removeEdgeBetween(BlockPos a, BlockPos b) {
         edges.removeIf(edge -> (edge.getNodeA().equals(a) && edge.getNodeB().equals(b)) ||
                                (edge.getNodeA().equals(b) && edge.getNodeB().equals(a)));
+        pathCache.clear();
         setDirty();
     }
 
@@ -441,6 +445,7 @@ public class TelecomNetworkGraph extends SavedData {
 
     public void clearEdges() {
         edges.clear();
+        pathCache.clear();
         setDirty();
     }
 
@@ -477,8 +482,15 @@ public class TelecomNetworkGraph extends SavedData {
         return latency; // Returns ticks to wait for packet arrival
     }
 
+    private transient final Map<String, List<NetworkEdge>> pathCache = new HashMap<>();
+    
     private List<NetworkEdge> findShortestPath(BlockPos start, BlockPos end) {
         if (start.equals(end)) return new ArrayList<>();
+        
+        String cacheKey = start.asLong() + "-" + end.asLong();
+        if (pathCache.containsKey(cacheKey)) {
+            return pathCache.get(cacheKey);
+        }
         
         java.util.Queue<BlockPos> queue = new java.util.LinkedList<>();
         Map<BlockPos, BlockPos> parent = new HashMap<>();
@@ -518,6 +530,7 @@ public class TelecomNetworkGraph extends SavedData {
             current = parent.get(current);
         }
         
+        pathCache.put(cacheKey, path);
         return path;
     }
 
