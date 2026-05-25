@@ -27,7 +27,7 @@ public class AntennaBlock extends Block implements EntityBlock, TelecomBlock {
 
     @Override
     public VoxelShape getShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext context) {
-        return ANTENNA_SHAPE;
+        return net.minecraft.world.phys.shapes.Shapes.block();
     }
 
     @Override

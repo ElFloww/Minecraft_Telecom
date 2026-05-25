@@ -75,23 +75,7 @@ public class TelecomHubBlock extends Block implements EntityBlock, TelecomBlock 
 
     @Override
     public VoxelShape getShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext context) {
-        Direction dir = state.getValue(FACING);
-        if (hubType == NetworkNode.NodeType.PM) {
-            switch (dir) {
-                case NORTH: return PM_N;
-                case SOUTH: return PM_S;
-                case EAST: return PM_E;
-                case WEST: return PM_W;
-            }
-        } else if (hubType == NetworkNode.NodeType.SR) {
-            switch (dir) {
-                case NORTH: return SR_N;
-                case SOUTH: return SR_S;
-                case EAST: return SR_E;
-                case WEST: return SR_W;
-            }
-        }
-        return Shapes.block(); // NRO and NRA are full blocks with slightly recessed models
+        return Shapes.block();
     }
 
     @Override
