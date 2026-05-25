@@ -48,7 +48,7 @@ public class RouterScreen extends Screen {
         guiGraphics.drawString(this.font, "Status: " + statusText, startX + 20, startY + 40, statusColor);
 
         // IP Address
-        guiGraphics.drawString(this.font, "IP Address: " + (payload.ipAddress() != null ? payload.ipAddress() : "N/A"), startX + 20, startY + 60, 0xCCCCCC);
+        guiGraphics.drawString(this.font, "IP Address: " + (!payload.ipAddress().isEmpty() ? payload.ipAddress() : "N/A"), startX + 20, startY + 60, 0xCCCCCC);
 
         // Ping
         guiGraphics.drawString(this.font, "Ping: " + (payload.isConnected() ? payload.pingMs() + " ms" : "---"), startX + 20, startY + 80, 0xCCCCCC);

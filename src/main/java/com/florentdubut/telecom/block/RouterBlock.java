@@ -63,9 +63,10 @@ public class RouterBlock extends Block implements EntityBlock {
                     }
                 }
                 
+                String safeIp = node.getIpAddress() != null ? node.getIpAddress() : "";
                 net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(
                     serverPlayer, 
-                    new com.florentdubut.telecom.network.packet.RouterGuiSyncPayload(isConnected, node.getIpAddress(), ping, bandwidth)
+                    new com.florentdubut.telecom.network.packet.RouterGuiSyncPayload(isConnected, safeIp, ping, bandwidth)
                 );
             }
         }
