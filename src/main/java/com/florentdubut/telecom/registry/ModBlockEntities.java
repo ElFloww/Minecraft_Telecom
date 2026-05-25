@@ -10,14 +10,17 @@ import net.neoforged.neoforge.registries.DeferredRegister;
 import java.util.function.Supplier;
 
 public class ModBlockEntities {
-    public static final DeferredRegister<BlockEntityType<?>> BLOCK_ENTITIES = DeferredRegister.create(Registries.BLOCK_ENTITY_TYPE, TelecomMod.MODID);
+    public static final DeferredRegister<BlockEntityType<?>> BLOCK_ENTITIES = DeferredRegister.create(net.minecraft.core.registries.BuiltInRegistries.BLOCK_ENTITY_TYPE, TelecomMod.MODID);
 
-    public static final Supplier<BlockEntityType<CableBlockEntity>> CABLE_BE = BLOCK_ENTITIES.register("cable",
-            () -> BlockEntityType.Builder.of(CableBlockEntity::new, ModBlocks.COPPER_CABLE.get()).build(null));
+    public static final java.util.function.Supplier<BlockEntityType<CableBlockEntity>> CABLE_BE = BLOCK_ENTITIES.register("cable",
+            () -> BlockEntityType.Builder.of(CableBlockEntity::new, ModBlocks.COPPER_CABLE.get(), ModBlocks.FIBER_CABLE.get()).build(null));
 
-    public static final Supplier<BlockEntityType<RouterBlockEntity>> ROUTER_BE = BLOCK_ENTITIES.register("router",
+    public static final java.util.function.Supplier<BlockEntityType<RouterBlockEntity>> ROUTER_BE = BLOCK_ENTITIES.register("router",
             () -> BlockEntityType.Builder.of(RouterBlockEntity::new, ModBlocks.ROUTER.get()).build(null));
 
-    public static final Supplier<BlockEntityType<AntennaBlockEntity>> ANTENNA_BE = BLOCK_ENTITIES.register("antenna",
+    public static final java.util.function.Supplier<BlockEntityType<AntennaBlockEntity>> ANTENNA_BE = BLOCK_ENTITIES.register("antenna",
             () -> BlockEntityType.Builder.of(AntennaBlockEntity::new, ModBlocks.ANTENNA.get()).build(null));
+
+    public static final java.util.function.Supplier<BlockEntityType<com.florentdubut.telecom.block.entity.ServerBlockEntity>> SERVER_BE = BLOCK_ENTITIES.register("server",
+            () -> BlockEntityType.Builder.of(com.florentdubut.telecom.block.entity.ServerBlockEntity::new, ModBlocks.SERVER.get()).build(null));
 }

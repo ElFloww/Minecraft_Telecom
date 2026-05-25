@@ -124,11 +124,20 @@ public class TelecomNetworkGraph extends SavedData {
 
     public NetworkNode getNodeByIp(String ip) {
         for (NetworkNode node : nodes.values()) {
-            if (ip.equals(node.getIpAddress())) {
+            if (ip != null && ip.equals(node.getIpAddress())) {
                 return node;
             }
         }
         return null;
+    }
+
+    public void clearEdges() {
+        edges.clear();
+        setDirty();
+    }
+
+    public List<NetworkEdge> getEdges() {
+        return edges;
     }
 
     public int routePacket(Packet packet) {

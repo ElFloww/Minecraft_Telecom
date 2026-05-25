@@ -1,0 +1,9 @@
+{
+  "itemGroup.telecom": "Mod Télécom",
+  "block.telecom.copper_cable": "Câble en Cuivre",
+  "block.telecom.fiber_cable": "Fibre Optique",
+  "block.telecom.router": "Routeur Internet",
+  "block.telecom.server": "Serveur Télécom",
+  "block.telecom.antenna": "Antenne 4G/5G",
+  "item.telecom.smartphone": "Smartphone"
+}

@@ -14,15 +14,13 @@ public class CableBlockEntity extends BlockEntity {
 
     public void onPlaced() {
         if (level instanceof ServerLevel serverLevel) {
-            // Trigger network update nearby
-            // TODO: Implement network traversal
+            com.florentdubut.telecom.network.NetworkTracer.recalculateNetwork(serverLevel);
         }
     }
 
     public void onRemoved() {
         if (level instanceof ServerLevel serverLevel) {
-            // Trigger network update nearby
-            // TODO: Implement network traversal
+            com.florentdubut.telecom.network.NetworkTracer.recalculateNetwork(serverLevel);
         }
     }
 }

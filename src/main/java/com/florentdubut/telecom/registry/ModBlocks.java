@@ -15,8 +15,14 @@ public class ModBlocks {
     public static final DeferredBlock<Block> COPPER_CABLE = BLOCKS.register("copper_cable",
             () -> new CableBlock(BlockBehaviour.Properties.of().noOcclusion().strength(1.0f)));
 
+    public static final DeferredBlock<Block> FIBER_CABLE = BLOCKS.register("fiber_cable",
+            () -> new CableBlock(BlockBehaviour.Properties.of().noOcclusion().strength(1.0f)));
+
     public static final DeferredBlock<Block> ROUTER = BLOCKS.register("router",
             () -> new RouterBlock(BlockBehaviour.Properties.of().strength(1.5f)));
+
+    public static final DeferredBlock<Block> SERVER = BLOCKS.register("server",
+            () -> new com.florentdubut.telecom.block.ServerBlock(BlockBehaviour.Properties.of().strength(2.0f)));
 
     public static final DeferredBlock<Block> ANTENNA = BLOCKS.register("antenna",
             () -> new AntennaBlock(BlockBehaviour.Properties.of().noOcclusion().strength(1.5f)));

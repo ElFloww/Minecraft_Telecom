@@ -37,6 +37,12 @@ public class ModNetworking {
             NetworkScanResponsePayload.STREAM_CODEC,
             ModNetworking::handleNetworkScanResponse
         );
+
+        registrar.playToClient(
+            com.florentdubut.telecom.network.packet.RouterGuiSyncPayload.TYPE,
+            com.florentdubut.telecom.network.packet.RouterGuiSyncPayload.STREAM_CODEC,
+            ModNetworking::handleRouterGuiSync
+        );
     }
 
     public static void scanForPlayer(ServerPlayer player) {
@@ -51,6 +57,10 @@ public class ModNetworking {
             if (node.getType() == NetworkNode.NodeType.ANTENNA) {
                 BlockEntity be = level.getBlockEntity(node.getPosition());
                 if (be instanceof AntennaBlockEntity antenna) {
+                    NetworkNode antennaNode = graph.getNode(antenna.getBlockPos());
+                    if (antennaNode == null || antennaNode.getIpAddress() == null) {
+                        continue; // Antenna is not connected to a Server!
+                    }
                     
                     // Group valid frequencies by tech
                     java.util.Map<String, java.util.List<TelecomFrequency>> validFreqs = new java.util.HashMap<>();
@@ -114,7 +124,14 @@ public class ModNetworking {
 
     private static void handleNetworkScanResponse(final NetworkScanResponsePayload payload, final IPayloadContext context) {
         context.enqueueWork(() -> {
-            com.florentdubut.telecom.client.ClientHooks.updateSmartphoneScreen(payload);
+            com.florentdubut.telecom.client.gui.SmartphoneHUD.latestScan = payload;
+            com.florentdubut.telecom.client.gui.SmartphoneHUD.lastScanTime = System.currentTimeMillis();
+        });
+    }
+
+    private static void handleRouterGuiSync(final com.florentdubut.telecom.network.packet.RouterGuiSyncPayload payload, final IPayloadContext context) {
+        context.enqueueWork(() -> {
+            net.minecraft.client.Minecraft.getInstance().setScreen(new com.florentdubut.telecom.client.gui.RouterScreen(payload));
         });
     }
 

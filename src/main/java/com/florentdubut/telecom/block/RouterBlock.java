@@ -32,6 +32,47 @@ public class RouterBlock extends Block implements EntityBlock {
     }
 
     @Override
+    protected net.minecraft.world.InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos, net.minecraft.world.entity.player.Player player, net.minecraft.world.phys.BlockHitResult hitResult) {
+        if (!level.isClientSide() && player instanceof net.minecraft.server.level.ServerPlayer serverPlayer) {
+            com.florentdubut.telecom.network.TelecomNetworkGraph graph = com.florentdubut.telecom.network.TelecomNetworkGraph.get(serverPlayer.serverLevel());
+            com.florentdubut.telecom.network.NetworkNode node = graph.getNode(pos);
+            
+            if (node != null) {
+                boolean isConnected = node.getIpAddress() != null;
+                
+                // Calculate ping and bandwidth to server if connected
+                int ping = 0;
+                int bandwidth = 0;
+                
+                if (isConnected) {
+                    com.florentdubut.telecom.network.NetworkNode serverNode = null;
+                    for (com.florentdubut.telecom.network.NetworkNode n : graph.getNodes()) {
+                        if (n.getType() == com.florentdubut.telecom.network.NetworkNode.NodeType.SERVER) {
+                            serverNode = n;
+                            break;
+                        }
+                    }
+                    
+                    if (serverNode != null) {
+                        // TODO: Implement actual Dijkstra pathfinding distance for Ping/Bandwidth calculation
+                        // For now, approximate
+                        ping = 15; // 15ms base
+                        bandwidth = 1000; // 1000 Mbps base
+                    } else {
+                        isConnected = false;
+                    }
+                }
+                
+                net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(
+                    serverPlayer, 
+                    new com.florentdubut.telecom.network.packet.RouterGuiSyncPayload(isConnected, node.getIpAddress(), ping, bandwidth)
+                );
+            }
+        }
+        return net.minecraft.world.InteractionResult.sidedSuccess(level.isClientSide);
+    }
+
+    @Override
     public void onRemove(BlockState state, Level level, BlockPos pos, BlockState newState, boolean isMoving) {
         if (state.getBlock() != newState.getBlock()) {
             if (!level.isClientSide()) {

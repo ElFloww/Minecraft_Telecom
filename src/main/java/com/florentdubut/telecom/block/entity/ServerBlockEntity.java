@@ -8,17 +8,19 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.server.level.ServerLevel;
 
-public class RouterBlockEntity extends BlockEntity {
-    public RouterBlockEntity(BlockPos pos, BlockState state) {
-        super(ModBlockEntities.ROUTER_BE.get(), pos, state);
+public class ServerBlockEntity extends BlockEntity {
+
+    public ServerBlockEntity(BlockPos pos, BlockState state) {
+        super(ModBlockEntities.SERVER_BE.get(), pos, state);
     }
 
     public void onPlaced() {
         if (level instanceof ServerLevel serverLevel) {
             TelecomNetworkGraph graph = TelecomNetworkGraph.get(serverLevel);
-            NetworkNode node = new NetworkNode(worldPosition, NetworkNode.NodeType.ROUTER);
+            NetworkNode node = new NetworkNode(worldPosition, NetworkNode.NodeType.SERVER);
+            // Servers have the root IP
+            node.setIpAddress("192.168.0.1");
             graph.addNode(node);
-            
             com.florentdubut.telecom.network.NetworkTracer.recalculateNetwork(serverLevel);
         }
     }

@@ -10,10 +10,21 @@ import net.neoforged.neoforge.registries.DeferredRegister;
 public class ModItems {
     public static final DeferredRegister.Items ITEMS = DeferredRegister.createItems(TelecomMod.MODID);
 
-    public static final DeferredItem<BlockItem> COPPER_CABLE = ITEMS.registerSimpleBlockItem("copper_cable", ModBlocks.COPPER_CABLE);
-    public static final DeferredItem<BlockItem> ROUTER = ITEMS.registerSimpleBlockItem("router", ModBlocks.ROUTER);
-    public static final DeferredItem<BlockItem> ANTENNA = ITEMS.registerSimpleBlockItem("antenna", ModBlocks.ANTENNA);
+    public static final DeferredItem<BlockItem> COPPER_CABLE = ITEMS.register("copper_cable",
+            () -> new BlockItem(ModBlocks.COPPER_CABLE.get(), new Item.Properties()));
 
-    public static final DeferredItem<Item> SMARTPHONE = ITEMS.register("smartphone",
+    public static final DeferredItem<BlockItem> FIBER_CABLE = ITEMS.register("fiber_cable",
+            () -> new BlockItem(ModBlocks.FIBER_CABLE.get(), new Item.Properties()));
+
+    public static final DeferredItem<BlockItem> ROUTER = ITEMS.register("router",
+            () -> new BlockItem(ModBlocks.ROUTER.get(), new Item.Properties()));
+
+    public static final DeferredItem<BlockItem> SERVER = ITEMS.register("server",
+            () -> new BlockItem(ModBlocks.SERVER.get(), new Item.Properties()));
+
+    public static final DeferredItem<BlockItem> ANTENNA = ITEMS.register("antenna",
+            () -> new BlockItem(ModBlocks.ANTENNA.get(), new Item.Properties()));
+
+    public static final DeferredItem<SmartphoneItem> SMARTPHONE = ITEMS.register("smartphone",
             () -> new SmartphoneItem(new Item.Properties().stacksTo(1)));
 }
