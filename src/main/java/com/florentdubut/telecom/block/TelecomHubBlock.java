@@ -12,6 +12,15 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
 import org.jetbrains.annotations.Nullable;
+import net.minecraft.world.phys.shapes.CollisionContext;
+import net.minecraft.world.phys.shapes.VoxelShape;
+import net.minecraft.world.phys.shapes.Shapes;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+import net.minecraft.world.level.block.state.properties.DirectionProperty;
+import net.minecraft.world.level.block.state.StateDefinition;
+import net.minecraft.world.item.context.BlockPlaceContext;
+import net.minecraft.core.Direction;
+import net.minecraft.world.level.BlockGetter;
 
 import java.util.function.Supplier;
 
@@ -36,6 +45,54 @@ public class TelecomHubBlock extends Block implements EntityBlock, TelecomBlock 
     public RenderShape getRenderShape(BlockState state) {
         return RenderShape.MODEL;
     }
+    public static final DirectionProperty FACING = BlockStateProperties.HORIZONTAL_FACING;
+
+    // Default shapes for non-directional or full blocks
+    private static final VoxelShape NRO_SHAPE = Shapes.block();
+    private static final VoxelShape NRA_SHAPE = Shapes.block();
+    
+    // PM: 16 wide, 16 high, 8 deep. We need 4 orientations
+    private static final VoxelShape PM_N = Block.box(0, 0, 8, 16, 16, 16);
+    private static final VoxelShape PM_S = Block.box(0, 0, 0, 16, 16, 8);
+    private static final VoxelShape PM_E = Block.box(0, 0, 0, 8, 16, 16);
+    private static final VoxelShape PM_W = Block.box(8, 0, 0, 16, 16, 16);
+
+    // SR: 12 wide, 12 high, 8 deep
+    private static final VoxelShape SR_N = Block.box(2, 0, 8, 14, 12, 16);
+    private static final VoxelShape SR_S = Block.box(2, 0, 0, 14, 12, 8);
+    private static final VoxelShape SR_E = Block.box(0, 0, 2, 8, 12, 14);
+    private static final VoxelShape SR_W = Block.box(8, 0, 2, 16, 12, 14);
+
+    @Override
+    protected void createBlockStateDefinition(StateDefinition.Builder<Block, BlockState> builder) {
+        builder.add(FACING);
+    }
+
+    @Override
+    public BlockState getStateForPlacement(BlockPlaceContext context) {
+        return this.defaultBlockState().setValue(FACING, context.getHorizontalDirection().getOpposite());
+    }
+
+    @Override
+    public VoxelShape getShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext context) {
+        Direction dir = state.getValue(FACING);
+        if (hubType == NetworkNode.NodeType.PM) {
+            switch (dir) {
+                case NORTH: return PM_N;
+                case SOUTH: return PM_S;
+                case EAST: return PM_E;
+                case WEST: return PM_W;
+            }
+        } else if (hubType == NetworkNode.NodeType.SR) {
+            switch (dir) {
+                case NORTH: return SR_N;
+                case SOUTH: return SR_S;
+                case EAST: return SR_E;
+                case WEST: return SR_W;
+            }
+        }
+        return Shapes.block(); // NRO and NRA are full blocks with slightly recessed models
+    }
 
     @Override
     public void onPlace(BlockState state, Level level, BlockPos pos, BlockState oldState, boolean isMoving) {
@@ -44,5 +101,4 @@ public class TelecomHubBlock extends Block implements EntityBlock, TelecomBlock 
             com.florentdubut.telecom.network.NetworkTracer.recalculateNetwork((net.minecraft.server.level.ServerLevel) level);
         }
     }
-
 }

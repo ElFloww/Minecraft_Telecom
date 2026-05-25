@@ -1,1 +1,8 @@
-{"variants": {"": {"model": "telecom:block/nra"}}}
+{
+  "variants": {
+    "facing=north": { "model": "telecom:block/nra" },
+    "facing=south": { "model": "telecom:block/nra", "y": 180 },
+    "facing=west":  { "model": "telecom:block/nra", "y": 270 },
+    "facing=east":  { "model": "telecom:block/nra", "y": 90 }
+  }
+}

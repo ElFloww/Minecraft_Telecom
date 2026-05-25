@@ -1,1 +1,21 @@
-{"parent": "minecraft:block/cube_all", "textures": {"all": "telecom:block/sr"}}
+{
+  "parent": "minecraft:block/block",
+  "textures": {
+    "texture": "telecom:block/sr",
+    "particle": "telecom:block/sr"
+  },
+  "elements": [
+    {
+      "from": [2, 0, 8],
+      "to": [14, 12, 16],
+      "faces": {
+        "north": {"uv": [2, 4, 14, 16], "texture": "#texture"},
+        "east": {"uv": [8, 4, 16, 16], "texture": "#texture"},
+        "south": {"uv": [2, 4, 14, 16], "texture": "#texture"},
+        "west": {"uv": [0, 4, 8, 16], "texture": "#texture"},
+        "up": {"uv": [2, 8, 14, 16], "texture": "#texture"},
+        "down": {"uv": [2, 8, 14, 16], "texture": "#texture"}
+      }
+    }
+  ]
+}

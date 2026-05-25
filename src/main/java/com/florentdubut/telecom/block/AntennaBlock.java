@@ -13,9 +13,21 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.phys.BlockHitResult;
 import com.florentdubut.telecom.client.ClientHooks;
 
+import net.minecraft.world.phys.shapes.CollisionContext;
+import net.minecraft.world.phys.shapes.VoxelShape;
+import net.minecraft.world.level.BlockGetter;
+
 public class AntennaBlock extends Block implements EntityBlock, TelecomBlock {
+    // Central pole
+    private static final VoxelShape ANTENNA_SHAPE = Block.box(6, 0, 6, 10, 16, 10);
+
     public AntennaBlock(Properties properties) {
         super(properties);
+    }
+
+    @Override
+    public VoxelShape getShape(BlockState state, BlockGetter level, BlockPos pos, CollisionContext context) {
+        return ANTENNA_SHAPE;
     }
 
     @Override
