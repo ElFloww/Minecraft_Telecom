@@ -21,19 +21,24 @@ public class NetworkToolScreen extends Screen {
     }
 
     @Override
-    public void render(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
-        // Draw a light dimming layer without blurring the cables
-        guiGraphics.fillGradient(0, 0, this.width, this.height, 0x80000000, 0xA0000000);
+    public void renderBackground(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
+        // Do nothing to keep the world fully visible and unblurred
+    }
 
+    @Override
+    public void render(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
         int startX = (this.width - this.imageWidth) / 2;
         int startY = (this.height - this.imageHeight) / 2;
 
-        // Tablet-like background
-        guiGraphics.fill(startX, startY, startX + this.imageWidth, startY + this.imageHeight, 0xFF333333);
-        guiGraphics.fill(startX + 2, startY + 2, startX + this.imageWidth - 2, startY + this.imageHeight - 2, 0xFF1E1E1E);
+        // Tablet-like background (Semi-transparent so we can see the cables behind)
+        guiGraphics.fill(startX, startY, startX + this.imageWidth, startY + this.imageHeight, 0xDD222222);
+        guiGraphics.fill(startX + 2, startY + 2, startX + this.imageWidth - 2, startY + this.imageHeight - 2, 0xDD111111);
+
+        guiGraphics.pose().pushPose();
+        guiGraphics.pose().translate(0, 0, 100);
 
         // Header
-        guiGraphics.fill(startX + 2, startY + 2, startX + this.imageWidth - 2, startY + 20, 0xFF0055AA);
+        guiGraphics.fill(startX + 2, startY + 2, startX + this.imageWidth - 2, startY + 20, 0xDD0055AA);
         guiGraphics.drawString(this.font, "Network Diagnostics", startX + 10, startY + 6, 0xFFFFFF);
 
         // Content
@@ -49,6 +54,8 @@ public class NetworkToolScreen extends Screen {
         int fillWidth = (int)(barWidth * (payload.usagePercent() / 100.0f));
         guiGraphics.fill(startX + 10, startY + 90, startX + 10 + fillWidth, startY + 100, payload.usagePercent() > 80 ? 0xFFFF0000 : 0xFF00FF00);
 
+        guiGraphics.pose().popPose();
+        
         super.render(guiGraphics, mouseX, mouseY, partialTick);
     }
 }

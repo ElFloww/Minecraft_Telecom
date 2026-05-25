@@ -21,16 +21,21 @@ public class ServerScreen extends Screen {
     }
 
     @Override
-    public void render(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
-        // Draw a dark dimming layer without blurring the server room
-        guiGraphics.fillGradient(0, 0, this.width, this.height, 0xC0000000, 0xD0000000);
+    public void renderBackground(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
+        // Do nothing to keep the world fully visible
+    }
 
+    @Override
+    public void render(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
         int startX = (this.width - this.imageWidth) / 2;
         int startY = (this.height - this.imageHeight) / 2;
 
-        // Draw a dark datacenter-like panel
-        guiGraphics.fill(startX, startY, startX + this.imageWidth, startY + this.imageHeight, 0xFF111111);
-        guiGraphics.fill(startX + 2, startY + 2, startX + this.imageWidth - 2, startY + this.imageHeight - 2, 0xFF222222);
+        // Draw a dark datacenter-like panel (Semi-transparent)
+        guiGraphics.fill(startX, startY, startX + this.imageWidth, startY + this.imageHeight, 0xDD111111);
+        guiGraphics.fill(startX + 2, startY + 2, startX + this.imageWidth - 2, startY + this.imageHeight - 2, 0xDD222222);
+
+        guiGraphics.pose().pushPose();
+        guiGraphics.pose().translate(0, 0, 100);
 
         // Title
         guiGraphics.drawString(this.font, "Telecom Server - Datacenter Core", startX + 10, startY + 10, 0x00FF00);
@@ -52,6 +57,8 @@ public class ServerScreen extends Screen {
         int percent = (int)(((float)payload.totalBandwidthUsage() / maxCapacity) * 100);
         guiGraphics.drawString(this.font, "CPU/Network Usage: " + percent + "%", startX + 10, startY + 135, percent > 80 ? 0xFF0000 : 0x00FF00);
 
+        guiGraphics.pose().popPose();
+        
         super.render(guiGraphics, mouseX, mouseY, partialTick);
     }
 }

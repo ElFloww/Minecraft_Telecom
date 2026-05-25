@@ -20,11 +20,14 @@ public class RouterScreen extends Screen {
     }
 
     @Override
-    public void render(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
-        super.render(guiGraphics, mouseX, mouseY, partialTick);
+    public void renderBackground(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
+        // Do nothing
+    }
 
+    @Override
+    public void render(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
         // Dark background overlay
-        guiGraphics.fillGradient(0, 0, this.width, this.height, 0xC0101010, 0xD0101010);
+        guiGraphics.fillGradient(0, 0, this.width, this.height, 0x40101010, 0x60101010);
 
         int centerX = this.width / 2;
         int centerY = this.height / 2;
@@ -35,9 +38,12 @@ public class RouterScreen extends Screen {
         int startY = centerY - boxHeight / 2;
 
         // Router Box Background
-        guiGraphics.fill(startX, startY, startX + boxWidth, startY + boxHeight, 0xFF222222);
+        guiGraphics.fill(startX, startY, startX + boxWidth, startY + boxHeight, 0xDD222222);
         // Border
-        guiGraphics.renderOutline(startX, startY, boxWidth, boxHeight, 0xFF44AAFF);
+        guiGraphics.renderOutline(startX, startY, boxWidth, boxHeight, 0xDD44AAFF);
+
+        guiGraphics.pose().pushPose();
+        guiGraphics.pose().translate(0, 0, 100);
 
         // Title
         guiGraphics.drawCenteredString(this.font, "ROUTER CONFIGURATION", centerX, startY + 10, 0xFFFFFF);
@@ -69,5 +75,9 @@ public class RouterScreen extends Screen {
         }
 
         guiGraphics.drawString(this.font, "Press ESC to close", startX + 20, startY + 140, 0x555555);
+
+        guiGraphics.pose().popPose();
+
+        super.render(guiGraphics, mouseX, mouseY, partialTick);
     }
 }
