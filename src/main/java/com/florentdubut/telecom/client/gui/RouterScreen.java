@@ -81,7 +81,7 @@ public class RouterScreen extends Screen {
                 int confUp = payload.configuredMaxUp();
                 try { confDown = Integer.parseInt(downBox.getValue()); } catch (NumberFormatException ignored) {}
                 try { confUp = Integer.parseInt(upBox.getValue()); } catch (NumberFormatException ignored) {}
-                PacketDistributor.sendToServer(new com.florentdubut.telecom.network.packet.StartSpeedtestPayload(payload.pos(), payload.ipAddress(), confDown, confUp));
+                net.neoforged.neoforge.network.PacketDistributor.sendToServer(new com.florentdubut.telecom.network.packet.StartSpeedtestPayload(payload.pos(), payload.ipAddress(), confDown, confUp, 0));
                 this.speedtestActive = true;
                 this.currentSpeedtestData = null;
                 this.lastDownBw = 0;

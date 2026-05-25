@@ -118,7 +118,7 @@ public class TelecomNetworkGraph extends SavedData {
     private int totalBandwidthUp = 0;
     private int totalBandwidthDown = 0;
 
-    public void startSpeedtest(BlockPos sourcePos, String clientIp, int targetDownBw, int targetUpBw) {
+    public void startSpeedtest(BlockPos sourcePos, String clientIp, int targetDownBw, int targetUpBw, int extraPing) {
         if (getSessionByIp(clientIp) != null) return; // Prevent multiple speedtests from the same client
         
         NetworkNode serverNode = null;
@@ -129,8 +129,13 @@ public class TelecomNetworkGraph extends SavedData {
             }
         }
         if (serverNode != null) {
-            TrafficSession session = new TrafficSession(sourcePos, serverNode.getPosition(), clientIp, targetDownBw, targetUpBw, 40); // 40 ticks = 2 seconds per phase
-            activeSessions.add(session);
+            PathStats stats = calculatePathStats(sourcePos, serverNode.getPosition());
+            if (stats != null) {
+                TrafficSession session = new TrafficSession(sourcePos, serverNode.getPosition(), clientIp, targetDownBw, targetUpBw, 40); // 40 ticks = 2 seconds per phase
+                session.setPingMs(stats.pingMs() + extraPing);
+                activeSessions.add(session);
+                setDirty();
+            }
         }
     }
 
@@ -385,12 +390,6 @@ public class TelecomNetworkGraph extends SavedData {
         
         // Base latency
         totalPing += 1.0f; 
-        
-        // Add mobile latency if source is an antenna
-        NetworkNode srcNode = getNode(sourcePos);
-        if (srcNode != null && srcNode.getType() == NetworkNode.NodeType.ANTENNA) {
-            totalPing += 25.0f + (Math.random() * 15.0f); // 25 to 40 ms extra latency for mobile
-        }
         
         if (minBandwidth == Integer.MAX_VALUE) minBandwidth = 0;
         

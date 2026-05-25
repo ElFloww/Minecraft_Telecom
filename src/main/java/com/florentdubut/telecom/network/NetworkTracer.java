@@ -29,7 +29,7 @@ public class NetworkTracer {
 
         for (NetworkNode startNode : graph.getNodes()) {
             BlockPos startPos = startNode.getPosition();
-            if (!level.isLoaded(startPos)) continue;
+            level.getChunk(startPos.getX() >> 4, startPos.getZ() >> 4, net.minecraft.world.level.chunk.status.ChunkStatus.FULL, true);
 
             Queue<TraceStep> queue = new LinkedList<>();
             Set<BlockPos> visited = new HashSet<>();
@@ -46,7 +46,8 @@ public class NetworkTracer {
                 for (Direction dir : Direction.values()) {
                     BlockPos neighbor = current.pos.relative(dir);
                     if (visited.contains(neighbor)) continue;
-                    if (!level.isLoaded(neighbor)) continue;
+                    
+                    level.getChunk(neighbor.getX() >> 4, neighbor.getZ() >> 4, net.minecraft.world.level.chunk.status.ChunkStatus.FULL, true);
                     
                     BlockState state = level.getBlockState(neighbor);
                     

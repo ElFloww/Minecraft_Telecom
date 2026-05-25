@@ -50,11 +50,24 @@ public class SmartphoneSpeedtestScreen extends Screen {
             if (this.speedtestActive) return;
             com.florentdubut.telecom.network.packet.NetworkScanResponsePayload scan = SmartphoneHUD.latestScan;
             if (scan != null && scan.found()) {
+                int extraPing = 0;
+                String tech = scan.tech();
+                if (tech.contains("5G")) {
+                    extraPing = 10 + (int)(Math.random() * 10);
+                } else if (tech.contains("4G")) {
+                    extraPing = 30 + (int)(Math.random() * 20);
+                } else if (tech.contains("3G")) {
+                    extraPing = 70 + (int)(Math.random() * 50);
+                } else if (tech.contains("2G")) {
+                    extraPing = 200 + (int)(Math.random() * 200);
+                }
+
                 PacketDistributor.sendToServer(new com.florentdubut.telecom.network.packet.StartSpeedtestPayload(
                     scan.antennaPos(), 
                     scan.ipAddress(), 
                     scan.maxDown(),
-                    scan.maxUp()
+                    scan.maxUp(),
+                    extraPing
                 ));
                 this.speedtestActive = true;
                 this.currentSpeedtestData = null;

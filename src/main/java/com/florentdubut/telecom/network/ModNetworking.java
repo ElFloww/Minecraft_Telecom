@@ -240,7 +240,7 @@ public class ModNetworking {
         context.enqueueWork(() -> {
             if (context.player().level() instanceof ServerLevel serverLevel) {
                 com.florentdubut.telecom.network.TelecomNetworkGraph graph = com.florentdubut.telecom.network.TelecomNetworkGraph.get(serverLevel);
-                graph.startSpeedtest(payload.sourcePos(), payload.clientIp(), payload.targetDownBw(), payload.targetUpBw());
+                graph.startSpeedtest(payload.sourcePos(), payload.clientIp(), payload.targetDownBw(), payload.targetUpBw(), payload.extraPing());
             }
         });
     }
