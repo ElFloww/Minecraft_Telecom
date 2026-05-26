@@ -69,7 +69,7 @@ public class RouterScreen extends Screen {
             if (!this.speedtestActive) {
                 int confDown = payload.configuredMaxDown();
                 int confUp = payload.configuredMaxUp();
-                net.neoforged.neoforge.network.PacketDistributor.sendToServer(new com.florentdubut.telecom.network.packet.StartSpeedtestPayload(payload.pos(), payload.ipAddress(), confDown, confUp, 0));
+                net.neoforged.neoforge.network.PacketDistributor.sendToServer(new com.florentdubut.telecom.network.packet.StartSpeedtestPayload(payload.pos(), payload.ipAddress(), confDown, confUp, 0, 0));
                 this.speedtestActive = true;
                 this.currentSpeedtestData = null;
                 this.lastDownBw = 0;

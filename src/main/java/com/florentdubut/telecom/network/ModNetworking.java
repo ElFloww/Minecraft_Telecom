@@ -138,7 +138,7 @@ public class ModNetworking {
         }
 
         if (hits.isEmpty()) {
-            PacketDistributor.sendToPlayer(player, new NetworkScanResponsePayload(false, "No Service", -120, "", "", BlockPos.ZERO, 0, 0));
+            PacketDistributor.sendToPlayer(player, new NetworkScanResponsePayload(false, "No Service", -120, "", "", BlockPos.ZERO, 0, 0, 0));
             return;
         }
 
@@ -203,6 +203,11 @@ public class ModNetworking {
             ? "10.0." + (primaryAntenna.getBlockPos().getX() % 255) + "." + (player.getId() % 255)
             : "0.0.0.0";
 
+        int frequenciesMask = 0;
+        for (FreqHit hit : activeHits) {
+            frequenciesMask |= (1 << hit.freq().ordinal());
+        }
+
         PacketDistributor.sendToPlayer(player, new NetworkScanResponsePayload(
             true,
             primaryAntenna != null ? primaryAntenna.getAntennaName() : "Unknown",
@@ -211,7 +216,8 @@ public class ModNetworking {
             mobileIp,
             primaryAntenna != null ? primaryAntenna.getBlockPos() : BlockPos.ZERO,
             totalMaxDown,
-            Math.max(1, totalMaxUp)
+            Math.max(1, totalMaxUp),
+            frequenciesMask
         ));
     }
 
@@ -353,7 +359,7 @@ public class ModNetworking {
         context.enqueueWork(() -> {
             if (context.player().level() instanceof ServerLevel serverLevel) {
                 com.florentdubut.telecom.network.TelecomNetworkGraph graph = com.florentdubut.telecom.network.TelecomNetworkGraph.get(serverLevel);
-                graph.startSpeedtest(payload.sourcePos(), payload.clientIp(), payload.targetDownBw(), payload.targetUpBw(), payload.extraPing(), false);
+                graph.startSpeedtest(payload.sourcePos(), payload.clientIp(), payload.targetDownBw(), payload.targetUpBw(), payload.extraPing(), payload.frequenciesMask(), false);
             }
         });
     }

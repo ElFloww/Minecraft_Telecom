@@ -162,7 +162,7 @@ public class TelecomNetworkGraph extends SavedData {
     private int totalBandwidthUp = 0;
     private int totalBandwidthDown = 0;
 
-    public void startSpeedtest(BlockPos sourcePos, String clientIp, int targetDownBw, int targetUpBw, int extraPing, boolean isPassive) {
+    public void startSpeedtest(BlockPos sourcePos, String clientIp, int targetDownBw, int targetUpBw, int extraPing, int frequenciesMask, boolean isPassive) {
         if (!isPassive && getSessionByIp(clientIp) != null) return; // Prevent multiple speedtests from the same client
         
         // Find the best server to connect to
@@ -185,6 +185,8 @@ public class TelecomNetworkGraph extends SavedData {
             TrafficSession session = new TrafficSession(sourcePos, bestServer.getPosition(), clientIp, targetDownBw, targetUpBw, 100, isPassive); // 100 ticks = 5 seconds per phase
             session.setExtraPing(extraPing);
             session.setPingMs(bestStats.pingMs());
+            session.setAntennaPos(sourcePos); // Used by mobile sessions to map back to antenna
+            session.setFrequenciesMask(frequenciesMask);
             activeSessions.add(session);
             setDirty();
         }
@@ -208,7 +210,7 @@ public class TelecomNetworkGraph extends SavedData {
                             // Reduced bandwidth consumption significantly
                             int randDown = 1 + (int)(Math.random() * 200); // 1 to 200 Mbps (was 10-2000)
                             int randUp = 1 + (int)(Math.random() * 50); // 1 to 50 Mbps (was 5-500)
-                            startSpeedtest(node.getPosition(), node.getIpAddress() != null ? node.getIpAddress() : "0.0.0.0", randDown, randUp, 0, true);
+                            startSpeedtest(node.getPosition(), node.getIpAddress() != null ? node.getIpAddress() : "0.0.0.0", randDown, randUp, 0, 0, true);
                         }
                     }
                 }
@@ -255,12 +257,12 @@ public class TelecomNetworkGraph extends SavedData {
                         int randDown = 1 + (int)(Math.random() * 20);
                         int randUp = 1 + (int)(Math.random() * 5);
                         int extraPing = 20 + (int)(Math.random() * 50);
-                        startSpeedtest(bestAntenna.getBlockPos(), bestIp, randDown, randUp, extraPing, true);
+                        startSpeedtest(bestAntenna.getBlockPos(), bestIp, randDown, randUp, extraPing, (1 << bestFreq.ordinal()), true);
                         // Tag the newly created session with antenna and frequency
                         TrafficSession newSession = getSessionByIp(bestIp);
                         if (newSession != null) {
                             newSession.setAntennaPos(bestAntenna.getBlockPos());
-                            newSession.setFrequencyUsed(bestFreq);
+                            newSession.setFrequenciesMask(1 << bestFreq.ordinal());
                         }
                     }
                 }
@@ -420,12 +422,24 @@ public class TelecomNetworkGraph extends SavedData {
     public java.util.Map<TelecomFrequency, AntennaFreqStats> getAntennaUtilization(net.minecraft.core.BlockPos antennaPos) {
         java.util.Map<TelecomFrequency, AntennaFreqStats> result = new java.util.LinkedHashMap<>();
         for (TrafficSession s : activeSessions) {
-            if (s.getAntennaPos() != null && s.getAntennaPos().equals(antennaPos) && s.getFrequencyUsed() != null) {
-                TelecomFrequency freq = s.getFrequencyUsed();
-                int bw = s.getActualBandwidth();
-                int maxBw = freq.getMaxSpeedMb();
-                result.merge(freq, new AntennaFreqStats(bw, maxBw),
-                    (a, b) -> new AntennaFreqStats(a.actualMbps() + b.actualMbps(), a.maxMbps()));
+            if (s.getAntennaPos() != null && s.getAntennaPos().equals(antennaPos) && s.getFrequenciesMask() != 0) {
+                // Find how many frequencies are used
+                java.util.List<TelecomFrequency> activeFreqs = new java.util.ArrayList<>();
+                for (TelecomFrequency freq : TelecomFrequency.values()) {
+                    if ((s.getFrequenciesMask() & (1 << freq.ordinal())) != 0) {
+                        activeFreqs.add(freq);
+                    }
+                }
+                
+                if (!activeFreqs.isEmpty()) {
+                    // Distribute actual bandwidth evenly across used frequencies
+                    int bwPerFreq = s.getActualBandwidth() / activeFreqs.size();
+                    for (TelecomFrequency freq : activeFreqs) {
+                        int maxBw = freq.getMaxSpeedMb();
+                        result.merge(freq, new AntennaFreqStats(bwPerFreq, maxBw),
+                            (a, b) -> new AntennaFreqStats(a.actualMbps() + b.actualMbps(), a.maxMbps()));
+                    }
+                }
             }
         }
         return result;

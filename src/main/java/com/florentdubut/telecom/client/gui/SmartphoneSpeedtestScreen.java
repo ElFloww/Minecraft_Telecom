@@ -67,7 +67,8 @@ public class SmartphoneSpeedtestScreen extends Screen {
                     scan.ipAddress(), 
                     scan.maxDown(),
                     scan.maxUp(),
-                    extraPing
+                    extraPing,
+                    scan.frequenciesMask()
                 ));
                 this.speedtestActive = true;
                 this.currentSpeedtestData = null;
@@ -81,11 +82,6 @@ public class SmartphoneSpeedtestScreen extends Screen {
         this.addRenderableWidget(Button.builder(Component.literal("< Back"), b -> {
             net.minecraft.client.Minecraft.getInstance().setScreen(parentScreen);
         }).bounds(startX + 5, startY + 20, 50, 15).build());
-    }
-
-    @Override
-    public void renderBackground(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
-        guiGraphics.fillGradient(0, 0, this.width, this.height, 0x40000000, 0x60000000);
     }
 
     @Override
@@ -126,9 +122,6 @@ public class SmartphoneSpeedtestScreen extends Screen {
             }
         }
 
-        guiGraphics.pose().pushPose();
-        guiGraphics.pose().translate(0, 0, 100);
         super.render(guiGraphics, mouseX, mouseY, partialTick);
-        guiGraphics.pose().popPose();
     }
 }

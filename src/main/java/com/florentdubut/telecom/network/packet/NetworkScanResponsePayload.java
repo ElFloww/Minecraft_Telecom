@@ -9,7 +9,7 @@ import net.minecraft.resources.ResourceLocation;
 
 import net.minecraft.core.BlockPos;
 
-public record NetworkScanResponsePayload(boolean found, String name, int signalStrength, String tech, String ipAddress, BlockPos antennaPos, int maxDown, int maxUp) implements CustomPacketPayload {
+public record NetworkScanResponsePayload(boolean found, String name, int signalStrength, String tech, String ipAddress, BlockPos antennaPos, int maxDown, int maxUp, int frequenciesMask) implements CustomPacketPayload {
     public static final Type<NetworkScanResponsePayload> TYPE = new Type<>(ResourceLocation.fromNamespaceAndPath(TelecomMod.MODID, "network_scan_response"));
 
     public static final StreamCodec<FriendlyByteBuf, NetworkScanResponsePayload> STREAM_CODEC = StreamCodec.of(
@@ -22,6 +22,7 @@ public record NetworkScanResponsePayload(boolean found, String name, int signalS
             buf.writeBlockPos(payload.antennaPos());
             buf.writeInt(payload.maxDown());
             buf.writeInt(payload.maxUp());
+            buf.writeInt(payload.frequenciesMask());
         },
         buf -> new NetworkScanResponsePayload(
             buf.readBoolean(),
@@ -30,6 +31,7 @@ public record NetworkScanResponsePayload(boolean found, String name, int signalS
             buf.readUtf(),
             buf.readUtf(),
             buf.readBlockPos(),
+            buf.readInt(),
             buf.readInt(),
             buf.readInt()
         )

@@ -25,9 +25,9 @@ public class TrafficSession {
     private int pingMs;
     private int extraPing;
     private final boolean isPassive;
-    // For mobile sessions: which antenna and frequency is this session going through
+    // For mobile sessions: which antenna and frequencies are this session going through
     private BlockPos antennaPos = null;
-    private TelecomFrequency frequencyUsed = null;
+    private int frequenciesMask = 0;
 
     public TrafficSession(BlockPos sourcePos, BlockPos destPos, String clientIp, int targetDownBw, int targetUpBw, int totalTicksPerPhase, boolean isPassive) {
         this.sessionId = UUID.randomUUID();
@@ -133,6 +133,6 @@ public class TrafficSession {
     public BlockPos getAntennaPos() { return antennaPos; }
     public void setAntennaPos(BlockPos pos) { this.antennaPos = pos; }
 
-    public TelecomFrequency getFrequencyUsed() { return frequencyUsed; }
-    public void setFrequencyUsed(TelecomFrequency freq) { this.frequencyUsed = freq; }
+    public int getFrequenciesMask() { return frequenciesMask; }
+    public void setFrequenciesMask(int mask) { this.frequenciesMask = mask; }
 }
