@@ -87,7 +87,7 @@ public class CableBlock extends Block implements EntityBlock {
             else if (neighborState.getBlock() instanceof com.florentdubut.telecom.block.TelecomHubBlock hub) nodeType = hub.getHubType();
             if (nodeType == null) return true;
 
-            return com.florentdubut.telecom.network.NetworkTracer.isCableCompatibleWithNodes(myCableType, nodeType, nodeType);
+            return com.florentdubut.telecom.network.NetworkTracer.doesNodeAcceptCable(nodeType, myCableType);
         }
         return false;
     }
