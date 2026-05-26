@@ -432,12 +432,19 @@ public class TelecomNetworkGraph extends SavedData {
                 }
                 
                 if (!activeFreqs.isEmpty()) {
-                    // Distribute actual bandwidth evenly across used frequencies
-                    int bwPerFreq = s.getActualBandwidth() / activeFreqs.size();
-                    for (TelecomFrequency freq : activeFreqs) {
-                        int maxBw = freq.getMaxSpeedMb();
-                        result.merge(freq, new AntennaFreqStats(bwPerFreq, maxBw),
-                            (a, b) -> new AntennaFreqStats(a.actualMbps() + b.actualMbps(), a.maxMbps()));
+                    // Distribute actual bandwidth proportionally across used frequencies based on their max speeds
+                    int totalMax = 0;
+                    for (TelecomFrequency f : activeFreqs) {
+                        totalMax += f.getMaxSpeedMb();
+                    }
+                    if (totalMax > 0) {
+                        for (TelecomFrequency freq : activeFreqs) {
+                            int maxBw = freq.getMaxSpeedMb();
+                            // Convert actualBandwidth * maxBw to long to avoid integer overflow, then divide
+                            int bwForFreq = (int)(((long)s.getActualBandwidth() * maxBw) / totalMax);
+                            result.merge(freq, new AntennaFreqStats(bwForFreq, maxBw),
+                                (a, b) -> new AntennaFreqStats(a.actualMbps() + b.actualMbps(), a.maxMbps()));
+                        }
                     }
                 }
             }

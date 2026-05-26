@@ -117,11 +117,6 @@ public class AntennaScreen extends Screen {
     @Override
     public void renderBackground(GuiGraphics g, int mouseX, int mouseY, float pt) {
         super.renderBackground(g, mouseX, mouseY, pt);
-    }
-
-    @Override
-    public void render(GuiGraphics g, int mouseX, int mouseY, float pt) {
-        this.renderBackground(g, mouseX, mouseY, pt);
 
         int winX = (this.width  - WIN_W) / 2;
         int winY = (this.height - WIN_H) / 2;
@@ -205,7 +200,10 @@ public class AntennaScreen extends Screen {
             g.drawCenteredString(this.font, "Aucune fréquence activée",
                 winX + LEFT_W + RIGHT_W / 2, winY + WIN_H / 2, 0x666666);
         }
+    }
 
+    @Override
+    public void render(GuiGraphics g, int mouseX, int mouseY, float pt) {
         super.render(g, mouseX, mouseY, pt);
     }
 
