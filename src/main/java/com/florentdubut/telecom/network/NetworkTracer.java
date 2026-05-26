@@ -37,7 +37,25 @@ public class NetworkTracer {
     }
 
     public static boolean isCableCompatibleWithNodes(NetworkEdge.EdgeType cableType, NetworkNode.NodeType a, NetworkNode.NodeType b) {
-        return doesNodeAcceptCable(a, cableType) && doesNodeAcceptCable(b, cableType);
+        if (!doesNodeAcceptCable(a, cableType) || !doesNodeAcceptCable(b, cableType)) return false;
+        
+        int tierA = getTier(a);
+        int tierB = getTier(b);
+        // Prevent connections between nodes of the same tier (e.g. Router to Router, PM to PM)
+        // Also ensure they are not identical nodes (just in case)
+        if (tierA == tierB) return false;
+        
+        return true;
+    }
+
+    private static int getTier(NetworkNode.NodeType type) {
+        return switch (type) {
+            case SERVER -> 1;
+            case NRO, NRA -> 2;
+            case PM, SR -> 3;
+            case ROUTER, ANTENNA -> 4;
+            case PHONE -> 5;
+        };
     }
 
     // Call this whenever a cable, server, router, or antenna is placed or broken
