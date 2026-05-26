@@ -113,9 +113,16 @@ public class TelecomNetworkGraph extends SavedData {
     }
 
     private boolean needsRecalculation = false;
+    private int delayedRecalculationTimer = -1;
 
     public void markForRecalculation() {
         this.needsRecalculation = true;
+    }
+
+    public void scheduleDelayedRecalculation(int ticks) {
+        if (this.delayedRecalculationTimer < 0 || this.delayedRecalculationTimer > ticks) {
+            this.delayedRecalculationTimer = ticks;
+        }
     }
 
     public void addNode(NetworkNode node) {
@@ -277,6 +284,13 @@ public class TelecomNetworkGraph extends SavedData {
 
     public void tickTraffic(ServerLevel level) {
         tickPassiveTraffic(level);
+
+        if (delayedRecalculationTimer > 0) {
+            delayedRecalculationTimer--;
+        } else if (delayedRecalculationTimer == 0) {
+            delayedRecalculationTimer = -1;
+            needsRecalculation = true;
+        }
 
         if (needsRecalculation) {
             needsRecalculation = false;
