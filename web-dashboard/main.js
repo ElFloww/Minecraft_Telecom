@@ -19,6 +19,7 @@ let hoveredEdge = null;
 let animationTime = 0;
 
 let nperfData = [];
+let fetchBudget = 10;
 
 
 const COLORS = {
