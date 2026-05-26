@@ -149,13 +149,13 @@ public class ModNetworking {
                             String fullLabel = techName + " (" + String.join(", ", bands) + ")";
                             
                             // If this antenna provides a better signal or better tech than the previous best antenna
-                            // We'll score tech: 5G=4, 4G=3, etc.
+                            // We'll score tech: 5G=5, 4G=4, etc.
                             int currentTechScore = 5 - java.util.Arrays.asList(techOrder).indexOf(tech);
                             int bestTechScore = 0;
-                            if (finalTechLabel.contains("5G")) bestTechScore = 4;
-                            else if (finalTechLabel.contains("4G")) bestTechScore = 3;
-                            else if (finalTechLabel.contains("3G")) bestTechScore = 2;
-                            else if (finalTechLabel.contains("2G")) bestTechScore = 1;
+                            if (finalTechLabel.contains("5G")) bestTechScore = 5;
+                            else if (finalTechLabel.contains("4G")) bestTechScore = 4;
+                            else if (finalTechLabel.contains("3G")) bestTechScore = 3;
+                            else if (finalTechLabel.contains("2G")) bestTechScore = 2;
                             
                             if (currentTechScore > bestTechScore || (currentTechScore == bestTechScore && maxSignal > bestSignal)) {
                                 bestSignal = maxSignal;
