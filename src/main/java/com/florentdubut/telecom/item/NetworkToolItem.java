@@ -56,61 +56,33 @@ public class NetworkToolItem extends Item {
                 return InteractionResult.SUCCESS;
             }
             
-            // Perform BFS from clicked cable to find the two end nodes
-            Set<BlockPos> visited = new HashSet<>();
-            Queue<BlockPos> queue = new LinkedList<>();
-            List<BlockPos> foundNodes = new ArrayList<>();
-            
-            queue.add(clickedPos);
-            visited.add(clickedPos);
-            
-            while (!queue.isEmpty() && foundNodes.size() < 2) {
-                BlockPos current = queue.poll();
-                
-                for (Direction dir : Direction.values()) {
-                    BlockPos neighbor = current.relative(dir);
-                    if (visited.contains(neighbor)) continue;
-                    
-                    BlockState neighborState = level.getBlockState(neighbor);
-                    if (neighborState.is(ModBlocks.COPPER_CABLE.get()) || neighborState.is(ModBlocks.FIBER_CABLE.get()) ||
-                        neighborState.is(ModBlocks.MEDIUM_FIBER_CABLE.get()) || neighborState.is(ModBlocks.BIG_FIBER_CABLE.get())) {
-                        visited.add(neighbor);
-                        queue.add(neighbor);
-                    } else if (graph.getNode(neighbor) != null) {
-                        if (!foundNodes.contains(neighbor)) {
-                            foundNodes.add(neighbor);
-                        }
-                    }
+            // Find the edge containing this cable block
+            NetworkEdge clickedEdge = null;
+            for (NetworkEdge edge : graph.getEdges()) {
+                if (edge.getPathBlocks() != null && edge.getPathBlocks().contains(clickedPos)) {
+                    clickedEdge = edge;
+                    break;
                 }
             }
             
-            if (foundNodes.size() == 2) {
-                // Find the edge in the graph
-                for (NetworkEdge edge : graph.getEdges()) {
-                    if ((edge.getNodeA().equals(foundNodes.get(0)) && edge.getNodeB().equals(foundNodes.get(1))) ||
-                        (edge.getNodeA().equals(foundNodes.get(1)) && edge.getNodeB().equals(foundNodes.get(0)))) {
-                        
-                        // We found the edge! Send Payload
-                        String typeStr = "Unknown";
-                        if (edge.getType() == NetworkEdge.EdgeType.BIG_FIBER) typeStr = "Big Fiber Optic";
-                        else if (edge.getType() == NetworkEdge.EdgeType.MEDIUM_FIBER) typeStr = "Medium Fiber Optic";
-                        else if (edge.getType() == NetworkEdge.EdgeType.FIBER) typeStr = "Fiber Optic";
-                        else if (edge.getType() == NetworkEdge.EdgeType.COPPER) typeStr = "Copper ADSL";
-                        // Real usage from physical block
-                        int usageDown = graph.getActualBlockUsageDown(clickedPos);
-                        int usageUp = graph.getActualBlockUsageUp(clickedPos);
-                        
-                        net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(
-                            (net.minecraft.server.level.ServerPlayer) context.getPlayer(),
-                            new com.florentdubut.telecom.network.packet.NetworkToolSyncPayload(clickedPos, typeStr, edge.getLength(), edge.getBandwidthMax(), usageDown, usageUp)
-                        );
-                        return InteractionResult.SUCCESS;
-                    }
-                }
-            } else if (foundNodes.size() == 1) {
-                context.getPlayer().sendSystemMessage(net.minecraft.network.chat.Component.literal("Cable is only connected to one end. Incomplete path."));
+            if (clickedEdge != null) {
+                // We found the edge! Send Payload
+                String typeStr = "Unknown";
+                if (clickedEdge.getType() == NetworkEdge.EdgeType.BIG_FIBER) typeStr = "Big Fiber Optic";
+                else if (clickedEdge.getType() == NetworkEdge.EdgeType.MEDIUM_FIBER) typeStr = "Medium Fiber Optic";
+                else if (clickedEdge.getType() == NetworkEdge.EdgeType.FIBER) typeStr = "Fiber Optic";
+                else if (clickedEdge.getType() == NetworkEdge.EdgeType.COPPER) typeStr = "Copper ADSL";
+                // Real usage from physical block
+                int usageDown = graph.getActualBlockUsageDown(clickedPos);
+                int usageUp = graph.getActualBlockUsageUp(clickedPos);
+                
+                net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(
+                    (net.minecraft.server.level.ServerPlayer) context.getPlayer(),
+                    new com.florentdubut.telecom.network.packet.NetworkToolSyncPayload(clickedPos, typeStr, clickedEdge.getLength(), clickedEdge.getBandwidthMax(), usageDown, usageUp)
+                );
+                return InteractionResult.SUCCESS;
             } else {
-                context.getPlayer().sendSystemMessage(net.minecraft.network.chat.Component.literal("Cable is not connected to any network nodes."));
+                context.getPlayer().sendSystemMessage(net.minecraft.network.chat.Component.literal("Cable is incomplete or not connected to any network nodes."));
             }
         }
         
