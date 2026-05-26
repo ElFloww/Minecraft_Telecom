@@ -7,6 +7,8 @@ public class NetworkNode {
     private String ipAddress;
     private NodeType type;
     private String networkCidr; // e.g. "10.1.0.0/16" for NRO, "10.1.2.0/24" for PM
+    private int currentUsageDown = 0;
+    private int currentUsageUp = 0;
 
     public enum NodeType {
         SERVER,
@@ -68,5 +70,21 @@ public class NetworkNode {
 
     public void setNetworkCidr(String cidr) {
         this.networkCidr = cidr;
+    }
+
+    public int getCurrentUsageDown() {
+        return currentUsageDown;
+    }
+
+    public void setCurrentUsageDown(int currentUsageDown) {
+        this.currentUsageDown = currentUsageDown;
+    }
+
+    public int getCurrentUsageUp() {
+        return currentUsageUp;
+    }
+
+    public void setCurrentUsageUp(int currentUsageUp) {
+        this.currentUsageUp = currentUsageUp;
     }
 }

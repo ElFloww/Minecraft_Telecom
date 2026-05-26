@@ -250,16 +250,12 @@ public class ModNetworking {
                 // First check if it's a node
                 com.florentdubut.telecom.network.NetworkNode clickedNode = graph.getNode(clickedPos);
                 if (clickedNode != null) {
-                    int usageDown = 0;
-                    int usageUp = 0;
+                    int usageDown = clickedNode.getCurrentUsageDown();
+                    int usageUp = clickedNode.getCurrentUsageUp();
                     int maxBandwidth = 0;
                     for (com.florentdubut.telecom.network.NetworkEdge edge : graph.getEdges()) {
                         if (edge.getNodeA().equals(clickedPos) || edge.getNodeB().equals(clickedPos)) {
                             maxBandwidth = Math.max(maxBandwidth, edge.getBandwidthMax());
-                            if (edge.getPathBlocks() != null && !edge.getPathBlocks().isEmpty()) {
-                                usageDown += graph.getActualBlockUsageDown(edge.getPathBlocks().get(0));
-                                usageUp += graph.getActualBlockUsageUp(edge.getPathBlocks().get(0));
-                            }
                         }
                     }
                     String typeStr = "Network Node (" + clickedNode.getType().name() + ")";

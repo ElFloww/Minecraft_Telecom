@@ -39,15 +39,13 @@ public class NetworkToolItem extends Item {
             // But to reuse the UI, we can just pass the node's usage.
             com.florentdubut.telecom.network.NetworkNode clickedNode = graph.getNode(clickedPos);
             if (clickedNode != null) {
-                int usageDown = 0;
-                int usageUp = 0;
+                int usageDown = clickedNode.getCurrentUsageDown();
+                int usageUp = clickedNode.getCurrentUsageUp();
                 int maxBandwidth = 0;
                 // Sum usage of all edges connected to this node
                 for (NetworkEdge edge : graph.getEdges()) {
                     if (edge.getNodeA().equals(clickedPos) || edge.getNodeB().equals(clickedPos)) {
                         maxBandwidth = Math.max(maxBandwidth, edge.getBandwidthMax());
-                        usageDown += graph.getActualBlockUsageDown(edge.getPathBlocks().get(0)); // get usage from an edge block
-                        usageUp += graph.getActualBlockUsageUp(edge.getPathBlocks().get(0));
                     }
                 }
                 String typeStr = "Network Node (" + clickedNode.getType().name() + ")";

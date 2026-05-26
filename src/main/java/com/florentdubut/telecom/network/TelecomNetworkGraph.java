@@ -415,10 +415,38 @@ public class TelecomNetworkGraph extends SavedData {
             }
         }
         
+        // Reset node usage
+        for (NetworkNode node : nodes.values()) {
+            node.setCurrentUsageDown(0);
+            node.setCurrentUsageUp(0);
+        }
+
         for (Map.Entry<TrafficSession, Integer> entry : sessionRequested.entrySet()) {
             TrafficSession session = entry.getKey();
             int actual = session.getActualBandwidth();
             List<NetworkEdge> path = sessionPaths.get(session);
+            
+            // Apply to nodes
+            java.util.Set<BlockPos> sessionNodes = new java.util.HashSet<>();
+            sessionNodes.add(session.getSourcePos());
+            sessionNodes.add(session.getDestPos());
+            for (NetworkEdge edge : path) {
+                sessionNodes.add(edge.getNodeA());
+                sessionNodes.add(edge.getNodeB());
+            }
+
+            for (BlockPos pos : sessionNodes) {
+                NetworkNode node = nodes.get(pos);
+                if (node != null) {
+                    if (session.getState() == TrafficSession.SessionState.DOWNLOAD) {
+                        node.setCurrentUsageDown(node.getCurrentUsageDown() + actual);
+                    } else if (session.getState() == TrafficSession.SessionState.UPLOAD) {
+                        node.setCurrentUsageUp(node.getCurrentUsageUp() + actual);
+                    }
+                }
+            }
+            
+            // Apply to edges
             for(NetworkEdge edge : path) {
                 if (session.getState() == TrafficSession.SessionState.DOWNLOAD) {
                     edge.setCurrentUsageDown(edge.getCurrentUsageDown() + actual);
