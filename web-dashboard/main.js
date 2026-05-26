@@ -19,6 +19,7 @@ let hoveredEdge = null;
 let animationTime = 0;
 
 let coverageData = {};
+let fetchBudget = 10;
 
 const COLORS = {
     SERVER: '#ef4444',
@@ -328,7 +329,8 @@ canvas.addEventListener('wheel', e => {
 let tileCache = new Map();
 
 function draw() {
-    animationTime++;
+    animationTime += 0.05;
+    fetchBudget = Math.min(fetchBudget + 1, 10);
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
@@ -373,11 +375,7 @@ function draw() {
         '2G': ['rgba(239, 68, 68, 0.1)', 'rgba(239, 68, 68, 0.3)', 'rgba(239, 68, 68, 0.6)'],
         '3G': ['rgba(249, 115, 22, 0.1)', 'rgba(249, 115, 22, 0.3)', 'rgba(249, 115, 22, 0.6)'],
         '4G': ['rgba(34, 197, 94, 0.1)', 'rgba(34, 197, 94, 0.3)', 'rgba(34, 197, 94, 0.6)'],
-        '4G+': ['rgba(20, 184, 166, 0.1)', 'rgba(20, 184, 166, 0.3)', 'rgba(20, 184, 166, 0.6)'],
-        '5G 700MHz': ['rgba(59, 130, 246, 0.1)', 'rgba(59, 130, 246, 0.3)', 'rgba(59, 130, 246, 0.6)'],
-        '5G 2100MHz': ['rgba(99, 102, 241, 0.1)', 'rgba(99, 102, 241, 0.3)', 'rgba(99, 102, 241, 0.6)'],
-        '5G 3.5GHz': ['rgba(168, 85, 247, 0.1)', 'rgba(168, 85, 247, 0.3)', 'rgba(168, 85, 247, 0.6)'],
-        '5G+': ['rgba(236, 72, 153, 0.1)', 'rgba(236, 72, 153, 0.3)', 'rgba(236, 72, 153, 0.6)']
+        '5G': ['rgba(59, 130, 246, 0.1)', 'rgba(59, 130, 246, 0.3)', 'rgba(59, 130, 246, 0.6)']
     };
 
     const checkboxes = document.querySelectorAll('.layer-checkbox');
