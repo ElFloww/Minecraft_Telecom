@@ -560,8 +560,9 @@ public class TelecomHttpServer {
             for (java.util.Map.Entry<Long, Integer> entry : graph.getRecordedCoverage().entrySet()) {
                 if (!first) json.append(",");
                 long pos = entry.getKey();
-                int x = (int)(pos >> 32);
-                int z = (int)pos;
+                net.minecraft.core.BlockPos bp = net.minecraft.core.BlockPos.of(pos);
+                int x = bp.getX();
+                int z = bp.getZ();
                 int val = entry.getValue();
                 int techId = val >> 8;
                 int signal = val & 0xFF;
