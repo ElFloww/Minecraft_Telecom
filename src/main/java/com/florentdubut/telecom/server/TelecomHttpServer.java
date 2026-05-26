@@ -34,6 +34,23 @@ public class TelecomHttpServer {
             server.createContext("/api/nperf_map", new NperfMapHandler());
             server.createContext("/api/speedtest", new SpeedtestHandler());
             
+            server.createContext("/api/player", exchange -> {
+                exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
+                if (minecraftServer == null || minecraftServer.overworld() == null || minecraftServer.overworld().players().isEmpty()) {
+                    exchange.sendResponseHeaders(404, -1);
+                    exchange.close();
+                    return;
+                }
+                net.minecraft.world.entity.player.Player p = minecraftServer.overworld().players().get(0);
+                String json = "{\"x\":" + p.getBlockX() + ",\"z\":" + p.getBlockZ() + "}";
+                byte[] bytes = json.getBytes("UTF-8");
+                exchange.getResponseHeaders().add("Content-Type", "application/json");
+                exchange.sendResponseHeaders(200, bytes.length);
+                java.io.OutputStream os = exchange.getResponseBody();
+                os.write(bytes);
+                os.close();
+            });
+            
             server.createContext("/favicon.ico", exchange -> {
                 exchange.sendResponseHeaders(204, -1);
                 exchange.close();

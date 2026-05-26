@@ -67,12 +67,25 @@ async function fetchNetworkData() {
     }
 }
 
-setTimeout(() => {
+setTimeout(async () => {
     if (!initialCenterDone) {
-        pan.x = canvas.width / 2;
-        pan.y = canvas.height / 2;
+        try {
+            const res = await fetch('/api/player');
+            if (res.ok) {
+                const p = await res.json();
+                pan.x = canvas.width / 2 - (p.x * zoom);
+                pan.y = canvas.height / 2 - (p.z * zoom);
+                initialCenterDone = true;
+            } else {
+                pan.x = canvas.width / 2;
+                pan.y = canvas.height / 2;
+            }
+        } catch (e) {
+            pan.x = canvas.width / 2;
+            pan.y = canvas.height / 2;
+        }
     }
-}, 100);
+}, 500);
 
 setInterval(fetchNetworkData, 2000);
 fetchNetworkData();
@@ -363,6 +376,18 @@ async function fetchNperfData() {
         const response = await fetch('/api/nperf_map');
         if (!response.ok) return;
         nperfData = await response.json();
+        
+        if (!initialCenterDone && nperfData.length > 0) {
+            let sumX = 0;
+            let sumZ = 0;
+            for (const p of nperfData) {
+                sumX += p.x;
+                sumZ += p.z;
+            }
+            pan.x = canvas.width / 2 - ((sumX / nperfData.length) * zoom);
+            pan.y = canvas.height / 2 - ((sumZ / nperfData.length) * zoom);
+            initialCenterDone = true;
+        }
     } catch (e) {
         console.error(e);
     }
