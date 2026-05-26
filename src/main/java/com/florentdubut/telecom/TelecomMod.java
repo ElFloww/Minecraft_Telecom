@@ -62,9 +62,21 @@ public class TelecomMod {
         LOGGER.info("Telecom Mod Common Setup");
     }
 
+    private com.florentdubut.telecom.server.TelecomHttpServer httpServer = new com.florentdubut.telecom.server.TelecomHttpServer();
+
     @SubscribeEvent
     public void onServerStarting(ServerStartingEvent event) {
         LOGGER.info("Telecom Mod Server Starting");
+    }
+
+    @SubscribeEvent
+    public void onServerStarted(net.neoforged.neoforge.event.server.ServerStartedEvent event) {
+        httpServer.start(event.getServer());
+    }
+
+    @SubscribeEvent
+    public void onServerStopping(net.neoforged.neoforge.event.server.ServerStoppingEvent event) {
+        httpServer.stop();
     }
 
     @EventBusSubscriber(modid = TelecomMod.MODID, bus = EventBusSubscriber.Bus.MOD, value = Dist.CLIENT)
