@@ -63,6 +63,7 @@ public class TelecomNetworkGraph extends SavedData {
             graph.edges.add(edge);
         }
 
+        graph.needsRecalculation = true; // Force recalculation on startup to ensure physical network sync
         return graph;
     }
 
