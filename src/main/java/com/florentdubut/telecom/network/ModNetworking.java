@@ -27,6 +27,12 @@ public class ModNetworking {
         final PayloadRegistrar registrar = event.registrar("1.0");
 
         registrar.playToServer(
+            com.florentdubut.telecom.network.packet.ToggleNperfPayload.TYPE,
+            com.florentdubut.telecom.network.packet.ToggleNperfPayload.STREAM_CODEC,
+            ModNetworking::handleToggleNperf
+        );
+
+        registrar.playToServer(
             AntennaConfigPayload.TYPE,
             AntennaConfigPayload.STREAM_CODEC,
             ModNetworking::handleAntennaConfig
@@ -203,7 +209,46 @@ public class ModNetworking {
             ? "10.0." + (primaryAntenna.getBlockPos().getX() % 255) + "." + (player.getId() % 255)
             : "0.0.0.0";
 
+
+        // Find if player has Nperf active on their phone
+        boolean nperfActive = false;
+        for (int i = 0; i < player.getInventory().getContainerSize(); i++) {
+            net.minecraft.world.item.ItemStack stack = player.getInventory().getItem(i);
+            if (stack.is(com.florentdubut.telecom.registry.ModItems.SMARTPHONE.get())) {
+                if (stack.has(net.minecraft.core.component.DataComponents.CUSTOM_DATA)) {
+                    net.minecraft.nbt.CompoundTag tag = stack.get(net.minecraft.core.component.DataComponents.CUSTOM_DATA).copyTag();
+                    if (tag.getBoolean("nperfActive")) {
+                    nperfActive = true;
+                    break;
+                }
+                }
+            }
+        }
+
+        if (nperfActive && activeTech != null && bestSignal > -120f) {
+            int techId = 0;
+            switch(activeTech) {
+                case "2G": techId = 1; break;
+                case "3G": techId = 2; break;
+                case "4G": techId = 3; break;
+                case "5G": techId = 5; break;
+            }
+            if (activeTech.equals("4G") && activeHits.size() > 1) {
+                techId = 4; // 4G+
+            }
+            
+            int signalLevel = 1;
+            if (bestSignal > -60f) signalLevel = 4;
+            else if (bestSignal > -80f) signalLevel = 3;
+            else if (bestSignal > -100f) signalLevel = 2;
+            
+            if (techId > 0) {
+                graph.addCoverageRecord(player.blockPosition(), techId, signalLevel);
+            }
+        }
+
         int frequenciesMask = 0;
+
         for (FreqHit hit : activeHits) {
             frequenciesMask |= (1 << hit.freq().ordinal());
         }
@@ -447,6 +492,22 @@ public class ModNetworking {
             net.minecraft.client.gui.screens.Screen screen = net.minecraft.client.Minecraft.getInstance().screen;
             if (screen instanceof com.florentdubut.telecom.client.gui.NetworkMapScreen mapScreen) {
                 mapScreen.receiveData(payload.nodes());
+            }
+        });
+    }
+
+    private static void handleToggleNperf(final com.florentdubut.telecom.network.packet.ToggleNperfPayload payload, final net.neoforged.neoforge.network.handling.IPayloadContext context) {
+        context.enqueueWork(() -> {
+            net.minecraft.world.entity.player.Player player = context.player();
+            for (int i = 0; i < player.getInventory().getContainerSize(); i++) {
+                net.minecraft.world.item.ItemStack stack = player.getInventory().getItem(i);
+                if (stack.is(com.florentdubut.telecom.registry.ModItems.SMARTPHONE.get())) {
+                    net.minecraft.nbt.CompoundTag tag = stack.has(net.minecraft.core.component.DataComponents.CUSTOM_DATA) ? stack.get(net.minecraft.core.component.DataComponents.CUSTOM_DATA).copyTag() : new net.minecraft.nbt.CompoundTag();
+                    tag.putBoolean("nperfActive", payload.enabled());
+                    stack.set(net.minecraft.core.component.DataComponents.CUSTOM_DATA, net.minecraft.world.item.component.CustomData.of(tag));
+                    player.displayClientMessage(net.minecraft.network.chat.Component.literal("Nperf " + (payload.enabled() ? "Activated" : "Deactivated")), true);
+                    break;
+                }
             }
         });
     }

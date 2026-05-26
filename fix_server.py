@@ -3,14 +3,8 @@ import sys
 with open("src/main/java/com/florentdubut/telecom/server/TelecomHttpServer.java") as f:
     content = f.read()
 
-# Replace endpoint mapping
-content = content.replace('server.createContext("/api/coverage_map", new CoverageMapHandler());', 'server.createContext("/api/nperf_map", new NperfMapHandler());')
-
-# Replace the handler
-start_idx = content.find("        class CoverageMapHandler implements HttpHandler {")
-end_idx = content.find("        // Network Map Graph API", start_idx)
-
-nperf_handler = """        class NperfMapHandler implements HttpHandler {
+handler = """
+    class NperfMapHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws java.io.IOException {
             exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
@@ -50,11 +44,15 @@ nperf_handler = """        class NperfMapHandler implements HttpHandler {
             os.close();
         }
     }
-
+}
 """
 
-if start_idx != -1 and end_idx != -1:
-    content = content[:start_idx] + nperf_handler + content[end_idx:]
+# The file currently ends with:
+#         }
+#     }
+# }
+
+content = content.replace("    }\n}\n", "    }\n" + handler)
 
 with open("src/main/java/com/florentdubut/telecom/server/TelecomHttpServer.java", "w") as f:
     f.write(content)

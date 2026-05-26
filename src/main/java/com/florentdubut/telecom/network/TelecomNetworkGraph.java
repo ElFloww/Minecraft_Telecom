@@ -18,6 +18,7 @@ public class TelecomNetworkGraph extends SavedData {
 
     private final Map<BlockPos, NetworkNode> nodes = new HashMap<>();
     private final List<NetworkEdge> edges = new ArrayList<>();
+    private final Map<Long, Integer> recordedCoverage = new java.util.concurrent.ConcurrentHashMap<>();
 
     public static SavedData.Factory<TelecomNetworkGraph> factory() {
         return new SavedData.Factory<>(
@@ -75,7 +76,17 @@ public class TelecomNetworkGraph extends SavedData {
             graph.edges.add(edge);
         }
 
-        return graph;
+        
+        if (tag.contains("CoverageKeys") && tag.contains("CoverageValues")) {
+            long[] keys = tag.getLongArray("CoverageKeys");
+            int[] values = tag.getIntArray("CoverageValues");
+            if (keys.length == values.length) {
+                for (int j = 0; j < keys.length; j++) {
+                    graph.recordedCoverage.put(keys[j], values[j]);
+                }
+            }
+        }
+return graph;
     }
 
     @Override
@@ -117,6 +128,17 @@ public class TelecomNetworkGraph extends SavedData {
         }
         tag.put("Edges", edgesTag);
 
+        long[] covKeys = new long[recordedCoverage.size()];
+        int[] covValues = new int[recordedCoverage.size()];
+        int idx = 0;
+        for (Map.Entry<Long, Integer> entry : recordedCoverage.entrySet()) {
+            covKeys[idx] = entry.getKey();
+            covValues[idx] = entry.getValue();
+            idx++;
+        }
+        tag.putLongArray("CoverageKeys", covKeys);
+        tag.putIntArray("CoverageValues", covValues);
+
         return tag;
     }
 
@@ -134,6 +156,21 @@ public class TelecomNetworkGraph extends SavedData {
     public void scheduleDelayedRecalculation(int ticks) {
         if (this.delayedRecalculationTimer < 0 || this.delayedRecalculationTimer > ticks) {
             this.delayedRecalculationTimer = ticks;
+        }
+    }
+
+    
+    public Map<Long, Integer> getRecordedCoverage() {
+        return recordedCoverage;
+    }
+
+    public void addCoverageRecord(BlockPos pos, int techId, int signalLevel) {
+        long key = pos.asLong();
+        int value = (techId << 8) | signalLevel;
+        Integer existing = recordedCoverage.get(key);
+        if (existing == null || existing < value) { // Basic update rule
+            recordedCoverage.put(key, value);
+            setDirty();
         }
     }
 

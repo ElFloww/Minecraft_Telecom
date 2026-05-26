@@ -34,6 +34,27 @@ public class SmartphoneScreen extends Screen {
             // WIP
         }).bounds(startX + 85, startY + 40, 60, 60).build());
 
+
+        // Nperf App Button
+        this.addRenderableWidget(Button.builder(Component.literal("Nperf"), b -> {
+            boolean currentState = false;
+            net.minecraft.world.entity.player.Player player = net.minecraft.client.Minecraft.getInstance().player;
+            if (player != null) {
+                for (int i = 0; i < player.getInventory().getContainerSize(); i++) {
+                    net.minecraft.world.item.ItemStack stack = player.getInventory().getItem(i);
+                    if (stack.is(com.florentdubut.telecom.registry.ModItems.SMARTPHONE.get())) {
+                        if (stack.has(net.minecraft.core.component.DataComponents.CUSTOM_DATA)) {
+                            net.minecraft.nbt.CompoundTag tag = stack.get(net.minecraft.core.component.DataComponents.CUSTOM_DATA).copyTag();
+                            currentState = tag.getBoolean("nperfActive");
+                        }
+                        break;
+                    }
+                }
+            }
+            net.neoforged.neoforge.network.PacketDistributor.sendToServer(new com.florentdubut.telecom.network.packet.ToggleNperfPayload(!currentState));
+            this.onClose();
+        }).bounds(startX + 85, startY + 110, 60, 60).build());
+
         // SMS App (WIP)
         this.addRenderableWidget(Button.builder(Component.literal("SMS"), b -> {
             // WIP

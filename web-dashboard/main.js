@@ -18,8 +18,8 @@ let hoveredNode = null;
 let hoveredEdge = null;
 let animationTime = 0;
 
-let coverageData = {};
-let fetchBudget = 10;
+let nperfData = [];
+
 
 const COLORS = {
     SERVER: '#ef4444',
@@ -330,7 +330,6 @@ let tileCache = new Map();
 
 function draw() {
     animationTime += 0.05;
-    fetchBudget = Math.min(fetchBudget + 1, 10);
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
