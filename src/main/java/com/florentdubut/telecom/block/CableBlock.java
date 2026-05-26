@@ -64,28 +64,52 @@ public class CableBlock extends Block implements EntityBlock {
         return shape;
     }
 
-    private boolean connectsTo(BlockState state) {
-        return state.getBlock() instanceof CableBlock || 
-               state.getBlock() instanceof TelecomBlock;
+    private boolean connectsTo(BlockState myState, BlockState neighborState) {
+        // Same cable type: always connects visually
+        if (neighborState.getBlock() == myState.getBlock()) return true;
+
+        // Cable → other cable type: never connects
+        if (neighborState.getBlock() instanceof CableBlock) return false;
+
+        // Cable → node: check architectural compatibility
+        if (neighborState.getBlock() instanceof TelecomBlock) {
+            com.florentdubut.telecom.network.NetworkEdge.EdgeType myCableType = null;
+            if (myState.getBlock() == com.florentdubut.telecom.registry.ModBlocks.COPPER_CABLE.get())        myCableType = com.florentdubut.telecom.network.NetworkEdge.EdgeType.COPPER;
+            else if (myState.getBlock() == com.florentdubut.telecom.registry.ModBlocks.FIBER_CABLE.get())    myCableType = com.florentdubut.telecom.network.NetworkEdge.EdgeType.FIBER;
+            else if (myState.getBlock() == com.florentdubut.telecom.registry.ModBlocks.MEDIUM_FIBER_CABLE.get()) myCableType = com.florentdubut.telecom.network.NetworkEdge.EdgeType.MEDIUM_FIBER;
+            else if (myState.getBlock() == com.florentdubut.telecom.registry.ModBlocks.BIG_FIBER_CABLE.get())    myCableType = com.florentdubut.telecom.network.NetworkEdge.EdgeType.BIG_FIBER;
+            if (myCableType == null) return true; // Unknown cable type, allow
+
+            com.florentdubut.telecom.network.NetworkNode.NodeType nodeType = null;
+            if (neighborState.getBlock() instanceof com.florentdubut.telecom.block.RouterBlock)        nodeType = com.florentdubut.telecom.network.NetworkNode.NodeType.ROUTER;
+            else if (neighborState.getBlock() instanceof com.florentdubut.telecom.block.ServerBlock)   nodeType = com.florentdubut.telecom.network.NetworkNode.NodeType.SERVER;
+            else if (neighborState.getBlock() instanceof com.florentdubut.telecom.block.AntennaBlock)  nodeType = com.florentdubut.telecom.network.NetworkNode.NodeType.ANTENNA;
+            else if (neighborState.getBlock() instanceof com.florentdubut.telecom.block.TelecomHubBlock hub) nodeType = hub.getHubType();
+            if (nodeType == null) return true;
+
+            return com.florentdubut.telecom.network.NetworkTracer.isCableCompatibleWithNodes(myCableType, nodeType, nodeType);
+        }
+        return false;
     }
 
     @Override
     public BlockState getStateForPlacement(BlockPlaceContext context) {
         Level level = context.getLevel();
         BlockPos pos = context.getClickedPos();
+        BlockState myState = this.defaultBlockState(); // Just for type identity check
         return this.defaultBlockState()
-                .setValue(NORTH, connectsTo(level.getBlockState(pos.north())))
-                .setValue(SOUTH, connectsTo(level.getBlockState(pos.south())))
-                .setValue(EAST, connectsTo(level.getBlockState(pos.east())))
-                .setValue(WEST, connectsTo(level.getBlockState(pos.west())))
-                .setValue(UP, connectsTo(level.getBlockState(pos.above())))
-                .setValue(DOWN, connectsTo(level.getBlockState(pos.below())));
+                .setValue(NORTH, connectsTo(myState, level.getBlockState(pos.north())))
+                .setValue(SOUTH, connectsTo(myState, level.getBlockState(pos.south())))
+                .setValue(EAST, connectsTo(myState, level.getBlockState(pos.east())))
+                .setValue(WEST, connectsTo(myState, level.getBlockState(pos.west())))
+                .setValue(UP, connectsTo(myState, level.getBlockState(pos.above())))
+                .setValue(DOWN, connectsTo(myState, level.getBlockState(pos.below())));
     }
 
     @Override
     public BlockState updateShape(BlockState state, Direction direction, BlockState neighborState, LevelAccessor level, BlockPos currentPos, BlockPos neighborPos) {
         BooleanProperty property = getPropertyForDirection(direction);
-        return state.setValue(property, connectsTo(neighborState));
+        return state.setValue(property, connectsTo(state, neighborState));
     }
 
     private BooleanProperty getPropertyForDirection(Direction dir) {

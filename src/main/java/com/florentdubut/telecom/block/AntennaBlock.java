@@ -32,10 +32,10 @@ public class AntennaBlock extends Block implements EntityBlock, TelecomBlock {
 
     @Override
     protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos, Player player, BlockHitResult hitResult) {
-        if (level.isClientSide) {
+        if (!level.isClientSide && player instanceof net.minecraft.server.level.ServerPlayer serverPlayer) {
             BlockEntity be = level.getBlockEntity(pos);
             if (be instanceof AntennaBlockEntity antenna) {
-                ClientHooks.openAntennaScreen(antenna);
+                com.florentdubut.telecom.network.ModNetworking.openAntennaGuiForPlayer(serverPlayer, antenna);
             }
         }
         return InteractionResult.SUCCESS;

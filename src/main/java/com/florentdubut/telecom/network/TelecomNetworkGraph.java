@@ -223,20 +223,23 @@ public class TelecomNetworkGraph extends SavedData {
             
             // Reduced probability to 0.5%
             if (hasPhone && Math.random() < 0.005) {
-                // Find nearest antenna for this player
+                // Find nearest antenna for this player, tracking best signal AND best frequency
                 com.florentdubut.telecom.block.entity.AntennaBlockEntity bestAntenna = null;
+                TelecomFrequency bestFreq = null;
                 float bestSignal = -1000f;
                 String bestIp = null;
+
                 for (NetworkNode node : nodes.values()) {
                     if (node.getType() == NetworkNode.NodeType.ANTENNA) {
                         net.minecraft.world.level.block.entity.BlockEntity be = level.getBlockEntity(node.getPosition());
                         if (be instanceof com.florentdubut.telecom.block.entity.AntennaBlockEntity antenna) {
-                            for (com.florentdubut.telecom.network.TelecomFrequency freq : com.florentdubut.telecom.network.TelecomFrequency.values()) {
+                            for (TelecomFrequency freq : TelecomFrequency.values()) {
                                 if (antenna.isFrequencyEnabled(freq)) {
                                     float signal = com.florentdubut.telecom.network.SignalPropagator.calculateSignal(level, antenna.getBlockPos(), player.blockPosition().above(), freq).powerDbm;
                                     if (signal > -120f && signal > bestSignal) {
                                         bestSignal = signal;
                                         bestAntenna = antenna;
+                                        bestFreq = freq;
                                         bestIp = "10.0." + (antenna.getBlockPos().getX() % 255) + "." + (player.getId() % 255);
                                     }
                                 }
@@ -246,19 +249,19 @@ public class TelecomNetworkGraph extends SavedData {
                 }
                 
                 if (bestAntenna != null) {
-                    boolean hasSession = false;
-                    for (TrafficSession s : activeSessions) {
-                        if (s.getClientIp() != null && s.getClientIp().equals(bestIp)) {
-                            hasSession = true;
-                            break;
-                        }
-                    }
+                    final String finalBestIp = bestIp;
+                    boolean hasSession = activeSessions.stream().anyMatch(s -> finalBestIp.equals(s.getClientIp()));
                     if (!hasSession) {
-                        // Very low consumption for phones (e.g., messaging, small loading)
-                        int randDown = 1 + (int)(Math.random() * 20); // 1 to 20 Mbps (was 1-500)
-                        int randUp = 1 + (int)(Math.random() * 5); // 1 to 5 Mbps (was 1-100)
+                        int randDown = 1 + (int)(Math.random() * 20);
+                        int randUp = 1 + (int)(Math.random() * 5);
                         int extraPing = 20 + (int)(Math.random() * 50);
                         startSpeedtest(bestAntenna.getBlockPos(), bestIp, randDown, randUp, extraPing, true);
+                        // Tag the newly created session with antenna and frequency
+                        TrafficSession newSession = getSessionByIp(bestIp);
+                        if (newSession != null) {
+                            newSession.setAntennaPos(bestAntenna.getBlockPos());
+                            newSession.setFrequencyUsed(bestFreq);
+                        }
                     }
                 }
             }
@@ -408,6 +411,31 @@ public class TelecomNetworkGraph extends SavedData {
             }
         }
         return null;
+    }
+
+    /**
+     * Returns per-frequency utilization stats for a given antenna.
+     * For each frequency, returns a record with: actual Mbps used and max Mbps capacity.
+     */
+    public java.util.Map<TelecomFrequency, AntennaFreqStats> getAntennaUtilization(net.minecraft.core.BlockPos antennaPos) {
+        java.util.Map<TelecomFrequency, AntennaFreqStats> result = new java.util.LinkedHashMap<>();
+        for (TrafficSession s : activeSessions) {
+            if (s.getAntennaPos() != null && s.getAntennaPos().equals(antennaPos) && s.getFrequencyUsed() != null) {
+                TelecomFrequency freq = s.getFrequencyUsed();
+                int bw = s.getActualBandwidth();
+                int maxBw = freq.getMaxSpeedMb();
+                result.merge(freq, new AntennaFreqStats(bw, maxBw),
+                    (a, b) -> new AntennaFreqStats(a.actualMbps() + b.actualMbps(), a.maxMbps()));
+            }
+        }
+        return result;
+    }
+
+    public record AntennaFreqStats(int actualMbps, int maxMbps) {
+        public float utilizationPercent() {
+            if (maxMbps <= 0) return 0f;
+            return Math.min(1f, (float) actualMbps / maxMbps);
+        }
     }
 
     public NetworkNode getNode(BlockPos pos) {

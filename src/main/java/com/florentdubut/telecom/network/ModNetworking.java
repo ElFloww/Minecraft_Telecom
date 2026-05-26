@@ -97,6 +97,12 @@ public class ModNetworking {
             com.florentdubut.telecom.network.packet.ServerBandwidthUpdatePayload.STREAM_CODEC,
             ModNetworking::handleServerBandwidthUpdate
         );
+
+        registrar.playToClient(
+            com.florentdubut.telecom.network.packet.AntennaGuiSyncPayload.TYPE,
+            com.florentdubut.telecom.network.packet.AntennaGuiSyncPayload.STREAM_CODEC,
+            ModNetworking::handleAntennaGuiSync
+        );
     }
 
     public static void scanForPlayer(ServerPlayer player) {
@@ -252,6 +258,46 @@ public class ModNetworking {
             } else {
                 net.minecraft.client.Minecraft.getInstance().setScreen(new com.florentdubut.telecom.client.gui.NetworkToolScreen(payload));
             }
+        });
+    }
+
+    /**
+     * Called server-side when a player right-clicks an antenna.
+     * Gathers utilization data and sends AntennaGuiSyncPayload to that player.
+     */
+    public static void openAntennaGuiForPlayer(ServerPlayer player, AntennaBlockEntity antenna) {
+        ServerLevel level = player.serverLevel();
+        TelecomNetworkGraph graph = TelecomNetworkGraph.get(level);
+
+        java.util.Map<TelecomNetworkGraph.AntennaFreqStats, Object> raw = new java.util.LinkedHashMap<>();
+        java.util.Map<Integer, int[]> utilMap = new java.util.HashMap<>();
+
+        java.util.Map<TelecomFrequency, TelecomNetworkGraph.AntennaFreqStats> utilization =
+            graph.getAntennaUtilization(antenna.getBlockPos());
+
+        // Include enabled frequencies with their live utilization (or 0 if no session)
+        for (TelecomFrequency freq : TelecomFrequency.values()) {
+            if (antenna.isFrequencyEnabled(freq)) {
+                TelecomNetworkGraph.AntennaFreqStats stats = utilization.get(freq);
+                int actual = stats != null ? stats.actualMbps() : 0;
+                int max = freq.getMaxSpeedMb();
+                utilMap.put(freq.ordinal(), new int[]{actual, max});
+            }
+        }
+
+        PacketDistributor.sendToPlayer(player, new com.florentdubut.telecom.network.packet.AntennaGuiSyncPayload(
+            antenna.getBlockPos(),
+            antenna.getAntennaName(),
+            antenna.getEnabledFrequenciesMask(),
+            utilMap
+        ));
+    }
+
+    private static void handleAntennaGuiSync(final com.florentdubut.telecom.network.packet.AntennaGuiSyncPayload payload, final IPayloadContext context) {
+        context.enqueueWork(() -> {
+            net.minecraft.client.Minecraft.getInstance().setScreen(
+                new com.florentdubut.telecom.client.gui.AntennaScreen(payload)
+            );
         });
     }
 

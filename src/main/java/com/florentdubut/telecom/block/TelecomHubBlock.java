@@ -35,6 +35,10 @@ public class TelecomHubBlock extends Block implements EntityBlock, TelecomBlock 
         this.blockEntityTypeSupplier = blockEntityTypeSupplier;
     }
 
+    public NetworkNode.NodeType getHubType() {
+        return hubType;
+    }
+
     @Nullable
     @Override
     public BlockEntity newBlockEntity(BlockPos pos, BlockState state) {
