@@ -103,108 +103,116 @@ public class ModNetworking {
             com.florentdubut.telecom.network.packet.AntennaGuiSyncPayload.STREAM_CODEC,
             ModNetworking::handleAntennaGuiSync
         );
+
+        registrar.playToServer(
+            com.florentdubut.telecom.network.packet.AntennaRefreshRequestPayload.TYPE,
+            com.florentdubut.telecom.network.packet.AntennaRefreshRequestPayload.STREAM_CODEC,
+            ModNetworking::handleAntennaRefreshRequest
+        );
     }
 
     public static void scanForPlayer(ServerPlayer player) {
         ServerLevel level = player.serverLevel();
         TelecomNetworkGraph graph = TelecomNetworkGraph.get(level);
-        
-        AntennaBlockEntity bestAntenna = null;
-        float bestSignal = -1000f;
-        String finalTechLabel = "";
+
+        // Carrier Aggregation: collect ALL valid (antenna, frequency) pairs reachable by the player
+        // Each pair has a signal quality and a contribution to max down/up bandwidth.
+        record FreqHit(AntennaBlockEntity antenna, TelecomFrequency freq, float signal) {}
+        java.util.List<FreqHit> hits = new java.util.ArrayList<>();
 
         for (NetworkNode node : graph.getNodes()) {
-            if (node.getType() == NetworkNode.NodeType.ANTENNA) {
-                BlockEntity be = level.getBlockEntity(node.getPosition());
-                if (be instanceof AntennaBlockEntity antenna) {
-                    NetworkNode antennaNode = graph.getNode(antenna.getBlockPos());
-                    if (antennaNode == null || antennaNode.getIpAddress() == null) {
-                        continue; // Antenna is not connected to a Server!
-                    }
-                    
-                    // Group valid frequencies by tech
-                    java.util.Map<String, java.util.List<TelecomFrequency>> validFreqs = new java.util.HashMap<>();
-                    java.util.Map<TelecomFrequency, Float> signals = new java.util.HashMap<>();
-                    
-                    for (TelecomFrequency freq : TelecomFrequency.values()) {
-                        if (antenna.isFrequencyEnabled(freq)) {
-                            float signal = com.florentdubut.telecom.network.SignalPropagator.calculateSignal(level, antenna.getBlockPos(), player.blockPosition().above(), freq).powerDbm;
-                            
-                            if (signal > -120f) { // Valid connection
-                                validFreqs.computeIfAbsent(freq.getTechnology(), k -> new java.util.ArrayList<>()).add(freq);
-                                signals.put(freq, signal);
-                            }
-                        }
-                    }
-                    
-                    // Determine the best tech for this antenna
-                    String[] techOrder = {"5G", "4G", "3G", "2G"};
-                    for (String tech : techOrder) {
-                        if (validFreqs.containsKey(tech)) {
-                            java.util.List<TelecomFrequency> freqs = validFreqs.get(tech);
-                            
-                            float maxSignal = -1000f;
-                            java.util.List<String> bands = new java.util.ArrayList<>();
-                            
-                            for (TelecomFrequency f : freqs) {
-                                if (signals.get(f) > maxSignal) maxSignal = signals.get(f);
-                                bands.add(f.getFrequencyLabel());
-                            }
-                            
-                            String techName = tech + (freqs.size() > 1 ? "+" : "");
-                            String fullLabel = techName + " (" + String.join(", ", bands) + ")";
-                            
-                            // If this antenna provides a better signal or better tech than the previous best antenna
-                            // We'll score tech: 5G=5, 4G=4, etc.
-                            int currentTechScore = 5 - java.util.Arrays.asList(techOrder).indexOf(tech);
-                            int bestTechScore = 0;
-                            if (finalTechLabel.contains("5G")) bestTechScore = 5;
-                            else if (finalTechLabel.contains("4G")) bestTechScore = 4;
-                            else if (finalTechLabel.contains("3G")) bestTechScore = 3;
-                            else if (finalTechLabel.contains("2G")) bestTechScore = 2;
-                            
-                            if (currentTechScore > bestTechScore || (currentTechScore == bestTechScore && maxSignal > bestSignal)) {
-                                bestSignal = maxSignal;
-                                bestAntenna = antenna;
-                                finalTechLabel = fullLabel;
-                            }
-                            break; // Only pick the highest tech for this antenna
-                        }
-                    }
+            if (node.getType() != NetworkNode.NodeType.ANTENNA) continue;
+            if (node.getIpAddress() == null) continue; // Not connected to network
+
+            BlockEntity be = level.getBlockEntity(node.getPosition());
+            if (!(be instanceof AntennaBlockEntity antenna)) continue;
+
+            for (TelecomFrequency freq : TelecomFrequency.values()) {
+                if (!antenna.isFrequencyEnabled(freq)) continue;
+                float signal = com.florentdubut.telecom.network.SignalPropagator.calculateSignal(
+                    level, antenna.getBlockPos(), player.blockPosition().above(), freq).powerDbm;
+                if (signal > -120f) {
+                    hits.add(new FreqHit(antenna, freq, signal));
                 }
             }
         }
 
-        if (bestAntenna != null && !finalTechLabel.isEmpty()) {
-            // Recompute max capacities for the selected tech and frequencies
-            int maxDown = 0;
-            int maxUp = 0;
-            
-            String selectedTech = finalTechLabel.substring(0, 2);
-            for (TelecomFrequency freq : TelecomFrequency.values()) {
-                if (freq.getTechnology().equals(selectedTech) && finalTechLabel.contains(freq.getFrequencyLabel())) {
-                    // Base speed per frequency
-                    maxDown += freq.getMaxSpeedMb();
-                    
-                    // Upload is typically much slower on mobile networks
-                    if (selectedTech.equals("5G")) maxUp += freq.getMaxSpeedMb() * 0.15f;
-                    else if (selectedTech.equals("4G")) maxUp += freq.getMaxSpeedMb() * 0.25f;
-                    else if (selectedTech.equals("3G")) maxUp += freq.getMaxSpeedMb() * 0.1f;
-                    else maxUp += freq.getMaxSpeedMb() * 0.05f;
-                }
-            }
-            
-            // Signal degradation: -50 dBm is perfect (1.0x), -120 dBm is unusable (0.01x)
-            float signalQuality = Math.max(0.01f, Math.min(1.0f, (bestSignal + 120) / 70.0f));
-            maxDown = (int)(maxDown * signalQuality);
-            maxUp = Math.max(1, (int)(maxUp * signalQuality));
-            
-            // Generate a virtual mobile IP address
-            String mobileIp = "10.0." + (bestAntenna.getBlockPos().getX() % 255) + "." + (player.getId() % 255);
-            PacketDistributor.sendToPlayer(player, new NetworkScanResponsePayload(true, bestAntenna.getAntennaName(), (int)bestSignal, finalTechLabel, mobileIp, bestAntenna.getBlockPos(), maxDown, maxUp));
-        } else {
+        if (hits.isEmpty()) {
             PacketDistributor.sendToPlayer(player, new NetworkScanResponsePayload(false, "No Service", -120, "", "", BlockPos.ZERO, 0, 0));
+            return;
         }
+
+        // Determine the best technology available (5G > 4G > 3G > 2G)
+        String[] techOrder = {"5G", "4G", "3G", "2G"};
+        String bestTech = null;
+        for (String tech : techOrder) {
+            if (hits.stream().anyMatch(h -> h.freq().getTechnology().equals(tech))) {
+                bestTech = tech;
+                break;
+            }
+        }
+        final String activeTech = bestTech;
+
+        // Filter to only the best tech (phones aggregate within one tech family at a time)
+        java.util.List<FreqHit> activeHits = hits.stream()
+            .filter(h -> h.freq().getTechnology().equals(activeTech))
+            .toList();
+
+        // Aggregate: sum up max speeds per frequency, weighted by signal quality per hit
+        int totalMaxDown = 0;
+        int totalMaxUp = 0;
+
+        // Best signal across all active hits (for display)
+        float bestSignal = activeHits.stream().map(FreqHit::signal).max(Float::compareTo).orElse(-120f);
+
+        // Best antenna (the one with the best signal, used as "source" for routing)
+        AntennaBlockEntity primaryAntenna = activeHits.stream()
+            .max((a, b) -> Float.compare(a.signal(), b.signal()))
+            .map(FreqHit::antenna)
+            .orElse(null);
+        TelecomFrequency primaryFreq = activeHits.stream()
+            .max((a, b) -> Float.compare(a.signal(), b.signal()))
+            .map(FreqHit::freq)
+            .orElse(null);
+
+        // Build label listing all frequencies used
+        java.util.List<String> bandLabels = new java.util.ArrayList<>();
+        for (FreqHit hit : activeHits) {
+            // Signal quality per frequency (affects its contribution)
+            float signalQuality = Math.max(0.01f, Math.min(1.0f, (hit.signal() + 120) / 70.0f));
+            int freqDown = (int)(hit.freq().getMaxSpeedMb() * signalQuality);
+            int freqUp;
+            switch (activeTech) {
+                case "5G"  -> freqUp = (int)(hit.freq().getMaxSpeedMb() * 0.50f * signalQuality);
+                case "4G"  -> freqUp = (int)(hit.freq().getMaxSpeedMb() * 0.30f * signalQuality);
+                case "3G"  -> freqUp = (int)(hit.freq().getMaxSpeedMb() * 0.15f * signalQuality);
+                default    -> freqUp = (int)(hit.freq().getMaxSpeedMb() * 0.05f * signalQuality);
+            }
+            totalMaxDown += freqDown;
+            totalMaxUp   += Math.max(1, freqUp);
+            if (!bandLabels.contains(hit.freq().getFrequencyLabel())) {
+                bandLabels.add(hit.freq().getFrequencyLabel());
+            }
+        }
+
+        String techLabel = activeTech + (activeHits.size() > 1 ? "+" : "")
+            + " (" + String.join(", ", bandLabels) + ")";
+
+        // Mobile IP derived from primary antenna + player ID
+        String mobileIp = primaryAntenna != null
+            ? "10.0." + (primaryAntenna.getBlockPos().getX() % 255) + "." + (player.getId() % 255)
+            : "0.0.0.0";
+
+        PacketDistributor.sendToPlayer(player, new NetworkScanResponsePayload(
+            true,
+            primaryAntenna != null ? primaryAntenna.getAntennaName() : "Unknown",
+            (int) bestSignal,
+            techLabel,
+            mobileIp,
+            primaryAntenna != null ? primaryAntenna.getBlockPos() : BlockPos.ZERO,
+            totalMaxDown,
+            Math.max(1, totalMaxUp)
+        ));
     }
 
     private static void handleNetworkScanResponse(final NetworkScanResponsePayload payload, final IPayloadContext context) {
@@ -295,9 +303,15 @@ public class ModNetworking {
 
     private static void handleAntennaGuiSync(final com.florentdubut.telecom.network.packet.AntennaGuiSyncPayload payload, final IPayloadContext context) {
         context.enqueueWork(() -> {
-            net.minecraft.client.Minecraft.getInstance().setScreen(
-                new com.florentdubut.telecom.client.gui.AntennaScreen(payload)
-            );
+            net.minecraft.client.gui.screens.Screen current = net.minecraft.client.Minecraft.getInstance().screen;
+            if (current instanceof com.florentdubut.telecom.client.gui.AntennaScreen existing) {
+                // Refresh the live data without reopening the screen
+                existing.receiveUpdate(payload);
+            } else {
+                net.minecraft.client.Minecraft.getInstance().setScreen(
+                    new com.florentdubut.telecom.client.gui.AntennaScreen(payload)
+                );
+            }
         });
     }
 
@@ -318,6 +332,20 @@ public class ModNetworking {
     private static void handleRouterConfig(final com.florentdubut.telecom.network.packet.RouterConfigPayload payload, final IPayloadContext context) {
         context.enqueueWork(() -> {
             // Configuration is now hardcoded by the router tier. We ignore this packet.
+        });
+    }
+
+    private static void handleAntennaRefreshRequest(
+            final com.florentdubut.telecom.network.packet.AntennaRefreshRequestPayload payload,
+            final IPayloadContext context) {
+        context.enqueueWork(() -> {
+            if (context.player() instanceof ServerPlayer serverPlayer) {
+                ServerLevel level = serverPlayer.serverLevel();
+                net.minecraft.world.level.block.entity.BlockEntity be = level.getBlockEntity(payload.pos());
+                if (be instanceof AntennaBlockEntity antenna) {
+                    openAntennaGuiForPlayer(serverPlayer, antenna);
+                }
+            }
         });
     }
 
