@@ -129,15 +129,60 @@ canvas.addEventListener('wheel', e => {
     draw();
 });
 
+let tileCache = new Map();
+
 function draw() {
+    ctx.imageSmoothingEnabled = false; // keep pixels sharp
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
-    // Draw Grid (optional subtle background)
-    ctx.strokeStyle = 'rgba(255,255,255,0.02)';
+    // Calculate visible chunks
+    const visibleStartX = -pan.x / zoom;
+    const visibleStartZ = -pan.y / zoom;
+    const visibleEndX = (canvas.width - pan.x) / zoom;
+    const visibleEndZ = (canvas.height - pan.y) / zoom;
+
+    const minCx = Math.floor(visibleStartX / 16);
+    const minCz = Math.floor(visibleStartZ / 16);
+    const maxCx = Math.floor(visibleEndX / 16);
+    const maxCz = Math.floor(visibleEndZ / 16);
+
+    // Limit chunk fetching
+    if ((maxCx - minCx) * (maxCz - minCz) < 400) {
+        for (let cx = minCx; cx <= maxCx; cx++) {
+            for (let cz = minCz; cz <= maxCz; cz++) {
+                const key = `${cx},${cz}`;
+                if (!tileCache.has(key)) {
+                    // Mark as fetching
+                    tileCache.set(key, null);
+                    
+                    const img = new Image();
+                    img.crossOrigin = "Anonymous";
+                    img.src = `http://localhost:8080/api/tile?cx=${cx}&cz=${cz}`;
+                    img.onload = () => {
+                        tileCache.set(key, img);
+                        draw(); // trigger redraw when image loads
+                    };
+                    img.onerror = () => {
+                        // If 404 (chunk not generated), store false to avoid refetching
+                        tileCache.set(key, false);
+                    };
+                } else {
+                    const img = tileCache.get(key);
+                    if (img && img !== false) {
+                        ctx.drawImage(img, cx * 16 * zoom + pan.x, cz * 16 * zoom + pan.y, 16.2 * zoom, 16.2 * zoom);
+                        // Note: slightly larger than 16 (16.2) to prevent anti-aliasing gaps between tiles
+                    }
+                }
+            }
+        }
+    }
+
+    // Draw Grid overlay
+    ctx.strokeStyle = 'rgba(255,255,255,0.05)';
     ctx.lineWidth = 1;
-    const gridSize = 50 * zoom;
-    const offsetX = pan.x % gridSize;
-    const offsetY = pan.y % gridSize;
+    const gridSize = 16 * zoom;
+    const offsetX = (pan.x % gridSize + gridSize) % gridSize;
+    const offsetY = (pan.y % gridSize + gridSize) % gridSize;
     
     ctx.beginPath();
     for (let x = offsetX; x < canvas.width; x += gridSize) {
@@ -164,7 +209,7 @@ function draw() {
             const y2 = n2.z * zoom + pan.y;
             
             // Saturation logic
-            let color = 'rgba(255, 255, 255, 0.2)';
+            let color = 'rgba(255, 255, 255, 0.4)';
             let isSaturated = edge.usage > edge.capacity;
             
             if (isSaturated) color = 'rgba(239, 68, 68, 0.8)'; // Red

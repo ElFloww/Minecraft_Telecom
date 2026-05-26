@@ -30,6 +30,8 @@ public class TelecomHttpServer {
             server = HttpServer.create(new InetSocketAddress(8080), 0);
             server.createContext("/api/network", new NetworkMapHandler());
             
+            server.createContext("/api/tile", new TileMapHandler());
+            
             // Handle CORS for local dev
             server.createContext("/", exchange -> {
                 exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
@@ -59,6 +61,103 @@ public class TelecomHttpServer {
         if (server != null) {
             server.stop(0);
             System.out.println("Telecom HTTP Server stopped");
+        }
+    }
+    
+    class TileMapHandler implements HttpHandler {
+        private final java.util.Map<Long, byte[]> tileCache = new java.util.concurrent.ConcurrentHashMap<>();
+
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
+            
+            if (minecraftServer == null) {
+                sendEmptyResponse(exchange, 500);
+                return;
+            }
+
+            ServerLevel level = minecraftServer.overworld();
+            if (level == null) {
+                sendEmptyResponse(exchange, 500);
+                return;
+            }
+
+            String query = exchange.getRequestURI().getQuery();
+            if (query == null) {
+                sendEmptyResponse(exchange, 400);
+                return;
+            }
+
+            int cx = 0;
+            int cz = 0;
+            for (String param : query.split("&")) {
+                String[] pair = param.split("=");
+                if (pair.length == 2) {
+                    if (pair[0].equals("cx")) cx = Integer.parseInt(pair[1]);
+                    if (pair[0].equals("cz")) cz = Integer.parseInt(pair[1]);
+                }
+            }
+
+            long chunkKey = net.minecraft.world.level.ChunkPos.asLong(cx, cz);
+            if (tileCache.containsKey(chunkKey)) {
+                sendImage(exchange, tileCache.get(chunkKey));
+                return;
+            }
+
+            net.minecraft.world.level.chunk.ChunkAccess chunk = level.getChunkSource().getChunk(cx, cz, net.minecraft.world.level.chunk.status.ChunkStatus.FULL, false);
+            if (chunk == null) {
+                // Chunk not generated or loaded, return 404
+                sendEmptyResponse(exchange, 404);
+                return;
+            }
+
+            java.awt.image.BufferedImage image = new java.awt.image.BufferedImage(16, 16, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+
+            for (int x = 0; x < 16; x++) {
+                for (int z = 0; z < 16; z++) {
+                    int globalX = cx * 16 + x;
+                    int globalZ = cz * 16 + z;
+                    int y = level.getHeight(net.minecraft.world.level.levelgen.Heightmap.Types.WORLD_SURFACE, globalX, globalZ);
+                    BlockPos pos = new BlockPos(globalX, y - 1, globalZ);
+                    net.minecraft.world.level.block.state.BlockState state = level.getBlockState(pos);
+                    
+                    int color = 0xFF000000 | state.getMapColor(level, pos).col;
+                    
+                    // Simple shading based on height parity
+                    if (y % 2 == 0) {
+                        color = darken(color, 0.9f);
+                    }
+                    
+                    image.setRGB(x, z, color); // Note: x is x, z is y in image coordinates
+                }
+            }
+
+            java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+            javax.imageio.ImageIO.write(image, "png", baos);
+            byte[] bytes = baos.toByteArray();
+            
+            tileCache.put(chunkKey, bytes);
+            sendImage(exchange, bytes);
+        }
+        
+        private int darken(int color, float factor) {
+            int a = (color >> 24) & 0xFF;
+            int r = (int)(((color >> 16) & 0xFF) * factor);
+            int g = (int)(((color >> 8) & 0xFF) * factor);
+            int b = (int)((color & 0xFF) * factor);
+            return (a << 24) | (r << 16) | (g << 8) | b;
+        }
+
+        private void sendEmptyResponse(HttpExchange exchange, int code) throws IOException {
+            exchange.sendResponseHeaders(code, -1);
+        }
+
+        private void sendImage(HttpExchange exchange, byte[] bytes) throws IOException {
+            exchange.getResponseHeaders().add("Content-Type", "image/png");
+            exchange.sendResponseHeaders(200, bytes.length);
+            OutputStream os = exchange.getResponseBody();
+            os.write(bytes);
+            os.close();
         }
     }
 
