@@ -9,6 +9,23 @@ public class NetworkNode {
     private String networkCidr; // e.g. "10.1.0.0/16" for NRO, "10.1.2.0/24" for PM
     private int currentUsageDown = 0;
     private int currentUsageUp = 0;
+    private int frequenciesMask = 0;
+    private int capacityDown = 1000;
+    private int capacityUp = 1000;
+
+    public int getCapacityDown() { return capacityDown; }
+    public void setCapacityDown(int capacityDown) { this.capacityDown = capacityDown; }
+
+    public int getCapacityUp() { return capacityUp; }
+    public void setCapacityUp(int capacityUp) { this.capacityUp = capacityUp; }
+
+    public int getFrequenciesMask() {
+        return frequenciesMask;
+    }
+
+    public void setFrequenciesMask(int frequenciesMask) {
+        this.frequenciesMask = frequenciesMask;
+    }
 
     public enum NodeType {
         SERVER,

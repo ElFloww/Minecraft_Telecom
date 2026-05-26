@@ -44,6 +44,12 @@ public class SignalPropagator {
                 continue;
             }
             
+            if (!level.hasChunkAt(currentBlock)) {
+                currentPower -= freq.getBaseAttenuation();
+                consecutiveSolidBlocks = 0;
+                continue;
+            }
+            
             BlockState state = level.getBlockState(currentBlock);
             if (!state.isAir()) {
                 // Ignore non-solid blocks like grass, flowers, torches

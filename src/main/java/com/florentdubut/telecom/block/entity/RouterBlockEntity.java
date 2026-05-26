@@ -58,6 +58,8 @@ public class RouterBlockEntity extends BlockEntity {
         if (level instanceof ServerLevel serverLevel) {
             TelecomNetworkGraph graph = TelecomNetworkGraph.get(serverLevel);
             NetworkNode node = new NetworkNode(worldPosition, NetworkNode.NodeType.ROUTER);
+            node.setCapacityDown(getConfiguredMaxDown());
+            node.setCapacityUp(getConfiguredMaxUp());
             graph.addNode(node);
             
             com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel);

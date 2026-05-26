@@ -44,6 +44,15 @@ public class TelecomNetworkGraph extends SavedData {
             if (nodeTag.contains("CIDR")) {
                 node.setNetworkCidr(nodeTag.getString("CIDR"));
             }
+            if (nodeTag.contains("FreqMask")) {
+                node.setFrequenciesMask(nodeTag.getInt("FreqMask"));
+            }
+            if (nodeTag.contains("CapDown")) {
+                node.setCapacityDown(nodeTag.getInt("CapDown"));
+            }
+            if (nodeTag.contains("CapUp")) {
+                node.setCapacityUp(nodeTag.getInt("CapUp"));
+            }
             graph.nodes.put(pos, node);
         }
 
@@ -82,6 +91,9 @@ public class TelecomNetworkGraph extends SavedData {
             if (node.getNetworkCidr() != null) {
                 nodeTag.putString("CIDR", node.getNetworkCidr());
             }
+            nodeTag.putInt("FreqMask", node.getFrequenciesMask());
+            nodeTag.putInt("CapDown", node.getCapacityDown());
+            nodeTag.putInt("CapUp", node.getCapacityUp());
             nodesTag.add(nodeTag);
         }
         tag.put("Nodes", nodesTag);

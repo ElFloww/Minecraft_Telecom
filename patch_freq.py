@@ -1,4 +1,6 @@
-package com.florentdubut.telecom.network;
+import sys
+
+content = """package com.florentdubut.telecom.network;
 
 public enum TelecomFrequency {
     // 2G
@@ -81,3 +83,7 @@ public enum TelecomFrequency {
         return genScore + maxSpeedMb;
     }
 }
+"""
+
+with open("src/main/java/com/florentdubut/telecom/network/TelecomFrequency.java", "w") as f:
+    f.write(content)

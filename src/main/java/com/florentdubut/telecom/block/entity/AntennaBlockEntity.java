@@ -26,6 +26,7 @@ public class AntennaBlockEntity extends BlockEntity {
         if (level instanceof ServerLevel serverLevel) {
             TelecomNetworkGraph graph = TelecomNetworkGraph.get(serverLevel);
             NetworkNode node = new NetworkNode(worldPosition, NetworkNode.NodeType.ANTENNA);
+            node.setFrequenciesMask(enabledFrequenciesMask);
             graph.addNode(node);
             com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel);
         }
@@ -88,6 +89,15 @@ public class AntennaBlockEntity extends BlockEntity {
     public void setEnabledFrequenciesMask(int mask) {
         this.enabledFrequenciesMask = mask;
         setChanged();
-        if (level != null) level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 3);
+        if (level != null) {
+            level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 3);
+            if (!level.isClientSide() && level instanceof net.minecraft.server.level.ServerLevel serverLevel) {
+                com.florentdubut.telecom.network.TelecomNetworkGraph graph = com.florentdubut.telecom.network.TelecomNetworkGraph.get(serverLevel);
+                com.florentdubut.telecom.network.NetworkNode node = graph.getNode(worldPosition);
+                if (node != null) {
+                    node.setFrequenciesMask(mask);
+                }
+            }
+        }
     }
 }

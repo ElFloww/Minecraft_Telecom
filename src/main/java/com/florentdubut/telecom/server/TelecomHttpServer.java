@@ -31,7 +31,7 @@ public class TelecomHttpServer {
             server.createContext("/api/network", new NetworkMapHandler());
             
             server.createContext("/api/tile", new TileMapHandler());
-            server.createContext("/api/coverage_tile", new CoverageTileHandler());
+            server.createContext("/api/coverage_map", new CoverageMapHandler());
             server.createContext("/api/speedtest", new SpeedtestHandler());
             
             // Handle CORS for local dev
@@ -210,19 +210,13 @@ public class TelecomHttpServer {
                 
                 NetworkNode node = graph.getNode(pos);
                 if (node == null || node.getType() != NetworkNode.NodeType.ROUTER) {
+                    System.out.println("Node is null or not router: " + pos + " node=" + node);
                     sendEmptyResponse(exchange, 404);
                     return;
                 }
                 
-                net.minecraft.world.level.block.entity.BlockEntity be = level.getBlockEntity(pos);
-                if (!(be instanceof com.florentdubut.telecom.block.entity.RouterBlockEntity)) {
-                    sendEmptyResponse(exchange, 404);
-                    return;
-                }
-                
-                com.florentdubut.telecom.block.entity.RouterBlockEntity router = (com.florentdubut.telecom.block.entity.RouterBlockEntity) be;
-                int maxDown = router.getConfiguredMaxDown();
-                int maxUp = router.getConfiguredMaxUp();
+                int maxDown = payload.has("maxDown") ? payload.get("maxDown").getAsInt() : node.getCapacityDown();
+                int maxUp = payload.has("maxUp") ? payload.get("maxUp").getAsInt() : node.getCapacityUp();
                 String ip = node.getIpAddress() != null ? node.getIpAddress() : "0.0.0.0";
                 
                 // For web-initiated tests, player is null
@@ -247,9 +241,12 @@ public class TelecomHttpServer {
         }
     }
 
-    class CoverageTileHandler implements HttpHandler {
+        class CoverageMapHandler implements HttpHandler {
+        private final java.util.Map<String, String> cache = new java.util.concurrent.ConcurrentHashMap<>();
+        private long lastCacheClear = 0;
+
         @Override
-        public void handle(HttpExchange exchange) throws IOException {
+        public void handle(HttpExchange exchange) throws java.io.IOException {
             exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
             
             if (minecraftServer == null || minecraftServer.overworld() == null) {
@@ -257,111 +254,144 @@ public class TelecomHttpServer {
                 return;
             }
 
-            ServerLevel level = minecraftServer.overworld();
-            TelecomNetworkGraph graph = TelecomNetworkGraph.get(level);
+            net.minecraft.server.level.ServerLevel level = minecraftServer.overworld();
+            com.florentdubut.telecom.network.TelecomNetworkGraph graph = com.florentdubut.telecom.network.TelecomNetworkGraph.get(level);
 
+            java.util.Map<String, String> queryPairs = new java.util.HashMap<>();
             String query = exchange.getRequestURI().getQuery();
-            if (query == null) {
-                sendEmptyResponse(exchange, 400);
-                return;
-            }
-
-            int cx = 0;
-            int cz = 0;
-            String techFilter = null;
-            for (String param : query.split("&")) {
-                String[] pair = param.split("=");
-                if (pair.length == 2) {
-                    if (pair[0].equals("cx")) cx = Integer.parseInt(pair[1]);
-                    if (pair[0].equals("cz")) cz = Integer.parseInt(pair[1]);
-                    if (pair[0].equals("tech")) techFilter = pair[1]; // e.g. "5G"
+            if (query != null) {
+                String[] pairs = query.split("&");
+                for (String pair : pairs) {
+                    int idx = pair.indexOf("=");
+                    if (idx > 0) {
+                        queryPairs.put(pair.substring(0, idx), pair.substring(idx + 1));
+                    }
                 }
             }
-            
+
+            String techFilter = queryPairs.get("tech");
             if (techFilter == null) {
                 sendEmptyResponse(exchange, 400);
                 return;
             }
+            
+            // Un-escape URL encoding
+            techFilter = java.net.URLDecoder.decode(techFilter, java.nio.charset.StandardCharsets.UTF_8);
 
-            // Find all active antennas that broadcast this technology
-            java.util.List<com.florentdubut.telecom.block.entity.AntennaBlockEntity> activeAntennas = new java.util.ArrayList<>();
-            for (NetworkNode node : graph.getNodes()) {
-                if (node.getType() == NetworkNode.NodeType.ANTENNA) {
-                    net.minecraft.world.level.block.entity.BlockEntity be = level.getBlockEntity(node.getPosition());
-                    if (be instanceof com.florentdubut.telecom.block.entity.AntennaBlockEntity antenna) {
-                        boolean hasTech = false;
-                        for (TelecomFrequency freq : TelecomFrequency.values()) {
-                            if (antenna.isFrequencyEnabled(freq) && freq.getTechnology().equals(techFilter)) {
-                                hasTech = true;
-                                break;
-                            }
+            // Simple cache invalidation every 30 seconds to refresh coverage
+            long now = System.currentTimeMillis();
+            if (now - lastCacheClear > 30000) {
+                cache.clear();
+                lastCacheClear = now;
+            }
+
+            if (cache.containsKey(techFilter)) {
+                String response = cache.get(techFilter);
+                exchange.getResponseHeaders().set("Content-Type", "application/json");
+                exchange.sendResponseHeaders(200, response.getBytes().length);
+                java.io.OutputStream os = exchange.getResponseBody();
+                os.write(response.getBytes());
+                os.close();
+                return;
+            }
+
+            java.util.List<com.florentdubut.telecom.network.NetworkNode> activeAntennas = new java.util.ArrayList<>();
+            for (com.florentdubut.telecom.network.NetworkNode node : graph.getNodes()) {
+                if (node.getType() == com.florentdubut.telecom.network.NetworkNode.NodeType.ANTENNA) {
+                    int mask = node.getFrequenciesMask();
+                    boolean hasTech = false;
+                    for (com.florentdubut.telecom.network.TelecomFrequency freq : com.florentdubut.telecom.network.TelecomFrequency.values()) {
+                        if (((mask & (1 << freq.ordinal())) != 0) && freq.getTechnology().equals(techFilter)) {
+                            hasTech = true;
+                            break;
                         }
-                        if (hasTech) activeAntennas.add(antenna);
+                    }
+                    if (hasTech) activeAntennas.add(node);
+                }
+            }
+
+            int maxRangeBlocks = 0;
+            for (com.florentdubut.telecom.network.TelecomFrequency freq : com.florentdubut.telecom.network.TelecomFrequency.values()) {
+                if (freq.getTechnology().equals(techFilter)) {
+                    int d = 1;
+                    while (d <= 1500) {
+                        float loss = (float) (20 * Math.log10(d) + 20 * Math.log10(freq.getFrequencyMhz()) - 27.55 + d * freq.getBaseAttenuation());
+                        if (-loss <= -120) break;
+                        d++;
+                    }
+                    if (d > maxRangeBlocks) maxRangeBlocks = d;
+                }
+            }
+            if (maxRangeBlocks > 1000) maxRangeBlocks = 1000;
+            int maxChunks = (int) Math.ceil(maxRangeBlocks / 16.0);
+
+            // Map ChunkPos to max powerDbm
+            java.util.Map<Long, Float> coverageMap = new java.util.HashMap<>();
+
+            for (com.florentdubut.telecom.network.NetworkNode antenna : activeAntennas) {
+                net.minecraft.core.BlockPos antPos = antenna.getPosition();
+                int antCx = antPos.getX() >> 4;
+                int antCz = antPos.getZ() >> 4;
+
+                int mask = antenna.getFrequenciesMask();
+                java.util.List<com.florentdubut.telecom.network.TelecomFrequency> activeFreqs = new java.util.ArrayList<>();
+                for (com.florentdubut.telecom.network.TelecomFrequency freq : com.florentdubut.telecom.network.TelecomFrequency.values()) {
+                    if (((mask & (1 << freq.ordinal())) != 0) && freq.getTechnology().equals(techFilter)) {
+                        activeFreqs.add(freq);
+                    }
+                }
+
+                for (int cx = antCx - maxChunks; cx <= antCx + maxChunks; cx++) {
+                    for (int cz = antCz - maxChunks; cz <= antCz + maxChunks; cz++) {
+                        int worldX = cx * 16 + 8;
+                        int worldZ = cz * 16 + 8;
+                        double distance = Math.sqrt(Math.pow(worldX - antPos.getX(), 2) + Math.pow(worldZ - antPos.getZ(), 2));
+                        if (distance > maxRangeBlocks) continue;
+
+                        int y = level.getHeight(net.minecraft.world.level.levelgen.Heightmap.Types.WORLD_SURFACE, worldX, worldZ);
+                        if (y <= level.getMinBuildHeight() + 1) y = 64; // Fallback for unloaded chunk
+
+                        net.minecraft.core.BlockPos targetPos = new net.minecraft.core.BlockPos(worldX, y + 1, worldZ);
+                        
+                        float bestPower = -999f;
+                        for (com.florentdubut.telecom.network.TelecomFrequency freq : activeFreqs) {
+                            com.florentdubut.telecom.network.SignalPropagator.SignalResult res = com.florentdubut.telecom.network.SignalPropagator.calculateSignal(level, antPos, targetPos, freq);
+                            if (res.powerDbm > bestPower) bestPower = res.powerDbm;
+                        }
+
+                        if (bestPower > -120f) {
+                            long key = ((long) cx << 32) | (cz & 0xFFFFFFFFL);
+                            coverageMap.put(key, Math.max(coverageMap.getOrDefault(key, -999f), bestPower));
+                        }
                     }
                 }
             }
 
-            java.awt.image.BufferedImage image = new java.awt.image.BufferedImage(16, 16, java.awt.image.BufferedImage.TYPE_INT_ARGB);
-            
-            // Render heatmap
-            for (int x = 0; x < 16; x++) {
-                for (int z = 0; z < 16; z++) {
-                    int globalX = cx * 16 + x;
-                    int globalZ = cz * 16 + z;
-                    int y = level.getHeight(net.minecraft.world.level.levelgen.Heightmap.Types.WORLD_SURFACE, globalX, globalZ);
-                    BlockPos pos = new BlockPos(globalX, y, globalZ);
-                    
-                    float bestSignal = -1000f;
-                    
-                    for (com.florentdubut.telecom.block.entity.AntennaBlockEntity antenna : activeAntennas) {
-                        BlockPos antPos = antenna.getBlockPos();
-                        double distance = Math.sqrt(pos.distSqr(antPos));
-                        
-                        // Range optimization to avoid calculating for very far antennas
-                        if (distance > 500) continue; 
-                        
-                        for (TelecomFrequency freq : TelecomFrequency.values()) {
-                            if (antenna.isFrequencyEnabled(freq) && freq.getTechnology().equals(techFilter)) {
-                                // Simplified Free-space path loss formula
-                                float freeSpaceLoss = (float) (20 * Math.log10(Math.max(1, distance)) + 20 * Math.log10(freq.getFrequencyMhz()) - 27.55);
-                                float power = -freeSpaceLoss;
-                                
-                                // Vertical penalty if antenna is below the block
-                                if (antPos.getY() < y) {
-                                    power -= (y - antPos.getY()) * 0.5f;
-                                }
-                                
-                                if (power > bestSignal) {
-                                    bestSignal = power;
-                                }
-                            }
-                        }
-                    }
-                    
-                    int color = 0x00000000; // Transparent
-                    if (bestSignal > -120f) {
-                        // Map signal to a color
-                        if (bestSignal > -60f) {
-                            color = 0x8822cc44; // Strong (Green, semi-transparent)
-                        } else if (bestSignal > -90f) {
-                            color = 0x88ffcc00; // Medium (Yellow, semi-transparent)
-                        } else {
-                            color = 0x88ff3333; // Weak (Red, semi-transparent)
-                        }
-                    }
-                    
-                    image.setRGB(x, z, color);
-                }
+            com.google.gson.JsonArray responseArray = new com.google.gson.JsonArray();
+            for (java.util.Map.Entry<Long, Float> entry : coverageMap.entrySet()) {
+                long key = entry.getKey();
+                int cx = (int) (key >> 32);
+                int cz = (int) key;
+                float power = entry.getValue();
+                
+                int levelColor = 1; // weak
+                if (power > -80f) levelColor = 3; // strong
+                else if (power > -100f) levelColor = 2; // medium
+                
+                com.google.gson.JsonArray tile = new com.google.gson.JsonArray();
+                tile.add(cx);
+                tile.add(cz);
+                tile.add(levelColor);
+                responseArray.add(tile);
             }
 
-            java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
-            javax.imageio.ImageIO.write(image, "png", baos);
-            byte[] bytes = baos.toByteArray();
-            
-            exchange.getResponseHeaders().add("Content-Type", "image/png");
-            exchange.sendResponseHeaders(200, bytes.length);
-            OutputStream os = exchange.getResponseBody();
-            os.write(bytes);
+            String jsonResponse = responseArray.toString();
+            cache.put(techFilter, jsonResponse);
+
+            exchange.getResponseHeaders().set("Content-Type", "application/json");
+            exchange.sendResponseHeaders(200, jsonResponse.getBytes().length);
+            java.io.OutputStream os = exchange.getResponseBody();
+            os.write(jsonResponse.getBytes());
             os.close();
         }
         
@@ -417,11 +447,8 @@ public class TelecomHttpServer {
                     case NRA, PM -> { capacityDown = 100000; capacityUp = 100000; }
                     case SR -> { capacityDown = 10000; capacityUp = 10000; }
                     case ROUTER -> {
-                        net.minecraft.world.level.block.entity.BlockEntity be = level.getBlockEntity(node.getPosition());
-                        if (be instanceof com.florentdubut.telecom.block.entity.RouterBlockEntity router) {
-                            capacityDown = router.getConfiguredMaxDown();
-                            capacityUp = router.getConfiguredMaxUp();
-                        }
+                        capacityDown = node.getCapacityDown();
+                        capacityUp = node.getCapacityUp();
                     }
                     case ANTENNA -> { capacityDown = 1000; capacityUp = 1000; }
                 }
