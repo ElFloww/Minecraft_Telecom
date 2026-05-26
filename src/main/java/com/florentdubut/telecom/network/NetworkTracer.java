@@ -36,26 +36,7 @@ public class NetworkTracer {
         };
     }
 
-    public static boolean isArchitecturallyValid(NetworkNode.NodeType a, NetworkNode.NodeType b) {
-        if (a == b) {
-            return a == NetworkNode.NodeType.SERVER || a == NetworkNode.NodeType.NRO;
-        }
-        Set<NetworkNode.NodeType> pair = new HashSet<>(Arrays.asList(a, b));
-        if (pair.contains(NetworkNode.NodeType.SERVER) && pair.contains(NetworkNode.NodeType.NRO)) return true;
-        if (pair.contains(NetworkNode.NodeType.NRO) && pair.contains(NetworkNode.NodeType.PM)) return true;
-        if (pair.contains(NetworkNode.NodeType.NRO) && pair.contains(NetworkNode.NodeType.NRA)) return true;
-        if (pair.contains(NetworkNode.NodeType.PM) && pair.contains(NetworkNode.NodeType.ROUTER)) return true;
-        if (pair.contains(NetworkNode.NodeType.PM) && pair.contains(NetworkNode.NodeType.ANTENNA)) return true;
-        if (pair.contains(NetworkNode.NodeType.NRA) && pair.contains(NetworkNode.NodeType.SR)) return true;
-        if (pair.contains(NetworkNode.NodeType.SR) && pair.contains(NetworkNode.NodeType.ROUTER)) return true;
-        if (pair.contains(NetworkNode.NodeType.SR) && pair.contains(NetworkNode.NodeType.ANTENNA)) return true;
-        if (pair.contains(NetworkNode.NodeType.NRA) && pair.contains(NetworkNode.NodeType.ROUTER)) return true;
-        if (pair.contains(NetworkNode.NodeType.NRA) && pair.contains(NetworkNode.NodeType.ANTENNA)) return true;
-        return false;
-    }
-
     public static boolean isCableCompatibleWithNodes(NetworkEdge.EdgeType cableType, NetworkNode.NodeType a, NetworkNode.NodeType b) {
-        if (!isArchitecturallyValid(a, b)) return false;
         return doesNodeAcceptCable(a, cableType) && doesNodeAcceptCable(b, cableType);
     }
 
@@ -150,18 +131,11 @@ public class NetworkTracer {
         assignHierarchicalIps(graph);
     }
 
-    /**
-     * Assigns IPs hierarchically:
-     *   Server: 0.0.0.0/0 (internet gateway)
-     *   NRO:    10.X.0.1  (gateway of /16: 10.X.0.0/16), X = 1..254
-     *   PM:     10.X.Y.1  (gateway of /24: 10.X.Y.0/24), Y = 1..254
-     *   Router/Antenna: 10.X.Y.Z, Z = 2..254
-     */
     private static void assignHierarchicalIps(TelecomNetworkGraph graph) {
-        // Start from Servers
         int nroIndex = 1;
+        Map<Integer, Integer> pmIndexMap = new HashMap<>(); // X -> next Y
+        Map<String, Integer> deviceIndexMap = new HashMap<>(); // parentCidr -> next Z
 
-        // Build adjacency for BFS
         Map<BlockPos, List<BlockPos>> adj = new HashMap<>();
         for (NetworkEdge edge : graph.getEdges()) {
             adj.computeIfAbsent(edge.getNodeA(), k -> new ArrayList<>()).add(edge.getNodeB());
@@ -181,7 +155,6 @@ public class NetworkTracer {
             }
         }
 
-        // BFS outward, assigning IPs by layer
         while (!queue.isEmpty()) {
             NetworkNode current = queue.poll();
             List<BlockPos> neighbors = adj.getOrDefault(current.getPosition(), Collections.emptyList());
@@ -193,42 +166,37 @@ public class NetworkTracer {
 
                 visited.add(neighborPos);
 
-                // Determine IP based on parent context
+                String parentCidr = current.getNetworkCidr();
+                int x = 0;
+                int y = 0;
+
+                if (parentCidr != null) {
+                    String[] parts = parentCidr.split("[./]");
+                    if (parts.length >= 2) x = Integer.parseInt(parts[1]);
+                    if (parts.length >= 3) y = Integer.parseInt(parts[2]);
+                }
+
                 switch (neighbor.getType()) {
                     case NRO -> {
-                        int x = nroIndex++;
-                        neighbor.setIpAddress("10." + x + ".0.1");
-                        neighbor.setNetworkCidr("10." + x + ".0.0/16");
+                        int currentX = nroIndex++;
+                        neighbor.setIpAddress("10." + currentX + ".0.1");
+                        neighbor.setNetworkCidr("10." + currentX + ".0.0/16");
                     }
                     case PM -> {
-                        // Determine which NRO is the parent (the current node or its parent)
-                        String parentCidr = current.getNetworkCidr();
-                        if (parentCidr != null && parentCidr.contains("/16")) {
-                            // parent is NRO: extract X
-                            String[] parts = parentCidr.split("\\.");
-                            int x = Integer.parseInt(parts[1]);
-                            int y = countChildrenOfType(graph, adj, current, NetworkNode.NodeType.PM, visited) + 1;
-                            neighbor.setIpAddress("10." + x + "." + y + ".1");
-                            neighbor.setNetworkCidr("10." + x + "." + y + ".0/24");
-                        } else {
-                            neighbor.setIpAddress("10.0.1.1");
-                            neighbor.setNetworkCidr("10.0.1.0/24");
-                        }
+                        int currentY = pmIndexMap.computeIfAbsent(x, k -> 1);
+                        pmIndexMap.put(x, currentY + 1);
+                        neighbor.setIpAddress("10." + x + "." + currentY + ".1");
+                        neighbor.setNetworkCidr("10." + x + "." + currentY + ".0/24");
                     }
                     case ROUTER, ANTENNA, NRA, SR -> {
-                        String parentCidr = current.getNetworkCidr();
                         if (parentCidr != null && parentCidr.contains("/24")) {
-                            String[] parts = parentCidr.split("[./]");
-                            int x = Integer.parseInt(parts[1]);
-                            int y = Integer.parseInt(parts[2]);
-                            int z = countChildrenOfType(graph, adj, current, neighbor.getType(), visited) + 2;
+                            int z = deviceIndexMap.computeIfAbsent(parentCidr, k -> 2);
+                            deviceIndexMap.put(parentCidr, z + 1);
                             neighbor.setIpAddress("10." + x + "." + y + "." + z);
                             neighbor.setNetworkCidr(parentCidr);
                         } else if (parentCidr != null && parentCidr.contains("/16")) {
-                            // Directly under NRO (e.g. antenna or router without PM) — legacy fallback
-                            String[] parts = parentCidr.split("[./]");
-                            int x = Integer.parseInt(parts[1]);
-                            int z = countChildrenOfType(graph, adj, current, neighbor.getType(), visited) + 2;
+                            int z = deviceIndexMap.computeIfAbsent(parentCidr, k -> 2);
+                            deviceIndexMap.put(parentCidr, z + 1);
                             neighbor.setIpAddress("10." + x + ".0." + z);
                             neighbor.setNetworkCidr(parentCidr);
                         } else {
@@ -236,7 +204,7 @@ public class NetworkTracer {
                             neighbor.setNetworkCidr("10.0.0.0/24");
                         }
                     }
-                    default -> {} // SERVER handled above, PHONE not in graph
+                    default -> {} 
                 }
 
                 queue.add(neighbor);
@@ -244,21 +212,6 @@ public class NetworkTracer {
         }
 
         graph.setDirty();
-    }
-
-    /** Counts already-assigned children of a given type from a parent node, to generate unique Z/Y indices */
-    private static int countChildrenOfType(TelecomNetworkGraph graph, Map<BlockPos, List<BlockPos>> adj,
-                                           NetworkNode parent, NetworkNode.NodeType childType,
-                                           Set<BlockPos> alreadyVisited) {
-        int count = 0;
-        List<BlockPos> neighbors = adj.getOrDefault(parent.getPosition(), Collections.emptyList());
-        for (BlockPos nPos : neighbors) {
-            NetworkNode n = graph.getNode(nPos);
-            if (n != null && n.getType() == childType && alreadyVisited.contains(nPos) && n.getIpAddress() != null) {
-                count++;
-            }
-        }
-        return count;
     }
 
     private static class TraceStep {
