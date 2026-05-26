@@ -36,6 +36,7 @@ public class TelecomHttpServer {
             
             server.createContext("/api/player", exchange -> {
                 exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
+            exchange.getResponseHeaders().add("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
                 if (minecraftServer == null || minecraftServer.overworld() == null || minecraftServer.overworld().players().isEmpty()) {
                     exchange.sendResponseHeaders(404, -1);
                     exchange.close();
@@ -113,6 +114,7 @@ public class TelecomHttpServer {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
             exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
+            exchange.getResponseHeaders().add("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
             
             if (minecraftServer == null) {
                 exchange.sendResponseHeaders(500, -1); exchange.close();
@@ -208,6 +210,7 @@ public class TelecomHttpServer {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
             exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
+            exchange.getResponseHeaders().add("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
             if (!exchange.getRequestMethod().equalsIgnoreCase("POST")) {
                 sendEmptyResponse(exchange, 405);
                 return;
@@ -270,6 +273,7 @@ public class TelecomHttpServer {
         @Override
         public void handle(HttpExchange exchange) throws java.io.IOException {
             exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
+            exchange.getResponseHeaders().add("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
             
             if (minecraftServer == null || minecraftServer.overworld() == null) {
                 exchange.sendResponseHeaders(500, -1); exchange.close();
@@ -426,6 +430,7 @@ public class TelecomHttpServer {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
             exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
+            exchange.getResponseHeaders().add("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
             exchange.getResponseHeaders().add("Content-Type", "application/json");
 
             if (minecraftServer == null) {
@@ -540,6 +545,7 @@ public class TelecomHttpServer {
         @Override
         public void handle(HttpExchange exchange) throws java.io.IOException {
             exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
+            exchange.getResponseHeaders().add("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
             
             if (minecraftServer == null || minecraftServer.overworld() == null) {
                 exchange.sendResponseHeaders(500, -1); exchange.close();

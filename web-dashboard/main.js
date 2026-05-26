@@ -41,7 +41,7 @@ window.addEventListener('resize', resize);
 let initialCenterDone = false;
 async function fetchNetworkData() {
     try {
-        const res = await fetch('/api/network');
+        const res = await fetch('/api/network?t=' + Date.now());
         if (res.ok) {
             networkData = await res.json();
             document.getElementById('stat-nodes').innerText = networkData.nodes.length;
@@ -70,7 +70,7 @@ async function fetchNetworkData() {
 setTimeout(async () => {
     if (!initialCenterDone) {
         try {
-            const res = await fetch('/api/player');
+            const res = await fetch('/api/player?t=' + Date.now());
             if (res.ok) {
                 const p = await res.json();
                 pan.x = canvas.width / 2 - (p.x * zoom);
@@ -373,7 +373,7 @@ const nperfColors = {
 
 async function fetchNperfData() {
     try {
-        const response = await fetch('/api/nperf_map');
+        const response = await fetch('/api/nperf_map?t=' + Date.now());
         if (!response.ok) return;
         nperfData = await response.json();
         
