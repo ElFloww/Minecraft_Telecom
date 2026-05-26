@@ -164,24 +164,28 @@ public class TelecomNetworkGraph extends SavedData {
     public void startSpeedtest(BlockPos sourcePos, String clientIp, int targetDownBw, int targetUpBw, int extraPing, boolean isPassive) {
         if (!isPassive && getSessionByIp(clientIp) != null) return; // Prevent multiple speedtests from the same client
         
-        // Find a server to connect to
-        NetworkNode serverNode = null;
+        // Find the best server to connect to
+        NetworkNode bestServer = null;
+        PathStats bestStats = null;
+        
         for (NetworkNode node : nodes.values()) {
             if (node.getType() == NetworkNode.NodeType.SERVER) {
-                serverNode = node;
-                break;
+                PathStats stats = calculatePathStats(sourcePos, node.getPosition());
+                if (stats != null) {
+                    if (bestStats == null || stats.pingMs() < bestStats.pingMs()) {
+                        bestStats = stats;
+                        bestServer = node;
+                    }
+                }
             }
         }
         
-        if (serverNode != null) {
-            PathStats stats = calculatePathStats(sourcePos, serverNode.getPosition());
-            if (stats != null) {
-                TrafficSession session = new TrafficSession(sourcePos, serverNode.getPosition(), clientIp, targetDownBw, targetUpBw, 100, isPassive); // 100 ticks = 5 seconds per phase
-                session.setExtraPing(extraPing);
-                session.setPingMs(stats.pingMs());
-                activeSessions.add(session);
-                setDirty();
-            }
+        if (bestServer != null && bestStats != null) {
+            TrafficSession session = new TrafficSession(sourcePos, bestServer.getPosition(), clientIp, targetDownBw, targetUpBw, 100, isPassive); // 100 ticks = 5 seconds per phase
+            session.setExtraPing(extraPing);
+            session.setPingMs(bestStats.pingMs());
+            activeSessions.add(session);
+            setDirty();
         }
     }
 
