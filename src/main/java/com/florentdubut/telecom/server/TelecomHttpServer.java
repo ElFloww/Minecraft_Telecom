@@ -149,7 +149,7 @@ public class TelecomHttpServer {
                 return;
             }
 
-            net.minecraft.world.level.chunk.ChunkAccess chunk = level.getChunkSource().getChunk(cx, cz, net.minecraft.world.level.chunk.status.ChunkStatus.FULL, false);
+            net.minecraft.world.level.chunk.ChunkAccess chunk = level.getChunkSource().getChunk(cx, cz, net.minecraft.world.level.chunk.status.ChunkStatus.FULL, true);
             if (chunk == null) {
                 // Chunk not generated or loaded, return 404
                 sendEmptyResponse(exchange, 404);

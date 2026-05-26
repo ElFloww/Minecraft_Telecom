@@ -444,7 +444,7 @@ function draw() {
                     tileCache.set(key, null);
                     const img = new Image();
                     img.crossOrigin = "Anonymous";
-                    img.src = `/api/tile?cx=${cx}&cz=${cz}`;
+                    img.src = `/api/tile?cx=${cx}&cz=${cz}&t=${Date.now()}`;
                     img.onload = () => tileCache.set(key, img);
                     img.onerror = () => tileCache.set(key, false);
                 }
