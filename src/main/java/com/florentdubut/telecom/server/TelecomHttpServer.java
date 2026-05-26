@@ -34,18 +34,37 @@ public class TelecomHttpServer {
             
             // Handle CORS for local dev
             server.createContext("/", exchange -> {
-                exchange.getResponseHeaders().add("Access-Control-Allow-Origin", "*");
-                if (exchange.getRequestMethod().equalsIgnoreCase("OPTIONS")) {
-                    exchange.getResponseHeaders().add("Access-Control-Allow-Methods", "GET, OPTIONS");
-                    exchange.getResponseHeaders().add("Access-Control-Allow-Headers", "Content-Type,Authorization");
-                    exchange.sendResponseHeaders(204, -1);
+                String path = exchange.getRequestURI().getPath();
+                if (path.equals("/")) {
+                    path = "/index.html";
+                }
+                
+                // Read from classpath /web
+                java.io.InputStream is = TelecomHttpServer.class.getResourceAsStream("/web" + path);
+                if (is == null) {
+                    exchange.sendResponseHeaders(404, -1);
                     return;
                 }
-                String response = "Telecom API is running";
-                exchange.sendResponseHeaders(200, response.length());
+                
+                String contentType = "text/plain";
+                if (path.endsWith(".html")) contentType = "text/html";
+                else if (path.endsWith(".js")) contentType = "application/javascript";
+                else if (path.endsWith(".css")) contentType = "text/css";
+                else if (path.endsWith(".png")) contentType = "image/png";
+                else if (path.endsWith(".svg")) contentType = "image/svg+xml";
+                else if (path.endsWith(".ico")) contentType = "image/x-icon";
+                
+                exchange.getResponseHeaders().add("Content-Type", contentType);
+                exchange.sendResponseHeaders(200, 0); // chunked transfer
                 OutputStream os = exchange.getResponseBody();
-                os.write(response.getBytes());
+                
+                byte[] buffer = new byte[8192];
+                int read;
+                while ((read = is.read(buffer)) != -1) {
+                    os.write(buffer, 0, read);
+                }
                 os.close();
+                is.close();
             });
 
             server.setExecutor(null);

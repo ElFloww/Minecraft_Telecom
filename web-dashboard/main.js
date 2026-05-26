@@ -31,7 +31,7 @@ window.addEventListener('resize', resize);
 
 async function fetchNetworkData() {
     try {
-        const res = await fetch('http://localhost:8080/api/network');
+        const res = await fetch('/api/network');
         if (res.ok) {
             networkData = await res.json();
             document.getElementById('stat-nodes').innerText = networkData.nodes.length;
@@ -164,7 +164,7 @@ function draw() {
                     
                     const img = new Image();
                     img.crossOrigin = "Anonymous";
-                    img.src = `http://localhost:8080/api/tile?cx=${cx}&cz=${cz}`;
+                    img.src = `/api/tile?cx=${cx}&cz=${cz}`;
                     img.onload = () => {
                         tileCache.set(key, img);
                         draw(); // trigger redraw when image loads

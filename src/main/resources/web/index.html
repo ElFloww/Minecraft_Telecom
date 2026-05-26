@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Minecraft Telecom Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+    <script type="module" crossorigin src="/assets/index-BhEfzRMo.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-Rh8tsZvE.css">
+  </head>
+  <body>
+    <div id="app">
+      <div class="sidebar glass">
+        <h1>Telecom Dashboard</h1>
+        
+        <div class="stat-card">
+          <h3>Network Nodes</h3>
+          <p id="stat-nodes">0</p>
+        </div>
+        
+        <div class="stat-card">
+          <h3>Cables & Edges</h3>
+          <p id="stat-edges">0</p>
+        </div>
+
+        <div class="legend">
+          <h3>Legend</h3>
+          <div class="legend-item"><span class="dot server"></span> Server</div>
+          <div class="legend-item"><span class="dot router"></span> Router</div>
+          <div class="legend-item"><span class="dot antenna"></span> Antenna</div>
+          <div class="legend-item"><span class="dot nro"></span> NRO</div>
+          <div class="legend-item"><span class="dot nra"></span> NRA</div>
+          <div class="legend-item"><span class="dot pm"></span> PM</div>
+          <div class="legend-item"><span class="dot sr"></span> SR</div>
+        </div>
+      </div>
+      
+      <div class="map-container">
+        <canvas id="network-map"></canvas>
+        <div id="tooltip" class="glass-tooltip" style="display: none;"></div>
+      </div>
+    </div>
+  </body>
+</html>
