@@ -427,7 +427,7 @@ function draw() {
 
     const centerCx = Math.floor((minCx + maxCx) / 2);
     const centerCz = Math.floor((minCz + maxCz) / 2);
-    const radius = 150;
+    const radius = 20;
     
     if (minCx < centerCx - radius) minCx = centerCx - radius;
     if (maxCx > centerCx + radius) maxCx = centerCx + radius;
@@ -559,3 +559,7 @@ function draw() {
 
 resize();
 requestAnimationFrame(draw);
+
+setInterval(() => {
+    fetchBudget = Math.min(fetchBudget + 5, 20);
+}, 100);
