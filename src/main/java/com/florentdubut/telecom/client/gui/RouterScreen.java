@@ -18,6 +18,9 @@ public class RouterScreen extends Screen {
     private com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload currentSpeedtestData = null;
     private int lastDownBw = 0;
     private int lastUpBw = 0;
+    private int durationIndex = 0;
+    private final int[] DURATION_TICKS = {100, 200, 600};
+    private final String[] DURATION_LABELS = {"5s", "10s", "30s"};
 
     public void updateSpeedtestProgress(com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload payload) {
         if (!payload.clientIp().equals(this.payload.ipAddress())) return;
@@ -65,11 +68,16 @@ public class RouterScreen extends Screen {
         int startX = centerX - 260 / 2;
         int startY = centerY - 180 / 2;
 
+        this.addRenderableWidget(net.minecraft.client.gui.components.Button.builder(Component.literal("Durée: " + DURATION_LABELS[durationIndex]), button -> {
+            durationIndex = (durationIndex + 1) % DURATION_TICKS.length;
+            button.setMessage(Component.literal("Durée: " + DURATION_LABELS[durationIndex]));
+        }).bounds(startX + 20, startY + 120, 100, 20).build());
+
         this.addRenderableWidget(net.minecraft.client.gui.components.Button.builder(Component.literal("START SPEEDTEST"), button -> {
             if (!this.speedtestActive) {
                 int confDown = payload.configuredMaxDown();
                 int confUp = payload.configuredMaxUp();
-                net.neoforged.neoforge.network.PacketDistributor.sendToServer(new com.florentdubut.telecom.network.packet.StartSpeedtestPayload(payload.pos(), payload.ipAddress(), confDown, confUp, 0, 0));
+                net.neoforged.neoforge.network.PacketDistributor.sendToServer(new com.florentdubut.telecom.network.packet.StartSpeedtestPayload(payload.pos(), payload.ipAddress(), confDown, confUp, 0, 0, DURATION_TICKS[durationIndex]));
                 this.speedtestActive = true;
                 this.currentSpeedtestData = null;
                 this.lastDownBw = 0;

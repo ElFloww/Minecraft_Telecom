@@ -174,7 +174,7 @@ public class TelecomNetworkGraph extends SavedData {
     private int totalBandwidthUp = 0;
     private int totalBandwidthDown = 0;
 
-    public void startSpeedtest(BlockPos sourcePos, String clientIp, int targetDownBw, int targetUpBw, int extraPing, int frequenciesMask, boolean isPassive) {
+    public void startSpeedtest(BlockPos sourcePos, String clientIp, int targetDownBw, int targetUpBw, int extraPing, int frequenciesMask, int durationTicks, boolean isPassive) {
         if (!isPassive && getSessionByIp(clientIp) != null) return; // Prevent multiple speedtests from the same client
         
         // Find the best server to connect to
@@ -194,7 +194,7 @@ public class TelecomNetworkGraph extends SavedData {
         }
         
         if (bestServer != null && bestStats != null) {
-            TrafficSession session = new TrafficSession(sourcePos, bestServer.getPosition(), clientIp, targetDownBw, targetUpBw, 100, isPassive); // 100 ticks = 5 seconds per phase
+            TrafficSession session = new TrafficSession(sourcePos, bestServer.getPosition(), clientIp, targetDownBw, targetUpBw, durationTicks, isPassive);
             session.setExtraPing(extraPing);
             session.setPingMs(bestStats.pingMs());
             session.setAntennaPos(sourcePos); // Used by mobile sessions to map back to antenna
@@ -222,7 +222,7 @@ public class TelecomNetworkGraph extends SavedData {
                             // Reduced bandwidth consumption significantly
                             int randDown = 1 + (int)(Math.random() * 200); // 1 to 200 Mbps (was 10-2000)
                             int randUp = 1 + (int)(Math.random() * 50); // 1 to 50 Mbps (was 5-500)
-                            startSpeedtest(node.getPosition(), node.getIpAddress() != null ? node.getIpAddress() : "0.0.0.0", randDown, randUp, 0, 0, true);
+                            startSpeedtest(node.getPosition(), node.getIpAddress() != null ? node.getIpAddress() : "0.0.0.0", randDown, randUp, 0, 0, 100, true);
                         }
                     }
                 }
@@ -262,16 +262,16 @@ public class TelecomNetworkGraph extends SavedData {
                     }
                 }
                 
-                if (bestAntenna != null) {
+                if (bestAntenna != null && bestFreq != null) {
                     final String finalBestIp = bestIp;
                     boolean hasSession = activeSessions.stream().anyMatch(s -> finalBestIp.equals(s.getClientIp()));
                     if (!hasSession) {
                         int randDown = 1 + (int)(Math.random() * 20);
                         int randUp = 1 + (int)(Math.random() * 5);
                         int extraPing = 20 + (int)(Math.random() * 50);
-                        startSpeedtest(bestAntenna.getBlockPos(), bestIp, randDown, randUp, extraPing, (1 << bestFreq.ordinal()), true);
+                        startSpeedtest(bestAntenna.getBlockPos(), finalBestIp, randDown, randUp, extraPing, (1 << bestFreq.ordinal()), 100, true);
                         // Tag the newly created session with antenna and frequency
-                        TrafficSession newSession = getSessionByIp(bestIp);
+                        TrafficSession newSession = getSessionByIp(finalBestIp);
                         if (newSession != null) {
                             newSession.setAntennaPos(bestAntenna.getBlockPos());
                             newSession.setFrequenciesMask(1 << bestFreq.ordinal());

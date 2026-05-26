@@ -119,7 +119,8 @@ public class TrafficSession {
 
     public void tick() {
         ticksElapsed++;
-        if (ticksElapsed >= totalTicksPerPhase) {
+        int maxTicks = state == SessionState.PING ? Math.min(totalTicksPerPhase, 60) : totalTicksPerPhase;
+        if (ticksElapsed >= maxTicks) {
             ticksElapsed = 0;
             switch (state) {
                 case PING -> state = SessionState.DOWNLOAD;

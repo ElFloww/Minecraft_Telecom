@@ -14,6 +14,9 @@ public class SmartphoneSpeedtestScreen extends Screen {
     
     private int lastDownBw = 0;
     private int lastUpBw = 0;
+    private int durationIndex = 0;
+    private final int[] DURATION_TICKS = {100, 200, 600};
+    private final String[] DURATION_LABELS = {"5s", "10s", "30s"};
 
     public SmartphoneSpeedtestScreen(Screen parentScreen) {
         super(Component.literal("Speedtest"));
@@ -46,6 +49,11 @@ public class SmartphoneSpeedtestScreen extends Screen {
         int startX = (this.width - screenW) / 2;
         int startY = (this.height - screenH) / 2;
 
+        this.addRenderableWidget(Button.builder(Component.literal("Durée: " + DURATION_LABELS[durationIndex]), b -> {
+            durationIndex = (durationIndex + 1) % DURATION_TICKS.length;
+            b.setMessage(Component.literal("Durée: " + DURATION_LABELS[durationIndex]));
+        }).bounds(startX + 30, startY + 195, 100, 20).build());
+
         this.addRenderableWidget(Button.builder(Component.literal("Start Test"), b -> {
             if (this.speedtestActive) return;
             com.florentdubut.telecom.network.packet.NetworkScanResponsePayload scan = SmartphoneHUD.latestScan;
@@ -68,7 +76,8 @@ public class SmartphoneSpeedtestScreen extends Screen {
                     scan.maxDown(),
                     scan.maxUp(),
                     extraPing,
-                    scan.frequenciesMask()
+                    scan.frequenciesMask(),
+                    DURATION_TICKS[durationIndex]
                 ));
                 this.speedtestActive = true;
                 this.currentSpeedtestData = null;

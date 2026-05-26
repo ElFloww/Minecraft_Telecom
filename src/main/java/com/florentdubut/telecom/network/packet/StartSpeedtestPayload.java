@@ -8,7 +8,7 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
-public record StartSpeedtestPayload(BlockPos sourcePos, String clientIp, int targetDownBw, int targetUpBw, int extraPing, int frequenciesMask) implements CustomPacketPayload {
+public record StartSpeedtestPayload(BlockPos sourcePos, String clientIp, int targetDownBw, int targetUpBw, int extraPing, int frequenciesMask, int durationTicks) implements CustomPacketPayload {
     public static final Type<StartSpeedtestPayload> TYPE = new Type<>(ResourceLocation.fromNamespaceAndPath(TelecomMod.MODID, "start_speedtest"));
     
     public static final StreamCodec<FriendlyByteBuf, StartSpeedtestPayload> STREAM_CODEC = StreamCodec.of(
@@ -19,10 +19,12 @@ public record StartSpeedtestPayload(BlockPos sourcePos, String clientIp, int tar
                 buf.writeInt(payload.targetUpBw());
                 buf.writeInt(payload.extraPing());
                 buf.writeInt(payload.frequenciesMask());
+                buf.writeInt(payload.durationTicks());
             },
             buf -> new StartSpeedtestPayload(
                     buf.readBlockPos(),
                     buf.readUtf(),
+                    buf.readInt(),
                     buf.readInt(),
                     buf.readInt(),
                     buf.readInt(),
