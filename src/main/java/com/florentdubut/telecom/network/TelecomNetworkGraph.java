@@ -41,6 +41,9 @@ public class TelecomNetworkGraph extends SavedData {
             if (nodeTag.contains("IP")) {
                 node.setIpAddress(nodeTag.getString("IP"));
             }
+            if (nodeTag.contains("CIDR")) {
+                node.setNetworkCidr(nodeTag.getString("CIDR"));
+            }
             graph.nodes.put(pos, node);
         }
 
@@ -63,7 +66,6 @@ public class TelecomNetworkGraph extends SavedData {
             graph.edges.add(edge);
         }
 
-        graph.needsRecalculation = true; // Force recalculation on startup to ensure physical network sync
         return graph;
     }
 
@@ -76,6 +78,9 @@ public class TelecomNetworkGraph extends SavedData {
             nodeTag.putString("Type", node.getType().name());
             if (node.getIpAddress() != null) {
                 nodeTag.putString("IP", node.getIpAddress());
+            }
+            if (node.getNetworkCidr() != null) {
+                nodeTag.putString("CIDR", node.getNetworkCidr());
             }
             nodesTag.add(nodeTag);
         }
