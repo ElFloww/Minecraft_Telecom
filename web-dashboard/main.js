@@ -326,7 +326,7 @@ function draw() {
     const nodeMap = new Map(networkData.nodes.map(n => [n.id, n]));
     
     // SMALLER CABLES!
-    ctx.lineWidth = Math.max(1.5, 2 * zoom);
+    ctx.lineWidth = Math.max(0.5, 1 * zoom);
     
     for (const edge of networkData.edges) {
         const n1 = nodeMap.get(edge.source);
@@ -362,7 +362,7 @@ function draw() {
                 let speed = 1 + (loadPct / 100) * 5;
                 // Dash animation using a brighter color or white to represent packets
                 ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
-                ctx.lineWidth = Math.max(0.5, 1 * zoom);
+                ctx.lineWidth = Math.max(0.3, 0.5 * zoom);
                 ctx.setLineDash([4 * zoom, 12 * zoom]);
                 ctx.lineDashOffset = -animationTime * speed; 
                 ctx.beginPath();
@@ -370,7 +370,7 @@ function draw() {
                 ctx.lineTo(x2, y2);
                 ctx.stroke();
                 // Reset line width for next edge
-                ctx.lineWidth = Math.max(1.5, 2 * zoom);
+                ctx.lineWidth = Math.max(0.5, 1 * zoom);
             }
             ctx.setLineDash([]);
         }
