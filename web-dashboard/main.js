@@ -3,11 +3,16 @@ import './style.css';
 const canvas = document.getElementById('network-map');
 const ctx = canvas.getContext('2d');
 const tooltip = document.getElementById('tooltip');
+const detailsPanel = document.getElementById('details-panel');
+const detailsClose = document.getElementById('details-close');
+const detailsContent = document.getElementById('details-content');
+const detailsTitle = document.getElementById('details-title');
 
 let networkData = { nodes: [], edges: [] };
 let pan = { x: 0, y: 0 };
 let zoom = 1;
 let isDragging = false;
+let hasDragged = false;
 let lastMouse = { x: 0, y: 0 };
 let hoveredNode = null;
 let hoveredEdge = null;
@@ -52,11 +57,81 @@ fetchNetworkData();
 
 canvas.addEventListener('mousedown', e => {
     isDragging = true;
+    hasDragged = false;
     lastMouse = { x: e.clientX, y: e.clientY };
 });
-window.addEventListener('mouseup', () => isDragging = false);
+window.addEventListener('mouseup', () => {
+    isDragging = false;
+});
 
-// Distance from point to line segment
+canvas.addEventListener('click', e => {
+    if (hasDragged) return; // Don't open if they were panning the map
+    
+    if (hoveredNode) {
+        showNodeDetails(hoveredNode);
+    } else if (hoveredEdge) {
+        showEdgeDetails(hoveredEdge);
+    } else {
+        detailsPanel.style.display = 'none';
+    }
+});
+
+detailsClose.addEventListener('click', () => {
+    detailsPanel.style.display = 'none';
+});
+
+function showNodeDetails(node) {
+    detailsPanel.style.display = 'flex';
+    detailsTitle.innerText = `Équipement: ${node.type}`;
+    detailsTitle.style.color = COLORS[node.type] || '#fff';
+    
+    let loadPct = Math.min(100, Math.max(node.usageDown, node.usageUp) / node.capacity * 100);
+    let machines = ['SERVER', 'NRO', 'NRA', 'PM', 'SR'].includes(node.type) ? countDownstream(node) : 0;
+    
+    let html = `
+        <div class="section-title">Informations Générales</div>
+        <div class="info-row"><span class="label">Statut</span> <span>${loadPct >= 100 ? '<span style="color:#ef4444">Saturé</span>' : (loadPct > 0 ? '<span style="color:#22c55e">En Ligne</span>' : '<span style="color:#94a3b8">Inactif</span>')}</span></div>
+        <div class="info-row"><span class="label">Position (X,Y,Z)</span> <span>${node.x}, ${node.y}, ${node.z}</span></div>
+        <div class="info-row"><span class="label">Adresse IP</span> <span>${node.ip || 'Non assignée'}</span></div>
+        ${node.cidr ? `<div class="info-row"><span class="label">Réseau (CIDR)</span> <span>${node.cidr}</span></div>` : ''}
+        ${machines > 0 ? `<div class="info-row"><span class="label">Appareils connectés</span> <span>${machines}</span></div>` : ''}
+        
+        <div class="section-title">Bande Passante</div>
+        <div class="info-row"><span class="label">Capacité Max</span> <span class="capacity-text">${formatSpeed(node.capacity)}</span></div>
+        <div class="info-row"><span class="label">Téléchargement (Down)</span> <span class="usage-down">${formatSpeed(node.usageDown)}</span></div>
+        <div class="info-row"><span class="label">Envoi (Up)</span> <span class="usage-up">${formatSpeed(node.usageUp)}</span></div>
+        
+        <div class="section-title">Charge Réseau</div>
+        <div class="info-row"><span class="label">Utilisation Globale</span> <span>${loadPct.toFixed(1)}%</span></div>
+        <div class="progress-container"><div class="progress-bar" style="width: ${loadPct}%; background: hsl(${120 - loadPct*1.2}, 100%, 50%)"></div></div>
+    `;
+    detailsContent.innerHTML = html;
+}
+
+function showEdgeDetails(edge) {
+    detailsPanel.style.display = 'flex';
+    detailsTitle.innerText = `Câble: ${edge.type}`;
+    detailsTitle.style.color = '#fff';
+    
+    let loadPct = Math.min(100, Math.max(edge.usageDown, edge.usageUp) / edge.capacity * 100);
+    
+    let html = `
+        <div class="section-title">Informations Câble</div>
+        <div class="info-row"><span class="label">Statut</span> <span>${loadPct >= 100 ? '<span style="color:#ef4444">Saturé</span>' : (loadPct > 0 ? '<span style="color:#22c55e">Actif</span>' : '<span style="color:#94a3b8">Inactif</span>')}</span></div>
+        <div class="info-row"><span class="label">Longueur</span> <span>${edge.length} blocs</span></div>
+        
+        <div class="section-title">Bande Passante</div>
+        <div class="info-row"><span class="label">Capacité Max</span> <span class="capacity-text">${formatSpeed(edge.capacity)}</span></div>
+        <div class="info-row"><span class="label">Flux Descendant</span> <span class="usage-down">${formatSpeed(edge.usageDown)}</span></div>
+        <div class="info-row"><span class="label">Flux Montant</span> <span class="usage-up">${formatSpeed(edge.usageUp)}</span></div>
+        
+        <div class="section-title">Charge Câble</div>
+        <div class="info-row"><span class="label">Saturation</span> <span>${loadPct.toFixed(1)}%</span></div>
+        <div class="progress-container"><div class="progress-bar" style="width: ${loadPct}%; background: hsl(${120 - loadPct*1.2}, 100%, 50%)"></div></div>
+    `;
+    detailsContent.innerHTML = html;
+}
+
 function distToSegment(p, v, w) {
     const l2 = (w.x - v.x) ** 2 + (w.y - v.y) ** 2;
     if (l2 === 0) return Math.hypot(p.x - v.x, p.y - v.y);
@@ -95,7 +170,6 @@ function countDownstream(startNode) {
         for (const n of neighbors) {
             if (!visited.has(n)) {
                 const nNode = nodeMap.get(n);
-                // Go downwards in capacity (hierarchy)
                 if (nNode && nNode.capacity <= currNode.capacity) {
                     visited.add(n);
                     queue.push(n);
@@ -116,6 +190,7 @@ window.addEventListener('mousemove', e => {
         pan.x += e.clientX - lastMouse.x;
         pan.y += e.clientY - lastMouse.y;
         lastMouse = { x: e.clientX, y: e.clientY };
+        hasDragged = true;
     }
     
     const rect = canvas.getBoundingClientRect();
@@ -153,42 +228,21 @@ window.addEventListener('mousemove', e => {
         }
     }
     
+    // Simple tooltip with just the name
     if (hoveredNode) {
         tooltip.style.display = 'block';
         tooltip.style.left = (e.clientX + 15) + 'px';
         tooltip.style.top = (e.clientY + 15) + 'px';
-        
-        let loadPct = Math.min(100, Math.max(hoveredNode.usageDown, hoveredNode.usageUp) / hoveredNode.capacity * 100);
-        let countHtml = '';
-        if (['SERVER', 'NRO', 'NRA', 'PM', 'SR'].includes(hoveredNode.type)) {
-            const machines = countDownstream(hoveredNode);
-            countHtml = `<div class="info-row"><span class="label">Machines liées:</span> <span>${machines}</span></div>`;
-        }
-        
-        let html = `<div class="title" style="color: ${COLORS[hoveredNode.type]}">${hoveredNode.type}</div>`;
-        html += `<div class="info-row"><span class="label">IP:</span> <span>${hoveredNode.ip || 'N/A'}</span></div>`;
-        html += countHtml;
-        html += `<div class="info-row"><span class="label">Down:</span> <span class="usage-down">${formatSpeed(hoveredNode.usageDown)}</span></div>`;
-        html += `<div class="info-row"><span class="label">Up:</span> <span class="usage-up">${formatSpeed(hoveredNode.usageUp)}</span></div>`;
-        html += `<div class="info-row"><span class="label">Capacité:</span> <span class="capacity-text">${formatSpeed(hoveredNode.capacity)}</span></div>`;
-        html += `<div class="progress-container"><div class="progress-bar" style="width: ${loadPct}%; background: ${loadPct > 90 ? '#ef4444' : '#38bdf8'}"></div></div>`;
-        
-        tooltip.innerHTML = html;
+        tooltip.innerHTML = `<div class="title" style="color: ${COLORS[hoveredNode.type]}; border: none; padding: 0; margin: 0;">${hoveredNode.type} <span style="font-size: 0.75rem; color: #94a3b8">(Clic pour détails)</span></div>`;
         document.body.style.cursor = 'pointer';
     } else if (hoveredEdge) {
         tooltip.style.display = 'block';
         tooltip.style.left = (e.clientX + 15) + 'px';
         tooltip.style.top = (e.clientY + 15) + 'px';
-        
         let loadPct = Math.min(100, Math.max(hoveredEdge.usageDown, hoveredEdge.usageUp) / hoveredEdge.capacity * 100);
-        
-        let html = `<div class="title" style="color: #ffffff">Câble ${hoveredEdge.type}</div>`;
-        html += `<div class="info-row"><span class="label">Down:</span> <span class="usage-down">${formatSpeed(hoveredEdge.usageDown)}</span></div>`;
-        html += `<div class="info-row"><span class="label">Up:</span> <span class="usage-up">${formatSpeed(hoveredEdge.usageUp)}</span></div>`;
-        html += `<div class="info-row"><span class="label">Capacité:</span> <span class="capacity-text">${formatSpeed(hoveredEdge.capacity)}</span></div>`;
-        html += `<div class="progress-container"><div class="progress-bar" style="width: ${loadPct}%; background: ${loadPct > 90 ? '#ef4444' : '#38bdf8'}"></div></div>`;
-        
-        tooltip.innerHTML = html;
+        let color = `hsl(${120 - loadPct*1.2}, 100%, 50%)`;
+        if(loadPct === 0) color = '#94a3b8';
+        tooltip.innerHTML = `<div class="title" style="color: ${color}; border: none; padding: 0; margin: 0;">Câble ${hoveredEdge.type} <span style="font-size: 0.75rem; color: #94a3b8">(Clic pour détails)</span></div>`;
         document.body.style.cursor = 'pointer';
     } else {
         tooltip.style.display = 'none';
@@ -271,7 +325,8 @@ function draw() {
 
     const nodeMap = new Map(networkData.nodes.map(n => [n.id, n]));
     
-    ctx.lineWidth = Math.max(2, 3 * zoom);
+    // SMALLER CABLES!
+    ctx.lineWidth = Math.max(1.5, 2 * zoom);
     
     for (const edge of networkData.edges) {
         const n1 = nodeMap.get(edge.source);
@@ -284,10 +339,18 @@ function draw() {
             const y2 = n2.z * zoom + pan.y;
             
             let maxUsage = Math.max(edge.usageDown, edge.usageUp);
-            let isSaturated = maxUsage > edge.capacity;
+            let loadPct = Math.min(100, (maxUsage / edge.capacity) * 100);
             
-            ctx.strokeStyle = (hoveredEdge === edge) ? 'rgba(255, 255, 255, 0.8)' : 'rgba(255, 255, 255, 0.2)';
-            if (isSaturated) ctx.strokeStyle = 'rgba(239, 68, 68, 0.5)';
+            // COLOR CHANGE LOGIC
+            let hue = 120 - (loadPct * 1.2); // 120 is Green, 0 is Red
+            
+            if (maxUsage === 0) {
+                // If 0 usage, make it dull transparent grey
+                ctx.strokeStyle = (hoveredEdge === edge) ? 'rgba(255, 255, 255, 0.6)' : 'rgba(255, 255, 255, 0.15)';
+            } else {
+                // If traffic passing, color it from green to red based on saturation
+                ctx.strokeStyle = `hsla(${hue}, 100%, 50%, ${(hoveredEdge === edge) ? 1 : 0.8})`;
+            }
             
             ctx.setLineDash([]);
             ctx.beginPath();
@@ -295,27 +358,21 @@ function draw() {
             ctx.lineTo(x2, y2);
             ctx.stroke();
             
-            if (maxUsage > 0 && !isSaturated) {
-                let speed = 1 + (maxUsage / edge.capacity) * 5;
-                ctx.strokeStyle = edge.type.includes('FIBER') ? '#38bdf8' : '#f59e0b';
-                ctx.lineWidth = Math.max(1, 2 * zoom);
-                ctx.setLineDash([5 * zoom, 15 * zoom]);
+            if (maxUsage > 0 && loadPct < 100) {
+                let speed = 1 + (loadPct / 100) * 5;
+                // Dash animation using a brighter color or white to represent packets
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+                ctx.lineWidth = Math.max(0.5, 1 * zoom);
+                ctx.setLineDash([4 * zoom, 12 * zoom]);
                 ctx.lineDashOffset = -animationTime * speed; 
                 ctx.beginPath();
                 ctx.moveTo(x1, y1);
                 ctx.lineTo(x2, y2);
                 ctx.stroke();
+                // Reset line width for next edge
+                ctx.lineWidth = Math.max(1.5, 2 * zoom);
             }
             ctx.setLineDash([]);
-
-            if (isSaturated) {
-                const cx = (x1 + x2) / 2;
-                const cy = (y1 + y2) / 2;
-                ctx.fillStyle = '#ef4444';
-                ctx.beginPath();
-                ctx.arc(cx, cy, 3 * zoom, 0, Math.PI * 2);
-                ctx.fill();
-            }
         }
     }
     

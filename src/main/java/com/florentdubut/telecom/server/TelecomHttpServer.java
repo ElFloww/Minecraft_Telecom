@@ -215,6 +215,7 @@ public class TelecomHttpServer {
                 nodeObj.addProperty("z", node.getPosition().getZ());
                 nodeObj.addProperty("type", node.getType().name());
                 nodeObj.addProperty("ip", node.getIpAddress() != null ? node.getIpAddress() : "");
+                nodeObj.addProperty("cidr", node.getNetworkCidr() != null ? node.getNetworkCidr() : "");
                 nodeObj.addProperty("usageDown", node.getCurrentUsageDown());
                 nodeObj.addProperty("usageUp", node.getCurrentUsageUp());
                 
