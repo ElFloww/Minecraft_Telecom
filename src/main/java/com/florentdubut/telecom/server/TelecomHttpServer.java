@@ -220,25 +220,49 @@ public class TelecomHttpServer {
                 nodeObj.addProperty("usageUp", node.getCurrentUsageUp());
                 
                 // Add capacity based on node type
-                long capacity = switch (node.getType()) {
-                    case SERVER, NRO -> 1000000;
-                    case NRA, PM -> 100000;
-                    case SR -> 10000;
-                    case ROUTER, ANTENNA -> 1000;
-                    default -> 1000;
-                };
-                nodeObj.addProperty("capacity", capacity);
+                long capacityDown = 1000;
+                long capacityUp = 1000;
+                switch (node.getType()) {
+                    case SERVER, NRO -> { capacityDown = 1000000; capacityUp = 1000000; }
+                    case NRA, PM -> { capacityDown = 100000; capacityUp = 100000; }
+                    case SR -> { capacityDown = 10000; capacityUp = 10000; }
+                    case ROUTER -> {
+                        net.minecraft.world.level.block.entity.BlockEntity be = level.getBlockEntity(node.getPosition());
+                        if (be instanceof com.florentdubut.telecom.block.entity.RouterBlockEntity router) {
+                            capacityDown = router.getConfiguredMaxDown();
+                            capacityUp = router.getConfiguredMaxUp();
+                        }
+                    }
+                    case ANTENNA -> { capacityDown = 1000; capacityUp = 1000; }
+                }
+                nodeObj.addProperty("capacityDown", capacityDown);
+                nodeObj.addProperty("capacityUp", capacityUp);
+                nodeObj.addProperty("capacity", Math.max(capacityDown, capacityUp)); // Fallback
                 
                 if (node.getType() == NetworkNode.NodeType.ANTENNA) {
-                    BlockEntity be = level.getBlockEntity(node.getPosition());
-                    if (be instanceof AntennaBlockEntity antenna) {
+                    net.minecraft.world.level.block.entity.BlockEntity be = level.getBlockEntity(node.getPosition());
+                    if (be instanceof com.florentdubut.telecom.block.entity.AntennaBlockEntity antenna) {
                         JsonArray techs = new JsonArray();
+                        JsonArray freqsArray = new JsonArray();
+                        java.util.Map<TelecomFrequency, TelecomNetworkGraph.AntennaFreqStats> utilization = graph.getAntennaUtilization(node.getPosition());
+                        
                         for (TelecomFrequency freq : TelecomFrequency.values()) {
                             if (antenna.isFrequencyEnabled(freq)) {
                                 techs.add(freq.getTechnology());
+                                
+                                JsonObject fObj = new JsonObject();
+                                fObj.addProperty("technology", freq.getTechnology());
+                                fObj.addProperty("label", freq.getFrequencyLabel());
+                                fObj.addProperty("max", freq.getMaxSpeedMb());
+                                
+                                TelecomNetworkGraph.AntennaFreqStats stats = utilization.get(freq);
+                                int actual = stats != null ? stats.actualMbps() : 0;
+                                fObj.addProperty("usage", actual);
+                                freqsArray.add(fObj);
                             }
                         }
                         nodeObj.add("technologies", techs);
+                        nodeObj.add("frequencies", freqsArray);
                     }
                 }
                 nodesArray.add(nodeObj);

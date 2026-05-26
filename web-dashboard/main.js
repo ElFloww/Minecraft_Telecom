@@ -85,7 +85,11 @@ function showNodeDetails(node) {
     detailsTitle.innerText = `Équipement: ${node.type}`;
     detailsTitle.style.color = COLORS[node.type] || '#fff';
     
-    let loadPct = Math.min(100, Math.max(node.usageDown, node.usageUp) / node.capacity * 100);
+    // We use the maximum of the ratios to determine the overall load
+    let loadPctDown = Math.min(100, (node.usageDown / node.capacityDown) * 100);
+    let loadPctUp = Math.min(100, (node.usageUp / node.capacityUp) * 100);
+    let loadPct = Math.max(loadPctDown, loadPctUp) || 0;
+    
     let machines = ['SERVER', 'NRO', 'NRA', 'PM', 'SR'].includes(node.type) ? countDownstream(node) : 0;
     
     let html = `
@@ -96,15 +100,33 @@ function showNodeDetails(node) {
         ${node.cidr ? `<div class="info-row"><span class="label">Réseau (CIDR)</span> <span>${node.cidr}</span></div>` : ''}
         ${machines > 0 ? `<div class="info-row"><span class="label">Appareils connectés</span> <span>${machines}</span></div>` : ''}
         
-        <div class="section-title">Bande Passante</div>
-        <div class="info-row"><span class="label">Capacité Max</span> <span class="capacity-text">${formatSpeed(node.capacity)}</span></div>
+        <div class="section-title">Bande Passante (Global)</div>
+        <div class="info-row"><span class="label">Capacité Descendante</span> <span class="capacity-text">${formatSpeed(node.capacityDown)}</span></div>
         <div class="info-row"><span class="label">Téléchargement (Down)</span> <span class="usage-down">${formatSpeed(node.usageDown)}</span></div>
+        <div class="progress-container" style="height: 4px; margin-bottom: 12px;"><div class="progress-bar" style="width: ${loadPctDown}%; background: hsl(${120 - loadPctDown*1.2}, 100%, 50%)"></div></div>
+
+        <div class="info-row"><span class="label">Capacité Montante</span> <span class="capacity-text">${formatSpeed(node.capacityUp)}</span></div>
         <div class="info-row"><span class="label">Envoi (Up)</span> <span class="usage-up">${formatSpeed(node.usageUp)}</span></div>
-        
-        <div class="section-title">Charge Réseau</div>
-        <div class="info-row"><span class="label">Utilisation Globale</span> <span>${loadPct.toFixed(1)}%</span></div>
-        <div class="progress-container"><div class="progress-bar" style="width: ${loadPct}%; background: hsl(${120 - loadPct*1.2}, 100%, 50%)"></div></div>
+        <div class="progress-container" style="height: 4px;"><div class="progress-bar" style="width: ${loadPctUp}%; background: hsl(${120 - loadPctUp*1.2}, 100%, 50%)"></div></div>
     `;
+
+    if (node.type === 'ANTENNA' && node.frequencies && node.frequencies.length > 0) {
+        html += `<div class="section-title">Utilisation par Fréquence</div>`;
+        
+        for (const freq of node.frequencies) {
+            let freqLoad = Math.min(100, (freq.usage / freq.max) * 100);
+            let color = freq.technology === '5G' ? '#44AAFF' : (freq.technology === '4G' ? '#44DDAA' : (freq.technology === '3G' ? '#FF9944' : '#AA88FF'));
+            
+            html += `
+                <div class="info-row" style="margin-bottom: 2px;">
+                    <span class="label" style="color: ${color}">${freq.label} (${freq.technology})</span> 
+                    <span>${formatSpeed(freq.usage)} / ${formatSpeed(freq.max)}</span>
+                </div>
+                <div class="progress-container" style="height: 4px;"><div class="progress-bar" style="width: ${freqLoad}%; background: ${freqLoad > 90 ? '#ef4444' : color}"></div></div>
+            `;
+        }
+    }
+    
     detailsContent.innerHTML = html;
 }
 
