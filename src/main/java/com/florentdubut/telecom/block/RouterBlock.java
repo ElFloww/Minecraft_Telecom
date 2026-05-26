@@ -56,7 +56,7 @@ public class RouterBlock extends Block implements EntityBlock, TelecomBlock {
                     com.florentdubut.telecom.network.TelecomNetworkGraph.PathStats bestStats = null;
                     
                     for (com.florentdubut.telecom.network.NetworkNode n : graph.getNodes()) {
-                        if (n.getType() == com.florentdubut.telecom.network.NetworkNode.NodeType.SERVER) {
+                        if (n.getType() == com.florentdubut.telecom.network.NetworkNode.NodeType.SERVER || n.getType() == com.florentdubut.telecom.network.NetworkNode.NodeType.NRO) {
                             com.florentdubut.telecom.network.TelecomNetworkGraph.PathStats stats = graph.calculatePathStats(pos, n.getPosition());
                             if (stats != null) {
                                 if (bestStats == null || stats.pingMs() < bestStats.pingMs()) {

@@ -146,10 +146,22 @@ public class NetworkTracer {
         Set<BlockPos> visited = new HashSet<>();
 
         // Seed with servers
+        // Seed with servers
         for (NetworkNode node : graph.getNodes()) {
             if (node.getType() == NetworkNode.NodeType.SERVER) {
                 node.setIpAddress("0.0.0.0");
                 node.setNetworkCidr("0.0.0.0/0");
+                queue.add(node);
+                visited.add(node.getPosition());
+            }
+        }
+
+        // Seed with NROs that aren't connected to servers
+        for (NetworkNode node : graph.getNodes()) {
+            if (node.getType() == NetworkNode.NodeType.NRO && !visited.contains(node.getPosition())) {
+                int currentX = nroIndex++;
+                node.setIpAddress("10." + currentX + ".0.1");
+                node.setNetworkCidr("10." + currentX + ".0.0/16");
                 queue.add(node);
                 visited.add(node.getPosition());
             }

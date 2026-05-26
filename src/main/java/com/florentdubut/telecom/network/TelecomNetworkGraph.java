@@ -175,7 +175,7 @@ public class TelecomNetworkGraph extends SavedData {
         PathStats bestStats = null;
         
         for (NetworkNode node : nodes.values()) {
-            if (node.getType() == NetworkNode.NodeType.SERVER) {
+            if (node.getType() == NetworkNode.NodeType.SERVER || node.getType() == NetworkNode.NodeType.NRO) {
                 PathStats stats = calculatePathStats(sourcePos, node.getPosition());
                 if (stats != null) {
                     if (bestStats == null || stats.pingMs() < bestStats.pingMs()) {
