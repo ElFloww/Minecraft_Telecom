@@ -73,15 +73,19 @@ public class RouterScreen extends Screen {
             button.setMessage(Component.literal("Durée: " + DURATION_LABELS[durationIndex]));
         }).bounds(startX + 20, startY + 120, 100, 20).build());
 
-        this.addRenderableWidget(net.minecraft.client.gui.components.Button.builder(Component.literal("START SPEEDTEST"), button -> {
-            if (!this.speedtestActive) {
-                int confDown = payload.configuredMaxDown();
-                int confUp = payload.configuredMaxUp();
+        this.addRenderableWidget(Button.builder(Component.literal("START SPEEDTEST"), b -> {
+            int confDown = payload.configuredMaxDown();
+            int confUp = payload.configuredMaxUp();
+            if (this.speedtestActive) return;
+            if (payload.isConnected() && confDown > 0 && confUp > 0) {
                 net.neoforged.neoforge.network.PacketDistributor.sendToServer(new com.florentdubut.telecom.network.packet.StartSpeedtestPayload(payload.pos(), payload.ipAddress(), confDown, confUp, 0, 0, DURATION_TICKS[durationIndex]));
                 this.speedtestActive = true;
                 this.currentSpeedtestData = null;
                 this.lastDownBw = 0;
                 this.lastUpBw = 0;
+            } else {
+                String reason = !payload.isConnected() ? "No network connection!" : "Bandwidth not configured!";
+                net.minecraft.client.Minecraft.getInstance().player.sendSystemMessage(net.minecraft.network.chat.Component.literal("Failed to start: " + reason));
             }
         }).bounds(startX + 20, startY + 145, 100, 20).build());
     }

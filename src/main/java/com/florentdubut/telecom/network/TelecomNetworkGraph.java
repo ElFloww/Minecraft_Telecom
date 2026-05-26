@@ -174,8 +174,11 @@ public class TelecomNetworkGraph extends SavedData {
     private int totalBandwidthUp = 0;
     private int totalBandwidthDown = 0;
 
-    public void startSpeedtest(BlockPos sourcePos, String clientIp, int targetDownBw, int targetUpBw, int extraPing, int frequenciesMask, int durationTicks, boolean isPassive) {
-        if (!isPassive && getSessionByIp(clientIp) != null) return; // Prevent multiple speedtests from the same client
+    public void startSpeedtest(BlockPos sourcePos, String clientIp, int targetDownBw, int targetUpBw, int extraPing, int frequenciesMask, int durationTicks, boolean isPassive, @org.jetbrains.annotations.Nullable net.minecraft.server.level.ServerPlayer player) {
+        if (!isPassive && getSessionByIp(clientIp) != null) {
+            if (player != null) player.sendSystemMessage(net.minecraft.network.chat.Component.literal("A speedtest is already running on this IP."));
+            return;
+        }
         
         // Find the best server to connect to
         NetworkNode bestServer = null;
@@ -200,8 +203,10 @@ public class TelecomNetworkGraph extends SavedData {
             session.setAntennaPos(sourcePos); // Used by mobile sessions to map back to antenna
             session.setFrequenciesMask(frequenciesMask);
             activeSessions.add(session);
-            setDirty();
+        } else if (!isPassive && player != null) {
+            player.sendSystemMessage(net.minecraft.network.chat.Component.literal("Failed to start Speedtest: No complete path to a Server or NRO was found."));
         }
+        setDirty();
     }
 
     private void tickPassiveTraffic(ServerLevel level) {
@@ -222,7 +227,7 @@ public class TelecomNetworkGraph extends SavedData {
                             // Reduced bandwidth consumption significantly
                             int randDown = 1 + (int)(Math.random() * 200); // 1 to 200 Mbps (was 10-2000)
                             int randUp = 1 + (int)(Math.random() * 50); // 1 to 50 Mbps (was 5-500)
-                            startSpeedtest(node.getPosition(), node.getIpAddress() != null ? node.getIpAddress() : "0.0.0.0", randDown, randUp, 0, 0, 100, true);
+                            startSpeedtest(node.getPosition(), node.getIpAddress() != null ? node.getIpAddress() : "0.0.0.0", randDown, randUp, 0, 0, 100, true, null);
                         }
                     }
                 }
@@ -269,7 +274,7 @@ public class TelecomNetworkGraph extends SavedData {
                         int randDown = 1 + (int)(Math.random() * 20);
                         int randUp = 1 + (int)(Math.random() * 5);
                         int extraPing = 20 + (int)(Math.random() * 50);
-                        startSpeedtest(bestAntenna.getBlockPos(), finalBestIp, randDown, randUp, extraPing, (1 << bestFreq.ordinal()), 100, true);
+                        startSpeedtest(bestAntenna.getBlockPos(), finalBestIp, randDown, randUp, extraPing, (1 << bestFreq.ordinal()), 100, true, null);
                         // Tag the newly created session with antenna and frequency
                         TrafficSession newSession = getSessionByIp(finalBestIp);
                         if (newSession != null) {
