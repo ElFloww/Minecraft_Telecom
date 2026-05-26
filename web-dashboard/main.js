@@ -18,6 +18,13 @@ let hoveredNode = null;
 let hoveredEdge = null;
 let animationTime = 0;
 
+let coverageTileCache = {
+    '2G': new Map(),
+    '3G': new Map(),
+    '4G': new Map(),
+    '5G': new Map()
+};
+
 const COLORS = {
     SERVER: '#ef4444',
     ROUTER: '#f97316',
@@ -127,7 +134,45 @@ function showNodeDetails(node) {
         }
     }
     
+    if (node.type === 'ROUTER') {
+        html += `
+            <div class="section-title">Speedtest Distant</div>
+            <select id="speedtest-duration" class="duration-select">
+                <option value="300">15 secondes</option>
+                <option value="600">30 secondes</option>
+                <option value="1200">60 secondes</option>
+                <option value="6000">5 minutes</option>
+                <option value="12000">10 minutes</option>
+            </select>
+            <button id="btn-speedtest" class="speedtest-btn">Démarrer Speedtest</button>
+        `;
+    }
+
     detailsContent.innerHTML = html;
+
+    if (node.type === 'ROUTER') {
+        const btn = document.getElementById('btn-speedtest');
+        btn.addEventListener('click', () => {
+            const duration = document.getElementById('speedtest-duration').value;
+            btn.disabled = true;
+            btn.innerText = "Démarrage...";
+            fetch('/api/speedtest', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ pos: node.id, duration: parseInt(duration) })
+            }).then(r => {
+                if(r.ok) {
+                    btn.innerText = "Speedtest en cours !";
+                } else {
+                    btn.innerText = "Erreur";
+                    btn.disabled = false;
+                }
+            }).catch(e => {
+                btn.innerText = "Erreur de connexion";
+                btn.disabled = false;
+            });
+        });
+    }
 }
 
 function showEdgeDetails(edge) {
@@ -325,6 +370,35 @@ function draw() {
                 const img = tileCache.get(key);
                 if (img && img !== false) {
                     ctx.drawImage(img, cx * 16 * zoom + pan.x, cz * 16 * zoom + pan.y, 16.2 * zoom, 16.2 * zoom);
+                }
+            }
+        }
+    }
+
+    const techs = ['2G', '3G', '4G', '5G'];
+    for (const tech of techs) {
+        const checkbox = document.getElementById(`cov-${tech}`);
+        if (checkbox && checkbox.checked) {
+            const cache = coverageTileCache[tech];
+            for (let cx = minCx; cx <= maxCx; cx++) {
+                for (let cz = minCz; cz <= maxCz; cz++) {
+                    const key = `${cx},${cz}`;
+                    if (!cache.has(key)) {
+                        if (fetchBudget > 0) {
+                            fetchBudget--;
+                            cache.set(key, null);
+                            const img = new Image();
+                            img.crossOrigin = "Anonymous";
+                            img.src = `/api/coverage_tile?cx=${cx}&cz=${cz}&tech=${tech}`;
+                            img.onload = () => cache.set(key, img);
+                            img.onerror = () => cache.set(key, false);
+                        }
+                    } else {
+                        const img = cache.get(key);
+                        if (img && img !== false) {
+                            ctx.drawImage(img, cx * 16 * zoom + pan.x, cz * 16 * zoom + pan.y, 16.2 * zoom, 16.2 * zoom);
+                        }
+                    }
                 }
             }
         }

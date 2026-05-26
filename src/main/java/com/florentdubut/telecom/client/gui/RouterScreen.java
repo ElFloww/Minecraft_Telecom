@@ -19,8 +19,8 @@ public class RouterScreen extends Screen {
     private int lastDownBw = 0;
     private int lastUpBw = 0;
     private int durationIndex = 0;
-    private final int[] DURATION_TICKS = {300, 600, 1200};
-    private final String[] DURATION_LABELS = {"15s", "30s", "60s"};
+    private final int[] DURATION_TICKS = {300, 600, 1200, 6000, 12000};
+    private final String[] DURATION_LABELS = {"15s", "30s", "60s", "5m", "10m"};
 
     public void updateSpeedtestProgress(com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload payload) {
         if (!payload.clientIp().equals(this.payload.ipAddress())) return;
