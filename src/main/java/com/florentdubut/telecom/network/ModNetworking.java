@@ -247,10 +247,38 @@ public class ModNetworking {
                 com.florentdubut.telecom.network.TelecomNetworkGraph graph = com.florentdubut.telecom.network.TelecomNetworkGraph.get(player.serverLevel());
                 net.minecraft.core.BlockPos clickedPos = payload.clickedPos();
                 
+                // First check if it's a node
+                com.florentdubut.telecom.network.NetworkNode clickedNode = graph.getNode(clickedPos);
+                if (clickedNode != null) {
+                    int usageDown = 0;
+                    int usageUp = 0;
+                    int maxBandwidth = 0;
+                    for (com.florentdubut.telecom.network.NetworkEdge edge : graph.getEdges()) {
+                        if (edge.getNodeA().equals(clickedPos) || edge.getNodeB().equals(clickedPos)) {
+                            maxBandwidth = Math.max(maxBandwidth, edge.getBandwidthMax());
+                            if (edge.getPathBlocks() != null && !edge.getPathBlocks().isEmpty()) {
+                                usageDown += graph.getActualBlockUsageDown(edge.getPathBlocks().get(0));
+                                usageUp += graph.getActualBlockUsageUp(edge.getPathBlocks().get(0));
+                            }
+                        }
+                    }
+                    String typeStr = "Network Node (" + clickedNode.getType().name() + ")";
+                    net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(
+                        player,
+                        new com.florentdubut.telecom.network.packet.NetworkToolSyncPayload(clickedPos, typeStr, 0, maxBandwidth == 0 ? 1000 : maxBandwidth, usageDown, usageUp)
+                    );
+                    return;
+                }
+                
                 // Find the edge containing this block
                 for (com.florentdubut.telecom.network.NetworkEdge edge : graph.getEdges()) {
                     if (edge.getPathBlocks() != null && edge.getPathBlocks().contains(clickedPos)) {
-                        String typeStr = edge.getType() == com.florentdubut.telecom.network.NetworkEdge.EdgeType.FIBER ? "Fiber Optic" : "Copper ADSL";
+                        String typeStr = "Unknown";
+                        if (edge.getType() == com.florentdubut.telecom.network.NetworkEdge.EdgeType.BIG_FIBER) typeStr = "Big Fiber Optic";
+                        else if (edge.getType() == com.florentdubut.telecom.network.NetworkEdge.EdgeType.MEDIUM_FIBER) typeStr = "Medium Fiber Optic";
+                        else if (edge.getType() == com.florentdubut.telecom.network.NetworkEdge.EdgeType.FIBER) typeStr = "Fiber Optic";
+                        else if (edge.getType() == com.florentdubut.telecom.network.NetworkEdge.EdgeType.COPPER) typeStr = "Copper ADSL";
+                        
                         int usageDown = graph.getActualBlockUsageDown(clickedPos);
                         int usageUp = graph.getActualBlockUsageUp(clickedPos);
                         
