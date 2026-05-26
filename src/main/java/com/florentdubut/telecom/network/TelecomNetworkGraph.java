@@ -175,9 +175,16 @@ public class TelecomNetworkGraph extends SavedData {
     private int totalBandwidthDown = 0;
 
     public void startSpeedtest(BlockPos sourcePos, String clientIp, int targetDownBw, int targetUpBw, int extraPing, int frequenciesMask, int durationTicks, boolean isPassive, @org.jetbrains.annotations.Nullable net.minecraft.server.level.ServerPlayer player) {
-        if (!isPassive && getSessionByIp(clientIp) != null) {
-            if (player != null) player.sendSystemMessage(net.minecraft.network.chat.Component.literal("A speedtest is already running on this IP."));
-            return;
+        TrafficSession existing = getSessionByIp(clientIp);
+        if (existing != null) {
+            if (!isPassive && existing.isPassive()) {
+                activeSessions.remove(existing); // Kill passive session to prioritize manual test
+            } else if (!isPassive) {
+                if (player != null) player.sendSystemMessage(net.minecraft.network.chat.Component.literal("A speedtest is already running on this IP."));
+                return;
+            } else {
+                return; // Prevent multiple speedtests
+            }
         }
         
         // Find the best server to connect to
