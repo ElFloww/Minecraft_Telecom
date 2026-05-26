@@ -25,29 +25,38 @@ public class NetworkTracer {
         return null;
     }
 
-    /**
-     * Returns whether a cable type is allowed to connect to a node of a given type.
-     * Only edges that are architecturally valid are created:
-     *   BIG_FIBER   → SERVER ↔ NRO or NRO ↔ NRO
-     *   MEDIUM_FIBER → NRO ↔ PM
-     *   FIBER/COPPER → PM ↔ ROUTER or PM ↔ ANTENNA
-     */
-    public static boolean isCableCompatibleWithNodes(NetworkEdge.EdgeType cableType, NetworkNode.NodeType a, NetworkNode.NodeType b) {
-        // Normalize: sort so we don't need to check both directions
-        Set<NetworkNode.NodeType> pair = new HashSet<>(Arrays.asList(a, b));
-        return switch (cableType) {
-            case BIG_FIBER -> (pair.contains(NetworkNode.NodeType.SERVER) || pair.contains(NetworkNode.NodeType.NRO))
-                              && !pair.contains(NetworkNode.NodeType.PM)
-                              && !pair.contains(NetworkNode.NodeType.ROUTER)
-                              && !pair.contains(NetworkNode.NodeType.ANTENNA);
-            case MEDIUM_FIBER -> pair.contains(NetworkNode.NodeType.NRO) && pair.contains(NetworkNode.NodeType.PM);
-            case FIBER -> (pair.contains(NetworkNode.NodeType.PM) || pair.contains(NetworkNode.NodeType.NRA) || pair.contains(NetworkNode.NodeType.SR))
-                         && (pair.contains(NetworkNode.NodeType.ROUTER) || pair.contains(NetworkNode.NodeType.ANTENNA)
-                             || pair.contains(NetworkNode.NodeType.NRA) || pair.contains(NetworkNode.NodeType.SR)
-                             || pair.contains(NetworkNode.NodeType.PM));
-            case COPPER -> pair.contains(NetworkNode.NodeType.PM) 
-                           && (pair.contains(NetworkNode.NodeType.ROUTER) || pair.contains(NetworkNode.NodeType.ANTENNA));
+    public static boolean doesNodeAcceptCable(NetworkNode.NodeType node, NetworkEdge.EdgeType cable) {
+        return switch (node) {
+            case SERVER, NRO -> cable == NetworkEdge.EdgeType.BIG_FIBER || cable == NetworkEdge.EdgeType.MEDIUM_FIBER || cable == NetworkEdge.EdgeType.FIBER;
+            case NRA -> cable == NetworkEdge.EdgeType.BIG_FIBER || cable == NetworkEdge.EdgeType.MEDIUM_FIBER || cable == NetworkEdge.EdgeType.FIBER || cable == NetworkEdge.EdgeType.COPPER;
+            case PM -> cable == NetworkEdge.EdgeType.MEDIUM_FIBER || cable == NetworkEdge.EdgeType.FIBER;
+            case SR -> cable == NetworkEdge.EdgeType.FIBER || cable == NetworkEdge.EdgeType.COPPER;
+            case ROUTER, ANTENNA -> cable == NetworkEdge.EdgeType.FIBER || cable == NetworkEdge.EdgeType.COPPER;
+            case PHONE -> false;
         };
+    }
+
+    public static boolean isArchitecturallyValid(NetworkNode.NodeType a, NetworkNode.NodeType b) {
+        if (a == b) {
+            return a == NetworkNode.NodeType.SERVER || a == NetworkNode.NodeType.NRO;
+        }
+        Set<NetworkNode.NodeType> pair = new HashSet<>(Arrays.asList(a, b));
+        if (pair.contains(NetworkNode.NodeType.SERVER) && pair.contains(NetworkNode.NodeType.NRO)) return true;
+        if (pair.contains(NetworkNode.NodeType.NRO) && pair.contains(NetworkNode.NodeType.PM)) return true;
+        if (pair.contains(NetworkNode.NodeType.NRO) && pair.contains(NetworkNode.NodeType.NRA)) return true;
+        if (pair.contains(NetworkNode.NodeType.PM) && pair.contains(NetworkNode.NodeType.ROUTER)) return true;
+        if (pair.contains(NetworkNode.NodeType.PM) && pair.contains(NetworkNode.NodeType.ANTENNA)) return true;
+        if (pair.contains(NetworkNode.NodeType.NRA) && pair.contains(NetworkNode.NodeType.SR)) return true;
+        if (pair.contains(NetworkNode.NodeType.SR) && pair.contains(NetworkNode.NodeType.ROUTER)) return true;
+        if (pair.contains(NetworkNode.NodeType.SR) && pair.contains(NetworkNode.NodeType.ANTENNA)) return true;
+        if (pair.contains(NetworkNode.NodeType.NRA) && pair.contains(NetworkNode.NodeType.ROUTER)) return true;
+        if (pair.contains(NetworkNode.NodeType.NRA) && pair.contains(NetworkNode.NodeType.ANTENNA)) return true;
+        return false;
+    }
+
+    public static boolean isCableCompatibleWithNodes(NetworkEdge.EdgeType cableType, NetworkNode.NodeType a, NetworkNode.NodeType b) {
+        if (!isArchitecturallyValid(a, b)) return false;
+        return doesNodeAcceptCable(a, cableType) && doesNodeAcceptCable(b, cableType);
     }
 
     // Call this whenever a cable, server, router, or antenna is placed or broken
