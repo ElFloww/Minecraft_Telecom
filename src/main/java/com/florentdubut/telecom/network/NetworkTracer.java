@@ -42,8 +42,8 @@ public class NetworkTracer {
         int tierA = getTier(a);
         int tierB = getTier(b);
         // Prevent connections between nodes of the same tier (e.g. Router to Router, PM to PM)
-        // Also ensure they are not identical nodes (just in case)
-        if (tierA == tierB) return false;
+        // EXCEPT for core network components (Server and NROs) which can form rings/mesh.
+        if (tierA == tierB && tierA > 2) return false;
         
         return true;
     }
