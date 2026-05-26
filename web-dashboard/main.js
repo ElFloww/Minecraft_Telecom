@@ -136,22 +136,29 @@ function draw() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
     // Calculate visible chunks
-    const visibleStartX = -pan.x / zoom;
-    const visibleStartZ = -pan.y / zoom;
-    const visibleEndX = (canvas.width - pan.x) / zoom;
-    const visibleEndZ = (canvas.height - pan.y) / zoom;
+    let minCx = Math.floor((-pan.x) / (16 * zoom));
+    let minCz = Math.floor((-pan.y) / (16 * zoom));
+    let maxCx = Math.floor((canvas.width - pan.x) / (16 * zoom));
+    let maxCz = Math.floor((canvas.height - pan.y) / (16 * zoom));
 
-    const minCx = Math.floor(visibleStartX / 16);
-    const minCz = Math.floor(visibleStartZ / 16);
-    const maxCx = Math.floor(visibleEndX / 16);
-    const maxCz = Math.floor(visibleEndZ / 16);
+    // Cap the range to prevent JS freezing if zoomed out too much (e.g., limit to 200x200 chunks)
+    const centerCx = Math.floor((minCx + maxCx) / 2);
+    const centerCz = Math.floor((minCz + maxCz) / 2);
+    const radius = 150;
+    
+    if (minCx < centerCx - radius) minCx = centerCx - radius;
+    if (maxCx > centerCx + radius) maxCx = centerCx + radius;
+    if (minCz < centerCz - radius) minCz = centerCz - radius;
+    if (maxCz > centerCz + radius) maxCz = centerCz + radius;
 
-    // Limit chunk fetching
-    if ((maxCx - minCx) * (maxCz - minCz) < 400) {
-        for (let cx = minCx; cx <= maxCx; cx++) {
-            for (let cz = minCz; cz <= maxCz; cz++) {
-                const key = `${cx},${cz}`;
-                if (!tileCache.has(key)) {
+    let fetchBudget = 200; // max new tiles to request per frame
+
+    for (let cx = minCx; cx <= maxCx; cx++) {
+        for (let cz = minCz; cz <= maxCz; cz++) {
+            const key = `${cx},${cz}`;
+            if (!tileCache.has(key)) {
+                if (fetchBudget > 0) {
+                    fetchBudget--;
                     // Mark as fetching
                     tileCache.set(key, null);
                     
@@ -166,12 +173,11 @@ function draw() {
                         // If 404 (chunk not generated), store false to avoid refetching
                         tileCache.set(key, false);
                     };
-                } else {
-                    const img = tileCache.get(key);
-                    if (img && img !== false) {
-                        ctx.drawImage(img, cx * 16 * zoom + pan.x, cz * 16 * zoom + pan.y, 16.2 * zoom, 16.2 * zoom);
-                        // Note: slightly larger than 16 (16.2) to prevent anti-aliasing gaps between tiles
-                    }
+                }
+            } else {
+                const img = tileCache.get(key);
+                if (img && img !== false) {
+                    ctx.drawImage(img, cx * 16 * zoom + pan.x, cz * 16 * zoom + pan.y, 16.2 * zoom, 16.2 * zoom);
                 }
             }
         }

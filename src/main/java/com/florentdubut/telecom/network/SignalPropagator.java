@@ -57,17 +57,17 @@ public class SignalPropagator {
                 
                 if (state.is(net.minecraft.tags.BlockTags.LEAVES) || !state.canOcclude()) {
                     // Leaves, glass, etc.
-                    currentPower -= 1.0f * frequencyMultiplier; 
+                    currentPower -= 0.2f * frequencyMultiplier; 
                     consecutiveSolidBlocks = 0;
                 } else if (!state.getFluidState().isEmpty()) {
                     // Water
-                    currentPower -= 3.0f * frequencyMultiplier;
+                    currentPower -= 1.0f * frequencyMultiplier;
                     consecutiveSolidBlocks = 0;
                 } else {
                     // Solid blocks (stone, wood, dirt)
                     consecutiveSolidBlocks++;
-                    // Softer on first block, harder on thick walls
-                    float penalty = 2.0f * frequencyMultiplier + (1.5f * frequencyMultiplier * consecutiveSolidBlocks);
+                    // Softer on first block, harder on thick walls (Reduced for gameplay balance)
+                    float penalty = 0.5f * frequencyMultiplier + (0.5f * frequencyMultiplier * consecutiveSolidBlocks);
                     currentPower -= penalty;
                 }
             } else {

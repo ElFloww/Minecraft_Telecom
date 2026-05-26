@@ -45,22 +45,22 @@ public class RouterBlock extends Block implements EntityBlock, TelecomBlock {
                 int bandwidth = 0;
                 
                 if (isConnected) {
-                    com.florentdubut.telecom.network.NetworkNode serverNode = null;
+                    com.florentdubut.telecom.network.TelecomNetworkGraph.PathStats bestStats = null;
+                    
                     for (com.florentdubut.telecom.network.NetworkNode n : graph.getNodes()) {
                         if (n.getType() == com.florentdubut.telecom.network.NetworkNode.NodeType.SERVER) {
-                            serverNode = n;
-                            break;
+                            com.florentdubut.telecom.network.TelecomNetworkGraph.PathStats stats = graph.calculatePathStats(pos, n.getPosition());
+                            if (stats != null) {
+                                if (bestStats == null || stats.pingMs() < bestStats.pingMs()) {
+                                    bestStats = stats;
+                                }
+                            }
                         }
                     }
                     
-                    if (serverNode != null) {
-                        com.florentdubut.telecom.network.TelecomNetworkGraph.PathStats stats = graph.calculatePathStats(pos, serverNode.getPosition());
-                        if (stats != null) {
-                            ping = stats.pingMs();
-                            bandwidth = stats.bandwidthMbps();
-                        } else {
-                            isConnected = false;
-                        }
+                    if (bestStats != null) {
+                        ping = bestStats.pingMs();
+                        bandwidth = bestStats.bandwidthMbps();
                     } else {
                         isConnected = false;
                     }
