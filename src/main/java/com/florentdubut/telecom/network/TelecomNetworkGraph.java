@@ -335,8 +335,14 @@ public class TelecomNetworkGraph extends SavedData {
             
             // Broadcast state
             if (!session.isPassive() && session.getTicksElapsed() % 2 == 0) { // Every 2 ticks to reduce spam
+                int displayPing = session.getPingMs();
+                if (session.getState() != TrafficSession.SessionState.FINISHED) {
+                    displayPing += (int)(Math.random() * 5) - 2; // -2 to +2 ms fluctuation
+                    if (displayPing < 1) displayPing = 1;
+                }
+                
                 com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload update = new com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload(
-                    session.getClientIp(), session.getState().name(), session.getPingMs(), session.getActualBandwidth(), session.getTicksElapsed(), session.getTotalTicksPerPhase());
+                    session.getClientIp(), session.getState().name(), displayPing, session.getActualBandwidth(), session.getTicksElapsed(), session.getTotalTicksPerPhase());
                 net.neoforged.neoforge.network.PacketDistributor.sendToAllPlayers(update);
             }
         }
