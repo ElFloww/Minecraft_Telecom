@@ -10,6 +10,8 @@ let zoom = 1;
 let isDragging = false;
 let lastMouse = { x: 0, y: 0 };
 let hoveredNode = null;
+let hoveredEdge = null;
+let animationTime = 0;
 
 const COLORS = {
     SERVER: '#ef4444',
@@ -24,9 +26,7 @@ const COLORS = {
 function resize() {
     canvas.width = canvas.clientWidth;
     canvas.height = canvas.clientHeight;
-    draw();
 }
-
 window.addEventListener('resize', resize);
 
 async function fetchNetworkData() {
@@ -36,14 +36,12 @@ async function fetchNetworkData() {
             networkData = await res.json();
             document.getElementById('stat-nodes').innerText = networkData.nodes.length;
             document.getElementById('stat-edges').innerText = networkData.edges.length;
-            draw();
         }
     } catch (e) {
         console.warn("Could not fetch network data. Is the Minecraft server running?", e);
     }
 }
 
-// Initial pan to center
 setTimeout(() => {
     pan.x = canvas.width / 2;
     pan.y = canvas.height / 2;
@@ -56,62 +54,146 @@ canvas.addEventListener('mousedown', e => {
     isDragging = true;
     lastMouse = { x: e.clientX, y: e.clientY };
 });
-
 window.addEventListener('mouseup', () => isDragging = false);
+
+// Distance from point to line segment
+function distToSegment(p, v, w) {
+    const l2 = (w.x - v.x) ** 2 + (w.y - v.y) ** 2;
+    if (l2 === 0) return Math.hypot(p.x - v.x, p.y - v.y);
+    let t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
+    t = Math.max(0, Math.min(1, t));
+    return Math.hypot(p.x - (v.x + t * (w.x - v.x)), p.y - (v.y + t * (w.y - v.y)));
+}
+
+function countDownstream(startNode) {
+    let count = 0;
+    const visited = new Set();
+    const queue = [startNode.id];
+    visited.add(startNode.id);
+    
+    const adj = {};
+    for (const e of networkData.edges) {
+        if (!adj[e.source]) adj[e.source] = [];
+        if (!adj[e.target]) adj[e.target] = [];
+        adj[e.source].push(e.target);
+        adj[e.target].push(e.source);
+    }
+    
+    const nodeMap = new Map(networkData.nodes.map(n => [n.id, n]));
+    
+    while(queue.length > 0) {
+        const currId = queue.shift();
+        const currNode = nodeMap.get(currId);
+        
+        if (currNode && currNode.id !== startNode.id) {
+            if (currNode.type === 'ROUTER' || currNode.type === 'ANTENNA') {
+                count++;
+            }
+        }
+        
+        const neighbors = adj[currId] || [];
+        for (const n of neighbors) {
+            if (!visited.has(n)) {
+                const nNode = nodeMap.get(n);
+                // Go downwards in capacity (hierarchy)
+                if (nNode && nNode.capacity <= currNode.capacity) {
+                    visited.add(n);
+                    queue.push(n);
+                }
+            }
+        }
+    }
+    return count;
+}
+
+function formatSpeed(mbps) {
+    if (mbps >= 1000) return (mbps / 1000).toFixed(1) + ' Gbps';
+    return mbps + ' Mbps';
+}
 
 window.addEventListener('mousemove', e => {
     if (isDragging) {
         pan.x += e.clientX - lastMouse.x;
         pan.y += e.clientY - lastMouse.y;
         lastMouse = { x: e.clientX, y: e.clientY };
-        draw();
     }
     
-    // Check hover
     const rect = canvas.getBoundingClientRect();
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
     
     hoveredNode = null;
+    hoveredEdge = null;
     
     for (const node of networkData.nodes) {
         const nx = node.x * zoom + pan.x;
-        const ny = node.z * zoom + pan.y; // Z axis in minecraft is Y on screen
-        
+        const ny = node.z * zoom + pan.y;
         const dist = Math.hypot(mouseX - nx, mouseY - ny);
         const radius = node.type === 'SERVER' ? 12 : (node.type === 'ANTENNA' ? 10 : 8);
-        
-        if (dist <= radius) {
+        if (dist <= radius * 1.5) {
             hoveredNode = node;
             break;
         }
     }
     
+    if (!hoveredNode) {
+        const nodeMap = new Map(networkData.nodes.map(n => [n.id, n]));
+        for (const edge of networkData.edges) {
+            const n1 = nodeMap.get(edge.source);
+            const n2 = nodeMap.get(edge.target);
+            if (n1 && n2) {
+                const p1 = { x: n1.x * zoom + pan.x, y: n1.z * zoom + pan.y };
+                const p2 = { x: n2.x * zoom + pan.x, y: n2.z * zoom + pan.y };
+                const dist = distToSegment({x: mouseX, y: mouseY}, p1, p2);
+                if (dist < 6) {
+                    hoveredEdge = edge;
+                    break;
+                }
+            }
+        }
+    }
+    
     if (hoveredNode) {
         tooltip.style.display = 'block';
-        tooltip.style.left = e.clientX + 'px';
-        tooltip.style.top = e.clientY + 'px';
+        tooltip.style.left = (e.clientX + 15) + 'px';
+        tooltip.style.top = (e.clientY + 15) + 'px';
+        
+        let loadPct = Math.min(100, Math.max(hoveredNode.usageDown, hoveredNode.usageUp) / hoveredNode.capacity * 100);
+        let countHtml = '';
+        if (['SERVER', 'NRO', 'NRA', 'PM', 'SR'].includes(hoveredNode.type)) {
+            const machines = countDownstream(hoveredNode);
+            countHtml = `<div class="info-row"><span class="label">Machines liées:</span> <span>${machines}</span></div>`;
+        }
         
         let html = `<div class="title" style="color: ${COLORS[hoveredNode.type]}">${hoveredNode.type}</div>`;
-        html += `<div class="info-row"><span class="label">Pos:</span> <span>${hoveredNode.x}, ${hoveredNode.y}, ${hoveredNode.z}</span></div>`;
-        if (hoveredNode.ip) {
-            html += `<div class="info-row"><span class="label">IP:</span> <span>${hoveredNode.ip}</span></div>`;
-        }
-        if (hoveredNode.technologies && hoveredNode.technologies.length > 0) {
-            html += `<div class="info-row"><span class="label">Tech:</span> <span>`;
-            hoveredNode.technologies.forEach(t => {
-                html += `<span class="tech-badge">${t}</span>`;
-            });
-            html += `</span></div>`;
-        }
+        html += `<div class="info-row"><span class="label">IP:</span> <span>${hoveredNode.ip || 'N/A'}</span></div>`;
+        html += countHtml;
+        html += `<div class="info-row"><span class="label">Down:</span> <span class="usage-down">${formatSpeed(hoveredNode.usageDown)}</span></div>`;
+        html += `<div class="info-row"><span class="label">Up:</span> <span class="usage-up">${formatSpeed(hoveredNode.usageUp)}</span></div>`;
+        html += `<div class="info-row"><span class="label">Capacité:</span> <span class="capacity-text">${formatSpeed(hoveredNode.capacity)}</span></div>`;
+        html += `<div class="progress-container"><div class="progress-bar" style="width: ${loadPct}%; background: ${loadPct > 90 ? '#ef4444' : '#38bdf8'}"></div></div>`;
+        
+        tooltip.innerHTML = html;
+        document.body.style.cursor = 'pointer';
+    } else if (hoveredEdge) {
+        tooltip.style.display = 'block';
+        tooltip.style.left = (e.clientX + 15) + 'px';
+        tooltip.style.top = (e.clientY + 15) + 'px';
+        
+        let loadPct = Math.min(100, Math.max(hoveredEdge.usageDown, hoveredEdge.usageUp) / hoveredEdge.capacity * 100);
+        
+        let html = `<div class="title" style="color: #ffffff">Câble ${hoveredEdge.type}</div>`;
+        html += `<div class="info-row"><span class="label">Down:</span> <span class="usage-down">${formatSpeed(hoveredEdge.usageDown)}</span></div>`;
+        html += `<div class="info-row"><span class="label">Up:</span> <span class="usage-up">${formatSpeed(hoveredEdge.usageUp)}</span></div>`;
+        html += `<div class="info-row"><span class="label">Capacité:</span> <span class="capacity-text">${formatSpeed(hoveredEdge.capacity)}</span></div>`;
+        html += `<div class="progress-container"><div class="progress-bar" style="width: ${loadPct}%; background: ${loadPct > 90 ? '#ef4444' : '#38bdf8'}"></div></div>`;
+        
         tooltip.innerHTML = html;
         document.body.style.cursor = 'pointer';
     } else {
         tooltip.style.display = 'none';
         document.body.style.cursor = isDragging ? 'grabbing' : 'grab';
     }
-    
-    draw();
 });
 
 canvas.addEventListener('wheel', e => {
@@ -125,23 +207,20 @@ canvas.addEventListener('wheel', e => {
     
     pan.x = mouseX - (mouseX - pan.x) * wheel;
     pan.y = mouseY - (mouseY - pan.y) * wheel;
-    
-    draw();
 });
 
 let tileCache = new Map();
 
 function draw() {
-    ctx.imageSmoothingEnabled = false; // keep pixels sharp
+    animationTime++;
+    ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
-    // Calculate visible chunks
     let minCx = Math.floor((-pan.x) / (16 * zoom));
     let minCz = Math.floor((-pan.y) / (16 * zoom));
     let maxCx = Math.floor((canvas.width - pan.x) / (16 * zoom));
     let maxCz = Math.floor((canvas.height - pan.y) / (16 * zoom));
 
-    // Cap the range to prevent JS freezing if zoomed out too much (e.g., limit to 200x200 chunks)
     const centerCx = Math.floor((minCx + maxCx) / 2);
     const centerCz = Math.floor((minCz + maxCz) / 2);
     const radius = 150;
@@ -151,7 +230,7 @@ function draw() {
     if (minCz < centerCz - radius) minCz = centerCz - radius;
     if (maxCz > centerCz + radius) maxCz = centerCz + radius;
 
-    let fetchBudget = 200; // max new tiles to request per frame
+    let fetchBudget = 20;
 
     for (let cx = minCx; cx <= maxCx; cx++) {
         for (let cz = minCz; cz <= maxCz; cz++) {
@@ -159,20 +238,12 @@ function draw() {
             if (!tileCache.has(key)) {
                 if (fetchBudget > 0) {
                     fetchBudget--;
-                    // Mark as fetching
                     tileCache.set(key, null);
-                    
                     const img = new Image();
                     img.crossOrigin = "Anonymous";
                     img.src = `/api/tile?cx=${cx}&cz=${cz}`;
-                    img.onload = () => {
-                        tileCache.set(key, img);
-                        draw(); // trigger redraw when image loads
-                    };
-                    img.onerror = () => {
-                        // If 404 (chunk not generated), store false to avoid refetching
-                        tileCache.set(key, false);
-                    };
+                    img.onload = () => tileCache.set(key, img);
+                    img.onerror = () => tileCache.set(key, false);
                 }
             } else {
                 const img = tileCache.get(key);
@@ -183,7 +254,6 @@ function draw() {
         }
     }
 
-    // Draw Grid overlay
     ctx.strokeStyle = 'rgba(255,255,255,0.05)';
     ctx.lineWidth = 1;
     const gridSize = 16 * zoom;
@@ -199,10 +269,9 @@ function draw() {
     }
     ctx.stroke();
 
-    // Draw Edges
     const nodeMap = new Map(networkData.nodes.map(n => [n.id, n]));
     
-    ctx.lineWidth = 2 * Math.min(1, Math.max(0.5, zoom));
+    ctx.lineWidth = Math.max(2, 3 * zoom);
     
     for (const edge of networkData.edges) {
         const n1 = nodeMap.get(edge.source);
@@ -214,21 +283,32 @@ function draw() {
             const x2 = n2.x * zoom + pan.x;
             const y2 = n2.z * zoom + pan.y;
             
-            // Saturation logic
-            let color = 'rgba(255, 255, 255, 0.4)';
-            let isSaturated = edge.usage > edge.capacity;
+            let maxUsage = Math.max(edge.usageDown, edge.usageUp);
+            let isSaturated = maxUsage > edge.capacity;
             
-            if (isSaturated) color = 'rgba(239, 68, 68, 0.8)'; // Red
-            else if (edge.usage > 0) color = 'rgba(56, 189, 248, 0.8)'; // Blue active
+            ctx.strokeStyle = (hoveredEdge === edge) ? 'rgba(255, 255, 255, 0.8)' : 'rgba(255, 255, 255, 0.2)';
+            if (isSaturated) ctx.strokeStyle = 'rgba(239, 68, 68, 0.5)';
             
-            ctx.strokeStyle = color;
+            ctx.setLineDash([]);
             ctx.beginPath();
             ctx.moveTo(x1, y1);
             ctx.lineTo(x2, y2);
             ctx.stroke();
             
+            if (maxUsage > 0 && !isSaturated) {
+                let speed = 1 + (maxUsage / edge.capacity) * 5;
+                ctx.strokeStyle = edge.type.includes('FIBER') ? '#38bdf8' : '#f59e0b';
+                ctx.lineWidth = Math.max(1, 2 * zoom);
+                ctx.setLineDash([5 * zoom, 15 * zoom]);
+                ctx.lineDashOffset = -animationTime * speed; 
+                ctx.beginPath();
+                ctx.moveTo(x1, y1);
+                ctx.lineTo(x2, y2);
+                ctx.stroke();
+            }
+            ctx.setLineDash([]);
+
             if (isSaturated) {
-                // Draw warning on edge
                 const cx = (x1 + x2) / 2;
                 const cy = (y1 + y2) / 2;
                 ctx.fillStyle = '#ef4444';
@@ -239,7 +319,6 @@ function draw() {
         }
     }
     
-    // Draw Nodes
     for (const node of networkData.nodes) {
         const x = node.x * zoom + pan.x;
         const y = node.z * zoom + pan.y;
@@ -250,22 +329,23 @@ function draw() {
         
         const color = COLORS[node.type] || '#ffffff';
         
-        // Glow effect
         ctx.shadowColor = color;
-        ctx.shadowBlur = isHovered ? 20 : 10;
+        ctx.shadowBlur = isHovered ? 20 : (node.usageDown > 0 ? 10 : 0);
         
         ctx.fillStyle = color;
         ctx.beginPath();
         ctx.arc(x, y, radius, 0, Math.PI * 2);
         ctx.fill();
         
-        ctx.shadowBlur = 0; // reset
+        ctx.shadowBlur = 0;
         
-        // Outline
         ctx.strokeStyle = '#0f172a';
         ctx.lineWidth = 2;
         ctx.stroke();
     }
+    
+    requestAnimationFrame(draw);
 }
 
 resize();
+requestAnimationFrame(draw);

@@ -215,6 +215,18 @@ public class TelecomHttpServer {
                 nodeObj.addProperty("z", node.getPosition().getZ());
                 nodeObj.addProperty("type", node.getType().name());
                 nodeObj.addProperty("ip", node.getIpAddress() != null ? node.getIpAddress() : "");
+                nodeObj.addProperty("usageDown", node.getCurrentUsageDown());
+                nodeObj.addProperty("usageUp", node.getCurrentUsageUp());
+                
+                // Add capacity based on node type
+                long capacity = switch (node.getType()) {
+                    case SERVER, NRO -> 1000000;
+                    case NRA, PM -> 100000;
+                    case SR -> 10000;
+                    case ROUTER, ANTENNA -> 1000;
+                    default -> 1000;
+                };
+                nodeObj.addProperty("capacity", capacity);
                 
                 if (node.getType() == NetworkNode.NodeType.ANTENNA) {
                     BlockEntity be = level.getBlockEntity(node.getPosition());
@@ -239,7 +251,8 @@ public class TelecomHttpServer {
                 edgeObj.addProperty("source", edge.getNodeA().asLong());
                 edgeObj.addProperty("target", edge.getNodeB().asLong());
                 edgeObj.addProperty("type", edge.getType().name());
-                edgeObj.addProperty("usage", edge.getCurrentUsage());
+                edgeObj.addProperty("usageDown", edge.getCurrentUsageDown());
+                edgeObj.addProperty("usageUp", edge.getCurrentUsageUp());
                 edgeObj.addProperty("capacity", edge.getBandwidthMax());
                 edgeObj.addProperty("length", edge.getLength());
                 edgesArray.add(edgeObj);
