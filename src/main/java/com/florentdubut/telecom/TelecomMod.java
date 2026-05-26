@@ -41,6 +41,9 @@ public class TelecomMod {
                 output.accept(ModItems.PM_BLOCK.get());
                 output.accept(ModItems.SR_BLOCK.get());
                 output.accept(ModItems.ROUTER.get());
+                output.accept(ModItems.ROUTER_LITE.get());
+                output.accept(ModItems.ROUTER_MAX.get());
+                output.accept(ModItems.ROUTER_PRO.get());
                 output.accept(ModItems.ANTENNA.get());
                 output.accept(ModItems.SMARTPHONE.get());
                 output.accept(ModItems.NETWORK_TOOL.get());

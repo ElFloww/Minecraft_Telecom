@@ -19,7 +19,16 @@ public class ModBlocks {
             () -> new CableBlock(BlockBehaviour.Properties.of().noOcclusion().strength(1.0f)));
 
     public static final DeferredBlock<Block> ROUTER = BLOCKS.register("router",
-            () -> new RouterBlock(BlockBehaviour.Properties.of().strength(1.5f)));
+            () -> new RouterBlock(BlockBehaviour.Properties.of().strength(1.5f), 2000, 1000));
+            
+    public static final DeferredBlock<Block> ROUTER_LITE = BLOCKS.register("router_lite",
+            () -> new RouterBlock(BlockBehaviour.Properties.of().strength(1.5f), 1000, 700));
+            
+    public static final DeferredBlock<Block> ROUTER_MAX = BLOCKS.register("router_max",
+            () -> new RouterBlock(BlockBehaviour.Properties.of().strength(1.5f), 8000, 8000));
+            
+    public static final DeferredBlock<Block> ROUTER_PRO = BLOCKS.register("router_pro",
+            () -> new RouterBlock(BlockBehaviour.Properties.of().strength(1.5f), 10000, 10000));
 
     public static final DeferredBlock<Block> SERVER = BLOCKS.register("server",
             () -> new com.florentdubut.telecom.block.ServerBlock(BlockBehaviour.Properties.of().strength(2.0f)));

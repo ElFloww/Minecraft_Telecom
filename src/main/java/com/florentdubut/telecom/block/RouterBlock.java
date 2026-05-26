@@ -10,9 +10,17 @@ import net.minecraft.world.level.block.state.BlockState;
 import org.jetbrains.annotations.Nullable;
 
 public class RouterBlock extends Block implements EntityBlock, TelecomBlock {
-    public RouterBlock(Properties properties) {
+    private final int defaultMaxDown;
+    private final int defaultMaxUp;
+
+    public RouterBlock(Properties properties, int maxDown, int maxUp) {
         super(properties);
+        this.defaultMaxDown = maxDown;
+        this.defaultMaxUp = maxUp;
     }
+
+    public int getMaxDown() { return defaultMaxDown; }
+    public int getMaxUp() { return defaultMaxUp; }
 
     @Nullable
     @Override

@@ -9,9 +9,6 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.server.level.ServerLevel;
 
 public class RouterBlockEntity extends BlockEntity {
-    private int configuredMaxDown = 1000;
-    private int configuredMaxUp = 1000;
-    
     private int lastDownBw = 0;
     private int lastUpBw = 0;
     private int lastPing = 0;
@@ -20,11 +17,15 @@ public class RouterBlockEntity extends BlockEntity {
         super(ModBlockEntities.ROUTER_BE.get(), pos, state);
     }
 
-    public int getConfiguredMaxDown() { return configuredMaxDown; }
-    public void setConfiguredMaxDown(int val) { this.configuredMaxDown = val; setChanged(); }
+    public int getConfiguredMaxDown() { 
+        if (getBlockState().getBlock() instanceof com.florentdubut.telecom.block.RouterBlock rb) return rb.getMaxDown();
+        return 1000;
+    }
 
-    public int getConfiguredMaxUp() { return configuredMaxUp; }
-    public void setConfiguredMaxUp(int val) { this.configuredMaxUp = val; setChanged(); }
+    public int getConfiguredMaxUp() { 
+        if (getBlockState().getBlock() instanceof com.florentdubut.telecom.block.RouterBlock rb) return rb.getMaxUp();
+        return 1000;
+    }
     
     public int getLastDownBw() { return lastDownBw; }
     public int getLastUpBw() { return lastUpBw; }
@@ -40,8 +41,6 @@ public class RouterBlockEntity extends BlockEntity {
     @Override
     protected void saveAdditional(net.minecraft.nbt.CompoundTag tag, net.minecraft.core.HolderLookup.Provider registries) {
         super.saveAdditional(tag, registries);
-        tag.putInt("ConfiguredMaxDown", configuredMaxDown);
-        tag.putInt("ConfiguredMaxUp", configuredMaxUp);
         tag.putInt("LastDownBw", lastDownBw);
         tag.putInt("LastUpBw", lastUpBw);
         tag.putInt("LastPing", lastPing);
@@ -50,8 +49,6 @@ public class RouterBlockEntity extends BlockEntity {
     @Override
     protected void loadAdditional(net.minecraft.nbt.CompoundTag tag, net.minecraft.core.HolderLookup.Provider registries) {
         super.loadAdditional(tag, registries);
-        if (tag.contains("ConfiguredMaxDown")) configuredMaxDown = tag.getInt("ConfiguredMaxDown");
-        if (tag.contains("ConfiguredMaxUp")) configuredMaxUp = tag.getInt("ConfiguredMaxUp");
         if (tag.contains("LastDownBw")) lastDownBw = tag.getInt("LastDownBw");
         if (tag.contains("LastUpBw")) lastUpBw = tag.getInt("LastUpBw");
         if (tag.contains("LastPing")) lastPing = tag.getInt("LastPing");

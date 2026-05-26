@@ -16,7 +16,12 @@ public class ModBlockEntities {
             () -> BlockEntityType.Builder.of(CableBlockEntity::new, ModBlocks.COPPER_CABLE.get(), ModBlocks.FIBER_CABLE.get(), ModBlocks.MEDIUM_FIBER_CABLE.get(), ModBlocks.BIG_FIBER_CABLE.get()).build(null));
 
     public static final java.util.function.Supplier<BlockEntityType<RouterBlockEntity>> ROUTER_BE = BLOCK_ENTITIES.register("router",
-            () -> BlockEntityType.Builder.of(RouterBlockEntity::new, ModBlocks.ROUTER.get()).build(null));
+            () -> BlockEntityType.Builder.of(RouterBlockEntity::new, 
+                ModBlocks.ROUTER.get(),
+                ModBlocks.ROUTER_LITE.get(),
+                ModBlocks.ROUTER_MAX.get(),
+                ModBlocks.ROUTER_PRO.get()
+            ).build(null));
 
     public static final java.util.function.Supplier<BlockEntityType<AntennaBlockEntity>> ANTENNA_BE = BLOCK_ENTITIES.register("antenna",
             () -> BlockEntityType.Builder.of(AntennaBlockEntity::new, ModBlocks.ANTENNA.get()).build(null));

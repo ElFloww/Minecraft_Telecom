@@ -18,6 +18,15 @@ public class ModItems {
 
     public static final DeferredItem<BlockItem> ROUTER = ITEMS.register("router",
             () -> new BlockItem(ModBlocks.ROUTER.get(), new Item.Properties()));
+            
+    public static final DeferredItem<BlockItem> ROUTER_LITE = ITEMS.register("router_lite",
+            () -> new BlockItem(ModBlocks.ROUTER_LITE.get(), new Item.Properties()));
+            
+    public static final DeferredItem<BlockItem> ROUTER_MAX = ITEMS.register("router_max",
+            () -> new BlockItem(ModBlocks.ROUTER_MAX.get(), new Item.Properties()));
+            
+    public static final DeferredItem<BlockItem> ROUTER_PRO = ITEMS.register("router_pro",
+            () -> new BlockItem(ModBlocks.ROUTER_PRO.get(), new Item.Properties()));
 
     public static final DeferredItem<BlockItem> SERVER = ITEMS.register("server",
             () -> new BlockItem(ModBlocks.SERVER.get(), new Item.Properties()));

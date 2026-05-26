@@ -12,9 +12,7 @@ import net.neoforged.neoforge.network.PacketDistributor;
 public class RouterScreen extends Screen {
 
     private final RouterGuiSyncPayload payload;
-    
-    private EditBox downBox;
-    private EditBox upBox;
+
 
     private boolean speedtestActive = false;
     private com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload currentSpeedtestData = null;
@@ -61,26 +59,16 @@ public class RouterScreen extends Screen {
     @Override
     protected void init() {
         super.init();
+
         int centerX = this.width / 2;
         int centerY = this.height / 2;
-        int startX = centerX - 130;
-        int startY = centerY - 90;
+        int startX = centerX - 260 / 2;
+        int startY = centerY - 180 / 2;
 
-        this.downBox = new EditBox(this.font, startX + 130, startY + 105, 60, 15, Component.literal("Downlink"));
-        this.downBox.setValue(String.valueOf(payload.configuredMaxDown()));
-        this.addRenderableWidget(this.downBox);
-
-        this.upBox = new EditBox(this.font, startX + 130, startY + 125, 60, 15, Component.literal("Uplink"));
-        this.upBox.setValue(String.valueOf(payload.configuredMaxUp()));
-        this.addRenderableWidget(this.upBox);
-
-        this.addRenderableWidget(Button.builder(Component.literal("Run Speedtest"), b -> {
-            if (this.speedtestActive) return;
-            if (payload.isConnected()) {
+        this.addRenderableWidget(net.minecraft.client.gui.components.Button.builder(Component.literal("START SPEEDTEST"), button -> {
+            if (!this.speedtestActive) {
                 int confDown = payload.configuredMaxDown();
                 int confUp = payload.configuredMaxUp();
-                try { confDown = Integer.parseInt(downBox.getValue()); } catch (NumberFormatException ignored) {}
-                try { confUp = Integer.parseInt(upBox.getValue()); } catch (NumberFormatException ignored) {}
                 net.neoforged.neoforge.network.PacketDistributor.sendToServer(new com.florentdubut.telecom.network.packet.StartSpeedtestPayload(payload.pos(), payload.ipAddress(), confDown, confUp, 0));
                 this.speedtestActive = true;
                 this.currentSpeedtestData = null;
@@ -92,15 +80,6 @@ public class RouterScreen extends Screen {
 
     @Override
     public void onClose() {
-        int localMaxDown = payload.configuredMaxDown();
-        int localMaxUp = payload.configuredMaxUp();
-        
-        try { localMaxDown = Integer.parseInt(downBox.getValue()); } catch (NumberFormatException ignored) {}
-        try { localMaxUp = Integer.parseInt(upBox.getValue()); } catch (NumberFormatException ignored) {}
-
-        if (localMaxDown != payload.configuredMaxDown() || localMaxUp != payload.configuredMaxUp()) {
-            PacketDistributor.sendToServer(new RouterConfigPayload(payload.pos(), localMaxDown, localMaxUp));
-        }
         super.onClose();
     }
 
@@ -139,10 +118,8 @@ public class RouterScreen extends Screen {
         // Max Hardware Bandwidth
         guiGraphics.drawString(this.font, "Hardware Max: " + (payload.isConnected() ? payload.bandwidthMbps() + " Mbps" : "---"), startX + 20, startY + 60, 0xCCCCCC);
         
-        // Plan Config
-        guiGraphics.drawString(this.font, "Configure Plan Speed:", startX + 20, startY + 90, 0xAAAAAA);
-        guiGraphics.drawString(this.font, "Max Down (Mbps):", startX + 20, startY + 108, 0x00FFFF);
-        guiGraphics.drawString(this.font, "Max Up (Mbps):", startX + 20, startY + 128, 0xFF8800);
+        guiGraphics.drawString(this.font, "Plan Down: " + payload.configuredMaxDown() + " Mbps", startX + 20, startY + 90, 0x00FFFF);
+        guiGraphics.drawString(this.font, "Plan Up: " + payload.configuredMaxUp() + " Mbps", startX + 20, startY + 110, 0xFF8800);
 
         guiGraphics.drawString(this.font, "Press ESC to save and close", startX + 130, startY + 150, 0x555555);
 
