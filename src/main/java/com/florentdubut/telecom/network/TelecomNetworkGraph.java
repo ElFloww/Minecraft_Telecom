@@ -311,6 +311,8 @@ public class TelecomNetworkGraph extends SavedData {
         List<TrafficSession> toRemove = new ArrayList<>();
         Map<TrafficSession, List<NetworkEdge>> sessionPaths = new HashMap<>();
         Map<TrafficSession, Integer> sessionRequested = new HashMap<>();
+        Map<BlockPos, Integer> blockUsage = new HashMap<>();
+        Map<BlockPos, Integer> blockCapacity = new HashMap<>();
 
         for (TrafficSession session : activeSessions) {
             session.tick();
@@ -350,9 +352,13 @@ public class TelecomNetworkGraph extends SavedData {
                 if (path != null) {
                     sessionPaths.put(session, path);
                     sessionRequested.put(session, requested);
-                    // Accumulate requested usage to compute congestion
+                    // Accumulate requested usage to compute congestion per physical block
                     for (NetworkEdge edge : path) {
                         edge.setCurrentUsage(edge.getCurrentUsage() + requested);
+                        for (BlockPos pos : edge.getPathBlocks()) {
+                            blockUsage.put(pos, blockUsage.getOrDefault(pos, 0) + requested);
+                            blockCapacity.put(pos, edge.getBandwidthMax());
+                        }
                     }
                 }
             }
@@ -371,7 +377,7 @@ public class TelecomNetworkGraph extends SavedData {
             }
         }
         
-        // Phase 2: Compute actual bandwidth considering congestion per edge
+        // Phase 2: Compute actual bandwidth considering congestion per physical block
         for (Map.Entry<TrafficSession, Integer> entry : sessionRequested.entrySet()) {
             TrafficSession session = entry.getKey();
             int requested = entry.getValue();
@@ -379,10 +385,14 @@ public class TelecomNetworkGraph extends SavedData {
             
             float minRatio = 1.0f;
             for (NetworkEdge edge : path) {
-                if (edge.getCurrentUsage() > edge.getBandwidthMax()) {
-                    float ratio = (float) edge.getBandwidthMax() / edge.getCurrentUsage();
-                    if (ratio < minRatio) {
-                        minRatio = ratio;
+                for (BlockPos pos : edge.getPathBlocks()) {
+                    int usage = blockUsage.getOrDefault(pos, 0);
+                    int cap = blockCapacity.getOrDefault(pos, edge.getBandwidthMax());
+                    if (usage > cap) {
+                        float ratio = (float) cap / usage;
+                        if (ratio < minRatio) {
+                            minRatio = ratio;
+                        }
                     }
                 }
             }
