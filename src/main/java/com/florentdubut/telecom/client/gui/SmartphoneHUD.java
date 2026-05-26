@@ -16,10 +16,14 @@ public class SmartphoneHUD {
         if (mc.player == null) return;
 
         // Check if player has the smartphone in inventory
-        boolean hasPhone = mc.player.getInventory().contains(new net.minecraft.world.item.ItemStack(ModItems.SMARTPHONE.get()));
-        if (!hasPhone && !mc.player.getOffhandItem().is(ModItems.SMARTPHONE.get()) && !mc.player.getMainHandItem().is(ModItems.SMARTPHONE.get())) {
-            return;
+        boolean hasPhone = false;
+        for (int i = 0; i < mc.player.getInventory().getContainerSize(); i++) {
+            if (mc.player.getInventory().getItem(i).is(ModItems.SMARTPHONE.get())) {
+                hasPhone = true;
+                break;
+            }
         }
+        if (!hasPhone) return;
 
         // If the scan is older than 3 seconds, clear it
         if (System.currentTimeMillis() - lastScanTime > 3000) {
