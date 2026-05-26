@@ -34,6 +34,11 @@ public class TelecomHttpServer {
             server.createContext("/api/nperf_map", new NperfMapHandler());
             server.createContext("/api/speedtest", new SpeedtestHandler());
             
+            server.createContext("/favicon.ico", exchange -> {
+                exchange.sendResponseHeaders(204, -1);
+                exchange.close();
+            });
+            
             // Handle CORS for local dev
             server.createContext("/", exchange -> {
                 String path = exchange.getRequestURI().getPath();
