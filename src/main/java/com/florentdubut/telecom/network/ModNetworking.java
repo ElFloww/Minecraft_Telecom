@@ -27,6 +27,12 @@ public class ModNetworking {
         final PayloadRegistrar registrar = event.registrar("1.0");
 
         registrar.playToServer(
+            com.florentdubut.telecom.network.packet.GuiRefreshRequestPayload.TYPE,
+            com.florentdubut.telecom.network.packet.GuiRefreshRequestPayload.STREAM_CODEC,
+            ModNetworking::handleGuiRefreshRequest
+        );
+
+        registrar.playToServer(
             com.florentdubut.telecom.network.packet.ToggleNperfPayload.TYPE,
             com.florentdubut.telecom.network.packet.ToggleNperfPayload.STREAM_CODEC,
             ModNetworking::handleToggleNperf
