@@ -145,6 +145,8 @@ public class NetworkTracer {
             }
         }
 
+        graph.setEdges(newEdges);
+
         // 4. Assign IPs hierarchically (CIDR tree)
         assignHierarchicalIps(graph);
     }
