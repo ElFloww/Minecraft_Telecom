@@ -19,7 +19,7 @@ public class ModBlocks {
             () -> new CableBlock(BlockBehaviour.Properties.of().noOcclusion().strength(1.0f)));
 
     public static final DeferredBlock<Block> ROUTER = BLOCKS.register("router",
-            () -> new RouterBlock(BlockBehaviour.Properties.of().strength(1.5f), 2000, 1000));
+            () -> new RouterBlock(BlockBehaviour.Properties.of().strength(1.5f), 10000, 10000));
             
     public static final DeferredBlock<Block> ROUTER_LITE = BLOCKS.register("router_lite",
             () -> new RouterBlock(BlockBehaviour.Properties.of().strength(1.5f), 1000, 700));
