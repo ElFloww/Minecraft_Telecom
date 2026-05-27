@@ -166,7 +166,7 @@ public class NetworkTracer {
         Set<BlockPos> visited = new HashSet<>();
 
         // Seed with servers
-        // Seed with servers
+        // Seed with servers FIRST and trace to all reachable nodes
         for (NetworkNode node : graph.getNodes()) {
             if (node.getType() == NetworkNode.NodeType.SERVER) {
                 node.setIpAddress("0.0.0.0");
@@ -176,17 +176,7 @@ public class NetworkTracer {
             }
         }
 
-        // Seed with NROs that aren't connected to servers
-        for (NetworkNode node : graph.getNodes()) {
-            if (node.getType() == NetworkNode.NodeType.NRO && !visited.contains(node.getPosition())) {
-                int currentX = nroIndex++;
-                node.setIpAddress("10." + currentX + ".0.1");
-                node.setNetworkCidr("10." + currentX + ".0.0/16");
-                queue.add(node);
-                visited.add(node.getPosition());
-            }
-        }
-
+        // We should trace from Servers first to assign NROs that are connected to servers
         while (!queue.isEmpty()) {
             NetworkNode current = queue.poll();
             List<BlockPos> neighbors = adj.getOrDefault(current.getPosition(), Collections.emptyList());
@@ -197,53 +187,84 @@ public class NetworkTracer {
                 if (neighbor == null) continue;
 
                 visited.add(neighborPos);
-
-                String parentCidr = current.getNetworkCidr();
-                int x = 0;
-                int y = 0;
-
-                if (parentCidr != null) {
-                    String[] parts = parentCidr.split("[./]");
-                    if (parts.length >= 2) x = Integer.parseInt(parts[1]);
-                    if (parts.length >= 3) y = Integer.parseInt(parts[2]);
-                }
-
-                switch (neighbor.getType()) {
-                    case NRO -> {
-                        int currentX = nroIndex++;
-                        neighbor.setIpAddress("10." + currentX + ".0.1");
-                        neighbor.setNetworkCidr("10." + currentX + ".0.0/16");
-                    }
-                    case PM -> {
-                        int currentY = pmIndexMap.computeIfAbsent(x, k -> 1);
-                        pmIndexMap.put(x, currentY + 1);
-                        neighbor.setIpAddress("10." + x + "." + currentY + ".1");
-                        neighbor.setNetworkCidr("10." + x + "." + currentY + ".0/24");
-                    }
-                    case ROUTER, ANTENNA, NRA, SR -> {
-                        if (parentCidr != null && parentCidr.contains("/24")) {
-                            int z = deviceIndexMap.computeIfAbsent(parentCidr, k -> 2);
-                            deviceIndexMap.put(parentCidr, z + 1);
-                            neighbor.setIpAddress("10." + x + "." + y + "." + z);
-                            neighbor.setNetworkCidr(parentCidr);
-                        } else if (parentCidr != null && parentCidr.contains("/16")) {
-                            int z = deviceIndexMap.computeIfAbsent(parentCidr, k -> 2);
-                            deviceIndexMap.put(parentCidr, z + 1);
-                            neighbor.setIpAddress("10." + x + ".0." + z);
-                            neighbor.setNetworkCidr(parentCidr);
-                        } else {
-                            neighbor.setIpAddress("10.0.0." + (100 + visited.size()));
-                            neighbor.setNetworkCidr("10.0.0.0/24");
-                        }
-                    }
-                    default -> {} 
-                }
-
+                assignIpToNeighbor(current, neighbor, deviceIndexMap, pmIndexMap, visited);
                 queue.add(neighbor);
             }
         }
 
+        // Seed with NROs that aren't connected to servers (isolated NROs)
+        for (NetworkNode node : graph.getNodes()) {
+            if (node.getType() == NetworkNode.NodeType.NRO && !visited.contains(node.getPosition())) {
+                int currentX = nroIndex++;
+                node.setIpAddress("10." + currentX + ".0.1");
+                node.setNetworkCidr("10." + currentX + ".0.0/16");
+                queue.add(node);
+                visited.add(node.getPosition());
+            }
+        }
+
+        // Trace from isolated NROs
+        while (!queue.isEmpty()) {
+            NetworkNode current = queue.poll();
+            List<BlockPos> neighbors = adj.getOrDefault(current.getPosition(), Collections.emptyList());
+
+            for (BlockPos neighborPos : neighbors) {
+                if (visited.contains(neighborPos)) continue;
+                NetworkNode neighbor = graph.getNode(neighborPos);
+                if (neighbor == null) continue;
+
+                visited.add(neighborPos);
+                assignIpToNeighbor(current, neighbor, deviceIndexMap, pmIndexMap, visited);
+                queue.add(neighbor);
+            }
+        }
         graph.setDirty();
+    }
+
+
+    private static int nroIndex = 1;
+
+    private static void assignIpToNeighbor(NetworkNode current, NetworkNode neighbor, Map<String, Integer> deviceIndexMap, Map<Integer, Integer> pmIndexMap, Set<BlockPos> visited) {
+        String parentCidr = current.getNetworkCidr();
+        int x = 0;
+        int y = 0;
+
+        if (parentCidr != null) {
+            String[] parts = parentCidr.split("[./]");
+            if (parts.length >= 2) x = Integer.parseInt(parts[1]);
+            if (parts.length >= 3) y = Integer.parseInt(parts[2]);
+        }
+
+        switch (neighbor.getType()) {
+            case NRO -> {
+                int currentX = nroIndex++;
+                neighbor.setIpAddress("10." + currentX + ".0.1");
+                neighbor.setNetworkCidr("10." + currentX + ".0.0/16");
+            }
+            case PM -> {
+                int currentY = pmIndexMap.computeIfAbsent(x, k -> 1);
+                pmIndexMap.put(x, currentY + 1);
+                neighbor.setIpAddress("10." + x + "." + currentY + ".1");
+                neighbor.setNetworkCidr("10." + x + "." + currentY + ".0/24");
+            }
+            case ROUTER, ANTENNA, NRA, SR -> {
+                if (parentCidr != null && parentCidr.contains("/24")) {
+                    int z = deviceIndexMap.computeIfAbsent(parentCidr, k -> 2);
+                    deviceIndexMap.put(parentCidr, z + 1);
+                    neighbor.setIpAddress("10." + x + "." + y + "." + z);
+                    neighbor.setNetworkCidr(parentCidr);
+                } else if (parentCidr != null && parentCidr.contains("/16")) {
+                    int z = deviceIndexMap.computeIfAbsent(parentCidr, k -> 2);
+                    deviceIndexMap.put(parentCidr, z + 1);
+                    neighbor.setIpAddress("10." + x + ".0." + z);
+                    neighbor.setNetworkCidr(parentCidr);
+                } else {
+                    neighbor.setIpAddress("10.0.0." + (100 + visited.size()));
+                    neighbor.setNetworkCidr("10.0.0.0/24");
+                }
+            }
+            default -> {}
+        }
     }
 
     private static class TraceStep {
