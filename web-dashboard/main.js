@@ -566,5 +566,5 @@ resize();
 requestAnimationFrame(draw);
 
 setInterval(() => {
-    fetchBudget = Math.min(fetchBudget + 5, 20);
+    fetchBudget = Math.min(fetchBudget + 20, 100);
 }, 100);

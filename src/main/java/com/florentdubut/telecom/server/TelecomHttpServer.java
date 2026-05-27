@@ -28,6 +28,7 @@ public class TelecomHttpServer {
         this.minecraftServer = ms;
         try {
             server = HttpServer.create(new InetSocketAddress(8080), 0);
+            server.setExecutor(java.util.concurrent.Executors.newFixedThreadPool(16));
             server.createContext("/api/network", new NetworkMapHandler());
             
             server.createContext("/api/tile", new TileMapHandler());
