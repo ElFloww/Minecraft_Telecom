@@ -241,7 +241,7 @@ return graph;
         PathStats bestStats = null;
         
         for (NetworkNode node : nodes.values()) {
-            if (node.getType() == NetworkNode.NodeType.SERVER || node.getType() == NetworkNode.NodeType.NRO) {
+            if (node.getType() == NetworkNode.NodeType.SERVER) {
                 PathStats stats = calculatePathStats(sourcePos, node.getPosition());
                 if (stats != null) {
                     if (bestStats == null || stats.pingMs() < bestStats.pingMs()) {

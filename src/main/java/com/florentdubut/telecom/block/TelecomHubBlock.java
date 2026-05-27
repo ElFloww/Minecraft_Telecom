@@ -86,7 +86,23 @@ public class TelecomHubBlock extends Block implements EntityBlock, TelecomBlock 
     public void onPlace(BlockState state, Level level, BlockPos pos, BlockState oldState, boolean isMoving) {
         super.onPlace(state, level, pos, oldState, isMoving);
         if (!level.isClientSide()) {
-            com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation((net.minecraft.server.level.ServerLevel) level);
+            net.minecraft.world.level.block.entity.BlockEntity be = level.getBlockEntity(pos);
+            if (be instanceof com.florentdubut.telecom.block.entity.TelecomHubBlockEntity hub) {
+                hub.onPlaced();
+            }
+        }
+    }
+
+    @Override
+    public void onRemove(BlockState state, Level level, BlockPos pos, BlockState newState, boolean isMoving) {
+        if (state.getBlock() != newState.getBlock()) {
+            if (!level.isClientSide()) {
+                net.minecraft.world.level.block.entity.BlockEntity be = level.getBlockEntity(pos);
+                if (be instanceof com.florentdubut.telecom.block.entity.TelecomHubBlockEntity hub) {
+                    hub.onRemoved();
+                }
+            }
+            super.onRemove(state, level, pos, newState, isMoving);
         }
     }
 }
