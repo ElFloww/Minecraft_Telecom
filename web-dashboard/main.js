@@ -479,84 +479,89 @@ function draw() {
     }
     ctx.stroke();
 
-    const nodeMap = new Map(networkData.nodes.map(n => [n.id, n]));
-    
-    // SMALLER CABLES!
-    ctx.lineWidth = Math.max(0.5, 1 * zoom);
-    
-    for (const edge of networkData.edges) {
-        const n1 = nodeMap.get(edge.source);
-        const n2 = nodeMap.get(edge.target);
+    const showInfra = document.getElementById('show-infra');
+    if (!showInfra || showInfra.checked) {
+        const nodeMap = new Map(networkData.nodes.map(n => [n.id, n]));
         
-        if (n1 && n2) {
-            const x1 = n1.x * zoom + pan.x;
-            const y1 = n1.z * zoom + pan.y;
-            const x2 = n2.x * zoom + pan.x;
-            const y2 = n2.z * zoom + pan.y;
+        // SMALLER CABLES!
+        ctx.lineWidth = Math.max(0.5, 1 * zoom);
+        
+        for (const edge of networkData.edges) {
+            const n1 = nodeMap.get(edge.source);
+            const n2 = nodeMap.get(edge.target);
             
-            let maxUsage = Math.max(edge.usageDown, edge.usageUp);
-            let loadPct = Math.min(100, (maxUsage / edge.capacity) * 100);
-            
-            // COLOR CHANGE LOGIC
-            let hue = 120 - (loadPct * 1.2); // 120 is Green, 0 is Red
-            
-            if (maxUsage === 0) {
-                // If 0 usage, make it dull transparent grey
-                ctx.strokeStyle = (hoveredEdge === edge) ? 'rgba(255, 255, 255, 0.8)' : 'rgba(255, 255, 255, 0.5)';
-            } else {
-                // If traffic passing, color it from green to red based on saturation
-                ctx.strokeStyle = `hsla(${hue}, 100%, 50%, ${(hoveredEdge === edge) ? 1 : 0.8})`;
-            }
-            
-            ctx.setLineDash([]);
-            ctx.beginPath();
-            ctx.moveTo(x1, y1);
-            ctx.lineTo(x2, y2);
-            ctx.stroke();
-            
-            if (maxUsage > 0 && loadPct < 100) {
-                let speed = 1 + (loadPct / 100) * 5;
-                // Dash animation using a brighter color or white to represent packets
-                ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
-                ctx.lineWidth = Math.max(0.3, 0.5 * zoom);
-                ctx.setLineDash([4 * zoom, 12 * zoom]);
-                ctx.lineDashOffset = -animationTime * speed; 
+            if (n1 && n2) {
+                const x1 = n1.x * zoom + pan.x;
+                const y1 = n1.z * zoom + pan.y;
+                const x2 = n2.x * zoom + pan.x;
+                const y2 = n2.z * zoom + pan.y;
+                
+                let maxUsage = Math.max(edge.usageDown, edge.usageUp);
+                let loadPct = Math.min(100, (maxUsage / edge.capacity) * 100);
+                
+                // COLOR CHANGE LOGIC
+                let hue = 120 - (loadPct * 1.2); // 120 is Green, 0 is Red
+                
+                if (maxUsage === 0) {
+                    // If 0 usage, make it dull transparent grey
+                    ctx.strokeStyle = (hoveredEdge === edge) ? 'rgba(255, 255, 255, 0.8)' : 'rgba(255, 255, 255, 0.5)';
+                } else {
+                    // If traffic passing, color it from green to red based on saturation
+                    ctx.strokeStyle = `hsla(${hue}, 100%, 50%, ${(hoveredEdge === edge) ? 1 : 0.8})`;
+                }
+                
+                ctx.setLineDash([]);
                 ctx.beginPath();
                 ctx.moveTo(x1, y1);
                 ctx.lineTo(x2, y2);
                 ctx.stroke();
-                // Reset line width for next edge
-                ctx.lineWidth = Math.max(0.5, 1 * zoom);
+                
+                if (maxUsage > 0 && loadPct < 100) {
+                    let speed = 1 + (loadPct / 100) * 5;
+                    // Dash animation using a brighter color or white to represent packets
+                    ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+                    ctx.lineWidth = Math.max(0.3, 0.5 * zoom);
+                    ctx.setLineDash([4 * zoom, 12 * zoom]);
+                    ctx.lineDashOffset = -animationTime * speed; 
+                    ctx.beginPath();
+                    ctx.moveTo(x1, y1);
+                    ctx.lineTo(x2, y2);
+                    ctx.stroke();
+                    // Reset line width for next edge
+                    ctx.lineWidth = Math.max(0.5, 1 * zoom);
+                }
+                ctx.setLineDash([]);
             }
-            ctx.setLineDash([]);
         }
     }
     
     drawCoverage();
 
-    for (const node of networkData.nodes) {
-        const x = node.x * zoom + pan.x;
-        const y = node.z * zoom + pan.y;
-        
-        const isHovered = hoveredNode && hoveredNode.id === node.id;
-        let baseRadius = node.type === 'SERVER' ? 8 : (node.type === 'ANTENNA' ? 6 : 5);
-        const radius = Math.max(3, baseRadius * Math.min(2, Math.max(0.5, zoom))) * (isHovered ? 1.5 : 1);
-        
-        const color = COLORS[node.type] || '#ffffff';
-        
-        ctx.shadowColor = color;
-        ctx.shadowBlur = isHovered ? 20 : (node.usageDown > 0 ? 10 : 0);
-        
-        ctx.fillStyle = color;
-        ctx.beginPath();
-        ctx.arc(x, y, radius, 0, Math.PI * 2);
-        ctx.fill();
-        
-        ctx.shadowBlur = 0;
-        
-        ctx.strokeStyle = '#0f172a';
-        ctx.lineWidth = 2;
-        ctx.stroke();
+    if (!showInfra || showInfra.checked) {
+        for (const node of networkData.nodes) {
+            const x = node.x * zoom + pan.x;
+            const y = node.z * zoom + pan.y;
+            
+            const isHovered = hoveredNode && hoveredNode.id === node.id;
+            let baseRadius = node.type === 'SERVER' ? 8 : (node.type === 'ANTENNA' ? 6 : 5);
+            const radius = Math.max(3, baseRadius * Math.min(2, Math.max(0.5, zoom))) * (isHovered ? 1.5 : 1);
+            
+            const color = COLORS[node.type] || '#ffffff';
+            
+            ctx.shadowColor = color;
+            ctx.shadowBlur = isHovered ? 20 : (node.usageDown > 0 ? 10 : 0);
+            
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.arc(x, y, radius, 0, Math.PI * 2);
+            ctx.fill();
+            
+            ctx.shadowBlur = 0;
+            
+            ctx.strokeStyle = '#0f172a';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }
     }
     
     requestAnimationFrame(draw);
@@ -566,5 +571,5 @@ resize();
 requestAnimationFrame(draw);
 
 setInterval(() => {
-    fetchBudget = Math.min(fetchBudget + 20, 100);
+    fetchBudget = Math.min(fetchBudget + 10, 50);
 }, 100);
