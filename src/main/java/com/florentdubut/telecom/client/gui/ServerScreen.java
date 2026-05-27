@@ -6,7 +6,11 @@ import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 
 public class ServerScreen extends Screen {
-    private final ServerGuiSyncPayload payload;
+    private ServerGuiSyncPayload payload;
+    
+    public void updatePayload(ServerGuiSyncPayload newPayload) {
+        this.payload = newPayload;
+    }
     private int totalDown;
     private int totalUp;
     private final int imageWidth = 256;

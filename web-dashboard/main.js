@@ -64,6 +64,21 @@ async function fetchNetworkData() {
                 pan.y = canvas.height / 2 - (avgZ * zoom);
                 initialCenterDone = true;
             }
+            
+            // Auto refresh details panel
+            if (selectedNode) {
+                const upToDate = networkData.nodes.find(n => n.id === selectedNode.id);
+                if (upToDate) {
+                    selectedNode = upToDate;
+                    showNodeDetails(upToDate);
+                }
+            } else if (selectedEdge) {
+                const upToDate = networkData.edges.find(e => e.source === selectedEdge.source && e.target === selectedEdge.target);
+                if (upToDate) {
+                    selectedEdge = upToDate;
+                    showEdgeDetails(upToDate);
+                }
+            }
         }
     } catch (e) {
         console.warn("Could not fetch network data. Is the Minecraft server running?", e);

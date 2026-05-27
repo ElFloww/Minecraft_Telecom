@@ -11,7 +11,22 @@ import net.neoforged.neoforge.network.PacketDistributor;
 
 public class RouterScreen extends Screen {
 
-    private final RouterGuiSyncPayload payload;
+    private RouterGuiSyncPayload payload;
+    private int refreshTick = 0;
+    
+    public void updatePayload(RouterGuiSyncPayload newPayload) {
+        this.payload = newPayload;
+    }
+    
+    @Override
+    public void tick() {
+        super.tick();
+        refreshTick++;
+        if (refreshTick >= 20) {
+            refreshTick = 0;
+            net.neoforged.neoforge.network.PacketDistributor.sendToServer(new com.florentdubut.telecom.network.packet.GuiRefreshRequestPayload(payload.pos()));
+        }
+    }
 
 
     private boolean speedtestActive = false;
