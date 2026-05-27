@@ -54,6 +54,22 @@ public class RouterBlockEntity extends BlockEntity {
         if (tag.contains("LastPing")) lastPing = tag.getInt("LastPing");
     }
 
+
+    @Override
+    public void onLoad() {
+        super.onLoad();
+        if (level != null && !level.isClientSide()) {
+            com.florentdubut.telecom.network.TelecomNetworkGraph graph = com.florentdubut.telecom.network.TelecomNetworkGraph.get((net.minecraft.server.level.ServerLevel) level);
+            if (graph.getNode(worldPosition) == null) {
+                com.florentdubut.telecom.network.NetworkNode node = new com.florentdubut.telecom.network.NetworkNode(worldPosition, com.florentdubut.telecom.network.NetworkNode.NodeType.ROUTER);
+                node.setCapacityDown(getConfiguredMaxDown());
+                node.setCapacityUp(getConfiguredMaxUp());
+                graph.addNode(node);
+                com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation((net.minecraft.server.level.ServerLevel) level);
+            }
+        }
+    }
+
     public void onPlaced() {
         if (level instanceof ServerLevel serverLevel) {
             TelecomNetworkGraph graph = TelecomNetworkGraph.get(serverLevel);
