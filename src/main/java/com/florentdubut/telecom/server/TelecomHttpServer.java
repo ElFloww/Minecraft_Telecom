@@ -516,8 +516,9 @@ public class TelecomHttpServer {
 
             // Edges
             JsonArray edgesArray = new JsonArray();
-            for (NetworkEdge edge : graph.getEdges()) {
-                JsonObject edgeObj = new JsonObject();
+            synchronized(graph.getEdges()) {
+                for (NetworkEdge edge : graph.getEdges()) {
+                    JsonObject edgeObj = new JsonObject();
                 edgeObj.addProperty("source", edge.getNodeA().asLong());
                 edgeObj.addProperty("target", edge.getNodeB().asLong());
                 edgeObj.addProperty("type", edge.getType().name());
@@ -526,6 +527,7 @@ public class TelecomHttpServer {
                 edgeObj.addProperty("capacity", edge.getBandwidthMax());
                 edgeObj.addProperty("length", edge.getLength());
                 edgesArray.add(edgeObj);
+                }
             }
             response.add("edges", edgesArray);
 

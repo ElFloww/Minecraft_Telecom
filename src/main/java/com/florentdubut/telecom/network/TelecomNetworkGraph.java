@@ -595,7 +595,18 @@ return graph;
     }
 
     public void clearEdges() {
-        edges.clear();
+        synchronized(edges) {
+            edges.clear();
+        }
+        pathCache.clear();
+        setDirty();
+    }
+    
+    public void setEdges(java.util.List<com.florentdubut.telecom.network.NetworkEdge> newEdges) {
+        synchronized(edges) {
+            edges.clear();
+            edges.addAll(newEdges);
+        }
         pathCache.clear();
         setDirty();
     }

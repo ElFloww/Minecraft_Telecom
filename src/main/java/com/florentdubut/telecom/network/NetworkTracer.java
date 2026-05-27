@@ -62,8 +62,8 @@ public class NetworkTracer {
     public static void recalculateNetwork(ServerLevel level) {
         TelecomNetworkGraph graph = TelecomNetworkGraph.get(level);
 
-        // 1. Clear all current edges
-        graph.clearEdges();
+        // 1. Prepare new edges list
+        java.util.List<NetworkEdge> newEdges = new java.util.ArrayList<>();
 
         // 2. Clear all IPs
         for (NetworkNode node : graph.getNodes()) {
@@ -125,7 +125,7 @@ public class NetworkTracer {
                                 List<BlockPos> finalPath = new ArrayList<>(current.pathBlocks);
                                 finalPath.add(neighbor);
                                 NetworkEdge edge = new NetworkEdge(startPos, neighbor, bandwidth, current.distance + 1, current.type, finalPath);
-                                graph.addEdge(edge);
+                                newEdges.add(edge);
                             }
                             visited.add(neighbor);
                             continue;
