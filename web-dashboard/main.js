@@ -15,11 +15,14 @@ let isDragging = false;
 let hasDragged = false;
 let lastMouse = { x: 0, y: 0 };
 let hoveredNode = null;
+let selectedNode = null;
+let selectedEdge = null;
 let hoveredEdge = null;
 let animationTime = 0;
 
 let nperfData = [];
 let fetchBudget = 100;
+let activeTileRequests = 0;
 
 
 const COLORS = {
@@ -103,15 +106,23 @@ canvas.addEventListener('click', e => {
     if (hasDragged) return; // Don't open if they were panning the map
     
     if (hoveredNode) {
+        selectedNode = hoveredNode;
+        selectedEdge = null;
         showNodeDetails(hoveredNode);
     } else if (hoveredEdge) {
+        selectedEdge = hoveredEdge;
+        selectedNode = null;
         showEdgeDetails(hoveredEdge);
     } else {
+        selectedNode = null;
+        selectedEdge = null;
         detailsPanel.style.display = 'none';
     }
 });
 
 detailsClose.addEventListener('click', () => {
+    selectedNode = null;
+    selectedEdge = null;
     detailsPanel.style.display = 'none';
 });
 
@@ -450,15 +461,16 @@ function draw() {
         // Sort by distance to center so we load visible tiles first
         fetchQueue.sort((a, b) => a.dist - b.dist);
         for (const tile of fetchQueue) {
-            if (fetchBudget <= 0) break;
+            if (fetchBudget <= 0 || activeTileRequests >= 4) break;
             fetchBudget--;
+            activeTileRequests++;
             const key = `${tile.cx},${tile.cz}`;
             tileCache.set(key, null);
             const img = new Image();
             img.crossOrigin = "Anonymous";
             img.src = `/api/tile?cx=${tile.cx}&cz=${tile.cz}&t=${Date.now()}`;
-            img.onload = () => tileCache.set(key, img);
-            img.onerror = () => tileCache.set(key, false);
+            img.onload = () => { tileCache.set(key, img); activeTileRequests--; };
+            img.onerror = () => { tileCache.set(key, false); activeTileRequests--; };
         }
     }
 
@@ -571,5 +583,5 @@ resize();
 requestAnimationFrame(draw);
 
 setInterval(() => {
-    fetchBudget = Math.min(fetchBudget + 10, 50);
+    fetchBudget = Math.min(fetchBudget + 20, 100);
 }, 100);
