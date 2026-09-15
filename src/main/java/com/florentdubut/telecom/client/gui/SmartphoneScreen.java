@@ -88,7 +88,9 @@ public class SmartphoneScreen extends Screen {
             guiGraphics.drawString(this.font, scan.tech(), startX + 5, startY + 4, 0xFFFFFFFF);
             guiGraphics.drawString(this.font, scan.signalStrength() + " dBm", startX + screenW - 45, startY + 4, 0xFFFFFFFF);
         } else {
-            guiGraphics.drawString(this.font, "No Service", startX + 5, startY + 4, 0xFFFF5555);
+            net.minecraft.network.chat.Component status = scan != null && (System.currentTimeMillis() - SmartphoneHUD.lastScanTime) < 5000
+                    ? scan.displayName() : net.minecraft.network.chat.Component.literal("Scanning...");
+            guiGraphics.drawString(this.font, status, startX + 5, startY + 4, 0xFFFF5555);
         }
 
         guiGraphics.nextStratum();

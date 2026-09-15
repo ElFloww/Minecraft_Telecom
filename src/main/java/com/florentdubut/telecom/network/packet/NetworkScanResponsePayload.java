@@ -37,6 +37,18 @@ public record NetworkScanResponsePayload(boolean found, String name, int signalS
         )
     );
 
+    public net.minecraft.network.chat.Component displayName() {
+        if (!found) {
+            if (name.equals("Terrain unavailable")) {
+                return net.minecraft.network.chat.Component.translatable("message.telecom.terrain_unavailable");
+            }
+            if (name.equals("No Service")) {
+                return net.minecraft.network.chat.Component.translatable("message.telecom.no_service");
+            }
+        }
+        return net.minecraft.network.chat.Component.literal(name);
+    }
+
     @Override
     public Type<? extends CustomPacketPayload> type() {
         return TYPE;

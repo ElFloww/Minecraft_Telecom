@@ -1,46 +1,97 @@
 import './style.css';
+import { CoverageStore, COVERAGE_STYLES, signalState, coverageStep, visibleCoverageTiles, retryDelay } from './coverage.js';
+import { MapImageStore } from './map-image.js';
 
 let sessionToken = '';
 let sessionGeneration = 0;
 let requestQueue = Promise.resolve();
 let queuedRequests = 0;
+let apiNextAt = 0;
+let apiRetryAt = 0;
+const routeRetries = new Map();
 let speedtestPending = false;
 let tilesPaused = false;
 const authStatus = document.getElementById('auth-status');
 
-// Serialize the small, bounded set of polling/tile requests to respect the server job budget.
+function deferredRequest(retryAt, message = 'Lecture differee') {
+    return Object.assign(new Error(message), { deferred: true, retryAt });
+}
+
+// Five starts/second, one HTTP request in flight, and at most eight queued callers.
 function apiFetch(path, options = {}) {
-    if (queuedRequests >= 8) return Promise.reject(new Error('HTTP request queue full'));
+    if (queuedRequests >= 8) return Promise.reject(deferredRequest(Date.now() + 1000, 'HTTP request queue full'));
     queuedRequests++;
     const generation = sessionGeneration;
+    const { isCurrent = () => true, ...fetchOptions } = options;
+    const current = () => generation === sessionGeneration && isCurrent() && !document.hidden;
     const request = requestQueue.then(async () => {
-        if (generation !== sessionGeneration) throw new Error('Session changed');
+        // Recheck after every wait: a preceding response may have deferred the entire backlog.
+        while (true) {
+            if (!current()) throw deferredRequest(Date.now() + 1000, 'Lecture annulee');
+            if (apiRetryAt === Infinity) throw deferredRequest(Infinity);
+            const delay = Math.max(apiNextAt, apiRetryAt) - Date.now();
+            if (delay <= 0) break;
+            await new Promise(resolve => setTimeout(resolve, Math.min(200, delay)));
+        }
+        if (Date.now() < (routeRetries.get(path) || 0)) throw deferredRequest(routeRetries.get(path));
         const headers = new Headers(options.headers);
         if (sessionToken) headers.set('Authorization', `Bearer ${sessionToken}`);
-        const response = await fetch(path, { ...options, headers, cache: 'no-store', credentials: 'omit',
+        apiNextAt = Date.now() + 200;
+        const response = await fetch(path, { ...fetchOptions, headers, cache: 'no-store', credentials: 'omit',
             redirect: 'error', signal: AbortSignal.timeout(5000) });
-        if (generation !== sessionGeneration) throw new Error('Session changed');
+        // Even stale responses must protect the shared HTTP budget.
+        if ([429, 503, 504].includes(response.status)) {
+            apiRetryAt = Math.max(apiRetryAt, Date.now() + retryDelay(response.headers?.get('Retry-After'), 1, Date.now()));
+        }
+        if (!current()) throw deferredRequest(Date.now() + 1000, 'Lecture annulee');
+        routeRetries.delete(path);
+        if ([202, 204].includes(response.status)) {
+            routeRetries.set(path, Date.now() + retryDelay(response.headers?.get('Retry-After'), response.status === 204 ? 6 : 1, Date.now()));
+            while (routeRetries.size > 128) routeRetries.delete(routeRetries.keys().next().value);
+        }
         if (response.status === 401 || response.status === 403) {
             authStatus.textContent = 'Accès refusé : vérifier le token et l’origine autorisée.';
             tilesPaused = true;
         } else if ([429, 503, 504].includes(response.status)) {
-            authStatus.textContent = 'Serveur occupé ou délai dépassé. Nouvelle lecture au prochain cycle.';
-        } else if (response.ok) {
+            authStatus.textContent = apiRetryAt === Infinity
+                ? 'Retry-After supérieur à 30 s : lectures suspendues. Revalider la session pour reprendre.'
+                : 'Serveur occupé : lectures différées selon Retry-After.';
+        } else if (routeRetries.get(path) === Infinity) {
+            authStatus.textContent = 'Retry-After supérieur à 30 s : cette lecture est suspendue. Revalider la session pour reprendre.';
+        } else if (response.status === 202) {
+            authStatus.textContent = 'Jeu en pause ou occupé : en attente du tick Minecraft.';
+        } else if (response.status === 204) {
+            authStatus.textContent = path.startsWith('/api/map-image?')
+                ? 'Carte physique vide : attente d\'une nouvelle revision.'
+                : 'Zones de terrain non chargées. Nouvelle lecture après 30 s.';
+        } else if (response.status === 200 && routeRetries.size === 0) {
             authStatus.textContent = sessionToken ? 'Session avec token actif.' : 'Lecture locale sans token.';
         }
         return response;
     });
-    requestQueue = request.catch(() => {}).then(() => new Promise(resolve => setTimeout(resolve, 60))).finally(() => { queuedRequests--; });
+    requestQueue = request.catch(() => {}).finally(() => { queuedRequests--; });
     return request;
 }
 
 function setSessionToken(value) {
     sessionToken = value;
     sessionGeneration++;
+    if (apiRetryAt === Infinity) apiRetryAt = 0;
+    routeRetries.clear();
+    networkNextAt = nperfNextAt = playerNextAt = 0;
     tilesPaused = false;
-    for (const tile of tileCache.values()) tile.image?.close();
-    tileCache.clear();
+    terrainMapId = null;
+    invalidateTerrainImage();
+    coverageStore.invalidate(true);
+    appliedCoverageOptions = null;
+    coverageFields.disabled = true;
+    coverageAntenna.replaceChildren(new Option('Toutes les antennes actives', 'all'));
+    coverageBand.replaceChildren(new Option('Toutes les bandes', 'all'));
+    mapPointer = null;
+    tooltip.style.display = 'none';
     networkData = { nodes: [], edges: [] };
+    nodeMap = new Map();
+    networkNodesKey = '';
     document.getElementById('stat-nodes').textContent = '0';
     document.getElementById('stat-edges').textContent = '0';
     nperfData = [];
@@ -71,6 +122,8 @@ const detailsContent = document.getElementById('details-content');
 const detailsTitle = document.getElementById('details-title');
 
 let networkData = { nodes: [], edges: [] };
+let nodeMap = new Map();
+let networkNodesKey = '';
 let pan = { x: 0, y: 0 };
 let zoom = 1;
 let isDragging = false;
@@ -83,8 +136,273 @@ let hoveredEdge = null;
 let animationTime = 0;
 
 let nperfData = [];
-let fetchBudget = 100;
-let activeTileRequests = 0;
+
+const coverageStore = new CoverageStore(apiFetch);
+const coverageToggle = document.getElementById('cov-computed');
+const coverageFields = document.getElementById('coverage-filters');
+const coverageAntenna = document.getElementById('coverage-antenna');
+const coverageTechnology = document.getElementById('coverage-technology');
+const coverageBand = document.getElementById('coverage-band');
+const coverageHeight = document.getElementById('coverage-height');
+const coverageY = document.getElementById('coverage-y');
+const coveragePrecision = document.getElementById('coverage-step');
+const coverageStatus = document.getElementById('coverage-status');
+let appliedCoverageOptions = null;
+let mapPointer = null;
+
+function updateCoverageBands() {
+    const previous = coverageBand.value;
+    const bands = (coverageStore.options?.bands || []).filter(b => coverageTechnology.value === 'all'
+        || b.technology === coverageTechnology.value);
+    coverageBand.replaceChildren(new Option('Toutes les bandes', 'all'),
+        ...bands.map(b => new Option(`${b.label} (${b.technology})`, b.id)));
+    coverageBand.value = bands.some(b => b.id === previous) ? previous : 'all';
+}
+
+function updateCoverageAntennas() {
+    const previous = coverageAntenna.value;
+    // Network IDs are signed-long strings; never round-trip them through Number.
+    const antennas = networkData.nodes.filter(n => n.type === 'ANTENNA' && n.active !== false
+        && typeof n.id === 'string' && /^-?\d+$/.test(n.id));
+    coverageAntenna.replaceChildren(new Option('Toutes les antennes actives', 'all'),
+        ...antennas.map(n => new Option(`${n.id} (${n.x}, ${n.y}, ${n.z})`, n.id)));
+    coverageAntenna.value = antennas.some(n => n.id === previous) ? previous : 'all';
+}
+
+function currentCoverageFilters() {
+    const options = coverageStore.options;
+    let y = 'surface';
+    if (coverageHeight.value === 'y') {
+        const value = Number(coverageY.value);
+        if (!options || !/^-?\d+$/.test(coverageY.value) || !Number.isInteger(value)
+            || value < options.minY || value > options.maxY) return null;
+        y = String(value);
+    }
+    const level = coverageView()[0]?.level ?? 0;
+    return { level, precision: coveragePrecision.value, step: coverageStep(coveragePrecision.value, zoom, level), y, antenna: coverageAntenna.value,
+        technology: coverageTechnology.value, band: coverageBand.value };
+}
+
+let coverageViewport = {};
+function coverageView() {
+    const budget = 49;
+    if (coverageViewport.width !== canvas.width || coverageViewport.height !== canvas.height
+        || coverageViewport.x !== pan.x || coverageViewport.z !== pan.y
+        || coverageViewport.zoom !== zoom || coverageViewport.budget !== budget) {
+        coverageViewport = { width: canvas.width, height: canvas.height, x: pan.x, z: pan.y, zoom, budget,
+            tiles: visibleCoverageTiles({ width: canvas.width, height: canvas.height, pan, zoom }, budget) };
+    }
+    return coverageViewport.tiles;
+}
+
+function updateCoverageSelection() {
+    tooltip.style.display = 'none';
+    updateComputedCoverage();
+}
+
+for (const control of [coverageAntenna, coverageTechnology, coverageBand, coverageHeight, coveragePrecision]) {
+    control.addEventListener('change', () => {
+        if (control === coverageTechnology) updateCoverageBands();
+        coverageY.disabled = coverageHeight.value !== 'y';
+        updateCoverageSelection();
+    });
+}
+coverageY.addEventListener('input', updateCoverageSelection);
+coverageToggle.addEventListener('change', () => {
+    releaseCoverageLayer();
+    updateCoverageSelection();
+});
+document.getElementById('coverage-refresh').addEventListener('click', () => {
+    for (const [path, retryAt] of routeRetries) {
+        if (path.startsWith('/api/coverage') && retryAt === Infinity) routeRetries.delete(path);
+    }
+    coverageStore.invalidate(!coverageStore.options);
+    if (coverageStore.nextOptionsAt === Infinity) coverageStore.nextOptionsAt = 0;
+    tooltip.style.display = 'none';
+    updateComputedCoverage();
+});
+document.getElementById('cov-nperf').addEventListener('change', () => {
+    tooltip.style.display = 'none';
+    fetchNperfData();
+});
+document.getElementById('show-infra').addEventListener('change', () => {
+    hoveredNode = hoveredEdge = null;
+    tooltip.style.display = 'none';
+});
+
+function updateComputedCoverage() {
+    if (document.hidden) return;
+    if (!coverageToggle.checked) {
+        coverageStatus.textContent = 'Calque calculé désactivé.';
+        coverageFields.disabled = true;
+        return;
+    }
+    if (coverageStore.options && appliedCoverageOptions !== coverageStore.options) {
+        appliedCoverageOptions = coverageStore.options;
+        coverageY.min = String(appliedCoverageOptions.minY);
+        coverageY.max = String(appliedCoverageOptions.maxY);
+        coverageY.value = String(Math.max(appliedCoverageOptions.minY,
+            Math.min(appliedCoverageOptions.maxY, Number(coverageY.value) || 0)));
+        document.getElementById('coverage-y-range').textContent = `(${coverageY.min} à ${coverageY.max})`;
+        updateCoverageBands();
+    }
+    coverageFields.disabled = !coverageStore.options;
+    const filters = currentCoverageFilters();
+    if (!filters) {
+        coverageStatus.textContent = tilesPaused ? 'Couverture suspendue : vérifier la session.' : coverageStore.message
+            || (coverageStore.options ? `Y entier requis entre ${coverageY.min} et ${coverageY.max}.`
+                : 'Chargement des limites de hauteur...');
+        // Keep polling model/height options even while fixed Y is missing or invalid.
+        if (!tilesPaused) coverageStore.tick([], { step: 32, y: 'surface', antenna: 'all', technology: 'all', band: 'all' });
+        return;
+    }
+    const tiles = coverageView();
+    coverageStore.select(filters);
+    if (!tilesPaused) coverageStore.tick(tiles, filters);
+    const ready = tiles.filter(t => coverageStore.ready(t)).length;
+    const progress = tiles.reduce((sum, t) => sum + (coverageStore.ready(t) ? 1
+        : coverageStore.entry(t)?.data?.status === 'pending' ? coverageStore.entry(t).data.progress : 0), 0);
+    const state = tilesPaused ? 'Couverture suspendue : vérifier la session.' : coverageStore.message
+        || (!coverageStore.options ? 'Chargement des options de couverture...'
+            : `${ready}/${tiles.length} tuiles prêtes, ${Math.round(progress / Math.max(1, tiles.length) * 100)} % calculé.`);
+    const precision = filters.precision === 'auto' ? 'Auto recommandé'
+        : `minimum demandé : ${filters.precision} bloc${filters.precision === '1' ? '' : 's'}`;
+    coverageStatus.textContent = `${state} Technologie : ${filters.technology === 'all' ? 'Toutes (dominante)' : filters.technology}. Pas effectif : ${filters.step} bloc${filters.step === 1 ? '' : 's'}, ${filters.precision === 'auto' || filters.step !== Number(filters.precision) ? 'adapté au zoom' : 'précision demandée atteinte'} (LOD ${filters.level}, ${precision}), ${filters.y === 'surface' ? 'surface' : `Y ${filters.y}`}.`;
+}
+setInterval(updateComputedCoverage, 200);
+
+function sampleRadius(step) {
+    return step * zoom / 2;
+}
+
+let coverageLayer = null;
+let coverageLayerUnavailable = false;
+
+function releaseCoverageLayer() {
+    if (!coverageLayer) return;
+    coverageLayer.canvas.width = coverageLayer.canvas.height = 0;
+    coverageLayer = null;
+}
+
+function drawComputedCoverage() {
+    if (!coverageToggle.checked) {
+        releaseCoverageLayer();
+        return;
+    }
+    const filters = currentCoverageFilters();
+    if (!filters) {
+        releaseCoverageLayer();
+        return;
+    }
+    // Select the effective grid before rendering, without cancelling old LOD jobs.
+    coverageStore.select(filters);
+    const tiles = coverageView();
+    const ready = tiles.map(tile => coverageStore.ready(tile));
+    // One viewport-sized RGBA surface, capped at 32 MiB (including a 3840x2160 viewport).
+    if (!coverageLayerUnavailable && typeof OffscreenCanvas !== 'undefined'
+        && canvas.width > 0 && canvas.height > 0 && canvas.width * canvas.height <= 8388608) {
+        try {
+            if (coverageLayer && (coverageLayer.canvas.width !== canvas.width || coverageLayer.canvas.height !== canvas.height)) {
+                releaseCoverageLayer();
+            }
+            if (!coverageLayer) {
+                coverageLayer = { canvas: new OffscreenCanvas(canvas.width, canvas.height) };
+                coverageLayer.context = coverageLayer.canvas.getContext('2d');
+            }
+            const target = coverageLayer.context;
+            if (!target || target.isContextLost?.()) throw new Error('Radio canvas unavailable');
+            const key = JSON.stringify([canvas.width, canvas.height, pan.x, pan.y, zoom, filters,
+                coverageStore.generation, coverageStore.options?.modelRevision]);
+            // Ready data/projections are immutable per cache entry; expiry changes the reference to null.
+            if (coverageLayer.key !== key || ready.length !== coverageLayer.ready.length
+                || ready.some((data, i) => data !== coverageLayer.ready[i])) {
+                target.clearRect(0, 0, canvas.width, canvas.height);
+                paintComputedCoverage(target, tiles, ready);
+                coverageLayer.key = key;
+                coverageLayer.ready = ready;
+            }
+            ctx.drawImage(coverageLayer.canvas, 0, 0);
+            return;
+        } catch {
+            releaseCoverageLayer();
+            coverageLayerUnavailable = true;
+        }
+    } else {
+        releaseCoverageLayer();
+    }
+    paintComputedCoverage(ctx, tiles, ready);
+}
+
+function paintComputedCoverage(target, tiles, ready) {
+    for (let i = 0; i < tiles.length; i++) {
+        const tile = tiles[i], data = ready[i];
+        if (!data) {
+            const size = tile.tileSize * zoom;
+            const x = tile.tx * size + pan.x, z = tile.tz * size + pan.y;
+            target.strokeStyle = 'rgba(148,163,184,0.45)';
+            target.lineWidth = 1;
+            target.setLineDash([3, 5]);
+            target.strokeRect(x + 1, z + 1, size - 2, size - 2);
+            target.beginPath(); target.moveTo(x, z); target.lineTo(x + size, z + size); target.stroke();
+            target.setLineDash([]);
+            continue;
+        }
+        const radius = sampleRadius(data.step);
+        const centerOffset = data.step / 2 - Math.floor(data.step / 2);
+        for (const cell of data.cells) {
+            const x = (cell.x + centerOffset) * zoom + pan.x, z = (cell.z + centerOffset) * zoom + pan.y;
+            const state = signalState(cell);
+            target.fillStyle = target.strokeStyle = COVERAGE_STYLES[state].color;
+            target.globalAlpha = state === 'none' || state === 'unknown' ? 0.12 : 0.4;
+            target.fillRect(x - radius, z - radius, radius * 2, radius * 2);
+            target.globalAlpha = 1;
+            if (state === 'none' || state === 'unknown') {
+                target.lineWidth = 1.5;
+                target.strokeRect(x - radius, z - radius, radius * 2, radius * 2);
+            }
+        }
+    }
+}
+
+function positionTooltip(clientX, clientY) {
+    tooltip.style.left = `${Math.max(8, Math.min(clientX + 15, window.innerWidth - tooltip.offsetWidth - 8))}px`;
+    tooltip.style.top = `${Math.max(8, Math.min(clientY + 15, window.innerHeight - tooltip.offsetHeight - 8))}px`;
+}
+
+function showCoverageTooltip() {
+    if (!mapPointer || hoveredNode || hoveredEdge || isDragging) return;
+    const rect = canvas.getBoundingClientRect();
+    const x = (mapPointer.x - rect.left - pan.x) / zoom;
+    const z = (mapPointer.y - rect.top - pan.y) / zoom;
+    tooltip.style.display = 'none';
+    if (document.getElementById('cov-nperf').checked) {
+        const point = nperfData.find(p => Math.hypot(p.x - x, p.z - z) <= Math.max(1 / zoom, 5));
+        if (point) {
+            tooltip.textContent = `Relevé Nperf mesuré : X ${point.x}, Z ${point.z}, technologie ${point.t}, niveau ${point.s}. Ce relevé ne décrit pas la disponibilité actuelle du service.`;
+            tooltip.style.display = 'block';
+            positionTooltip(mapPointer.x, mapPointer.y);
+            return;
+        }
+    }
+    const filters = currentCoverageFilters();
+    if (!coverageToggle.checked || !filters) return;
+    const tile = coverageView().find(t => t.tx === Math.floor(x / t.tileSize) && t.tz === Math.floor(z / t.tileSize));
+    if (!tile) return;
+    const data = coverageStore.ready(tile);
+    if (!data) {
+        const entry = coverageStore.entry(tile)?.data;
+        tooltip.textContent = `Couverture calculée : en attente / expirée. Technologie : ${filters.technology === 'all' ? 'Toutes (dominante)' : filters.technology}. Pas effectif : ${filters.step} bloc${filters.step === 1 ? '' : 's'}. Tuile ${tile.key}, hauteur ${filters.y}. ${entry?.status === 'pending' ? `${Math.round(entry.progress * 100)} % calculé. ` : ''}Aucune donnée radio valide affichée.`;
+    } else {
+        const offset = Math.floor(data.step / 2);
+        const cell = data.cells.find(c => x >= c.x - offset && x < c.x - offset + data.step
+            && z >= c.z - offset && z < c.z - offset + data.step);
+        if (!cell) return;
+        const service = { available: 'disponible', unavailable: 'indisponible', unknown: 'inconnu' }[cell.service];
+        tooltip.textContent = `Zone estimée de ${data.step} × ${data.step} blocs, calcul au centre : X ${cell.x}, Y ${cell.y}, Z ${cell.z}\nSélection : ${filters.technology === 'all' ? 'Toutes (dominante)' : filters.technology}\nSignal : ${COVERAGE_STYLES[signalState(cell)].label}${cell.state === 'signal' && Number.isFinite(cell.powerDbm) ? ` (${cell.powerDbm} dBm)` : ''}\nTechnologie : ${cell.technology ?? 'inconnue'} ; bande : ${cell.band ?? 'inconnue'}\nSource du signal : antenne ${cell.antenna ?? 'inconnue'}\nService : ${service}\nRévision : ${data.revision}`;
+    }
+    tooltip.style.display = 'block';
+    positionTooltip(mapPointer.x, mapPointer.y);
+}
 
 
 const COLORS = {
@@ -98,6 +416,10 @@ const COLORS = {
 };
 
 function resize() {
+    if (initialCenterDone) {
+        pan.x += (canvas.clientWidth - canvas.width) / 2;
+        pan.y += (canvas.clientHeight - canvas.height) / 2;
+    }
     canvas.width = canvas.clientWidth;
     canvas.height = canvas.clientHeight;
 }
@@ -105,16 +427,34 @@ window.addEventListener('resize', resize);
 
 let initialCenterDone = false;
 let networkPending = false;
+let networkNextAt = 0;
 async function fetchNetworkData() {
-    if (networkPending) return;
+    if (networkPending || document.hidden) return;
     networkPending = true;
     const generation = sessionGeneration;
     try {
         const res = await apiFetch('/api/network');
-        if (res.ok) {
+        networkNextAt = Date.now() + (res.status === 202 ? retryDelay(res.headers?.get('Retry-After'), 1, Date.now()) : 2000);
+        if (res.status === 200) {
             const data = await res.json();
             if (generation !== sessionGeneration) return;
+            if ((typeof data.mapId === 'string' || data.mapId === null) && data.mapId !== terrainMapId) {
+                terrainMapId = data.mapId;
+                invalidateTerrainImage();
+                coverageStore.invalidate(true);
+                appliedCoverageOptions = null;
+                nperfData = [];
+                routeRetries.clear();
+            }
+            mapImageStore.select(terrainMapId, data.mapImage);
+            updateTerrain();
             networkData = data;
+            const nodesKey = JSON.stringify(networkData.nodes);
+            if (nodesKey !== networkNodesKey) {
+                networkNodesKey = nodesKey;
+                nodeMap = new Map(networkData.nodes.map(n => [n.id, n]));
+            }
+            updateCoverageAntennas();
             document.getElementById('stat-nodes').innerText = networkData.nodes.length;
             document.getElementById('stat-edges').innerText = networkData.edges.length;
             
@@ -149,35 +489,41 @@ async function fetchNetworkData() {
             }
         }
     } catch (e) {
-        console.warn("Could not fetch network data. Is the Minecraft server running?", e);
+        networkNextAt = e.deferred ? e.retryAt : Date.now() + 2000;
+        if (!e.deferred) console.warn("Could not fetch network data. Is the Minecraft server running?", e);
     } finally {
         networkPending = false;
     }
 }
 
-setTimeout(async () => {
-    if (!initialCenterDone) {
+let playerPending = false;
+let playerNextAt = 0;
+async function fetchPlayerData() {
+    if (!initialCenterDone && !playerPending && !document.hidden && Date.now() >= playerNextAt) {
+        playerPending = true;
         try {
             const generation = sessionGeneration;
-            const res = await apiFetch('/api/player');
-            if (res.ok) {
+            const world = terrainGeneration;
+            const res = await apiFetch('/api/player', { isCurrent: () => world === terrainGeneration });
+            playerNextAt = Date.now() + retryDelay(res.headers?.get('Retry-After'), 1, Date.now());
+            if (res.status === 200) {
                 const p = await res.json();
-                if (generation !== sessionGeneration) return;
+                if (generation !== sessionGeneration || world !== terrainGeneration) return;
                 pan.x = canvas.width / 2 - (p.x * zoom);
                 pan.y = canvas.height / 2 - (p.z * zoom);
                 initialCenterDone = true;
-            } else {
-                pan.x = canvas.width / 2;
-                pan.y = canvas.height / 2;
             }
         } catch (e) {
-            pan.x = canvas.width / 2;
-            pan.y = canvas.height / 2;
+            playerNextAt = e.deferred ? e.retryAt : Date.now() + 2000;
+        } finally {
+            playerPending = false;
         }
     }
-}, 500);
+}
+setTimeout(fetchPlayerData, 500);
+setInterval(fetchPlayerData, 200);
 
-setInterval(fetchNetworkData, 2000);
+setInterval(() => { if (Date.now() >= networkNextAt) fetchNetworkData(); }, 200);
 fetchNetworkData();
 
 canvas.addEventListener('pointerdown', e => {
@@ -355,8 +701,6 @@ function countDownstream(startNode) {
         adj[e.target].push(e.source);
     }
     
-    const nodeMap = new Map(networkData.nodes.map(n => [n.id, n]));
-    
     while(queue.length > 0) {
         const currId = queue.shift();
         const currNode = nodeMap.get(currId);
@@ -400,10 +744,16 @@ window.addEventListener('pointermove', e => {
     
     hoveredNode = null;
     hoveredEdge = null;
-    
-    drawCoverage();
 
-    for (const node of networkData.nodes) {
+    if (e.target !== canvas || mouseX < 0 || mouseY < 0 || mouseX > canvas.width || mouseY > canvas.height) {
+        mapPointer = null;
+        tooltip.style.display = 'none';
+        document.body.style.cursor = '';
+        return;
+    }
+    mapPointer = { x: e.clientX, y: e.clientY };
+
+    for (const node of document.getElementById('show-infra').checked ? networkData.nodes : []) {
         const nx = node.x * zoom + pan.x;
         const ny = node.z * zoom + pan.y;
         const dist = Math.hypot(mouseX - nx, mouseY - ny);
@@ -414,8 +764,7 @@ window.addEventListener('pointermove', e => {
         }
     }
     
-    if (!hoveredNode) {
-        const nodeMap = new Map(networkData.nodes.map(n => [n.id, n]));
+    if (!hoveredNode && document.getElementById('show-infra').checked) {
         for (const edge of networkData.edges) {
             const n1 = nodeMap.get(edge.source);
             const n2 = nodeMap.get(edge.target);
@@ -450,8 +799,27 @@ window.addEventListener('pointermove', e => {
     } else {
         tooltip.style.display = 'none';
         document.body.style.cursor = isDragging ? 'grabbing' : 'grab';
+        showCoverageTooltip();
     }
+    if (tooltip.style.display !== 'none') positionTooltip(e.clientX, e.clientY);
 });
+
+canvas.addEventListener('pointerleave', () => {
+    mapPointer = null;
+    hoveredNode = hoveredEdge = null;
+    tooltip.style.display = 'none';
+});
+
+function zoomAt(factor, x, y) {
+    const nextZoom = Math.max(0.25, Math.min(32, zoom * factor));
+    const ratio = nextZoom / zoom;
+    zoom = nextZoom;
+    pan.x = x - (x - pan.x) * ratio;
+    pan.y = y - (y - pan.y) * ratio;
+    updateComputedCoverage();
+}
+document.getElementById('zoom-in').addEventListener('click', () => zoomAt(1.5, canvas.width / 2, canvas.height / 2));
+document.getElementById('zoom-out').addEventListener('click', () => zoomAt(1 / 1.5, canvas.width / 2, canvas.height / 2));
 
 canvas.addEventListener('wheel', e => {
     e.preventDefault();
@@ -459,44 +827,28 @@ canvas.addEventListener('wheel', e => {
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
     
-    const nextZoom = Math.max(0.25, Math.min(16, zoom * (e.deltaY < 0 ? 1.1 : 0.9)));
-    const wheel = nextZoom / zoom;
-    zoom = nextZoom;
-    
-    pan.x = mouseX - (mouseX - pan.x) * wheel;
-    pan.y = mouseY - (mouseY - pan.y) * wheel;
+    zoomAt(e.deltaY < 0 ? 1.1 : 0.9, mouseX, mouseY);
 });
 
-let tileCache = new Map();
+const mapImageStore = new MapImageStore(apiFetch, { decode: blob => createImageBitmap(blob), now: () => Date.now() });
+let terrainMapId = null;
+let terrainGeneration = 0;
+const terrainStatus = document.getElementById('terrain-status');
 
-async function fetchTile(tile, key) {
-    const generation = sessionGeneration;
-    let image;
-    let expires = Date.now() + 3000;
-    try {
-        const response = await apiFetch(`/api/tile?cx=${tile.cx}&cz=${tile.cz}`);
-        if (response.ok) {
-            image = await createImageBitmap(await response.blob());
-            expires = Date.now() + 30000;
-        } else if (response.status === 404) {
-            expires = Date.now() + 10000;
-        }
-        if (generation !== sessionGeneration) {
-            image?.close();
-            return;
-        }
-        tileCache.set(key, { image, expires });
-    } catch (error) {
-        if (generation === sessionGeneration) tileCache.set(key, { expires });
-    } finally {
-        activeTileRequests--;
-        while (tileCache.size > 1024) {
-            const oldest = tileCache.keys().next().value;
-            tileCache.get(oldest).image?.close();
-            tileCache.delete(oldest);
-        }
-    }
+function invalidateTerrainImage() {
+    terrainGeneration++;
+    mapImageStore.invalidate();
+    for (const path of routeRetries.keys()) if (path.startsWith('/api/map-image?')) routeRetries.delete(path);
 }
+
+function updateTerrain() {
+    if (document.hidden) return;
+    const snapshot = mapImageStore.snapshot;
+    terrainStatus.textContent = `${mapImageStore.message}${snapshot
+        ? ` Dernier snapshot valide affiche : pas raster ${snapshot.blocksPerPixel} blocs/pixel (blocksPerPixel). Detail limite par cette resolution, sans chargement au zoom.` : ''}`;
+    if (!tilesPaused && Date.now() >= apiRetryAt) mapImageStore.tick();
+}
+setInterval(updateTerrain, 200);
 
 
 const nperfColors = {
@@ -508,15 +860,18 @@ const nperfColors = {
 };
 
 let nperfPending = false;
+let nperfNextAt = 0;
 async function fetchNperfData() {
-    if (nperfPending) return;
+    if (nperfPending || document.hidden || !document.getElementById('cov-nperf').checked) return;
     nperfPending = true;
     const generation = sessionGeneration;
+    const world = terrainGeneration;
     try {
-        const response = await apiFetch('/api/nperf_map');
-        if (!response.ok) return;
+        const response = await apiFetch('/api/nperf_map', { isCurrent: () => world === terrainGeneration });
+        nperfNextAt = Date.now() + (response.status === 202 ? retryDelay(response.headers?.get('Retry-After'), 1, Date.now()) : 2000);
+        if (response.status !== 200) return;
         const data = await response.json();
-        if (generation !== sessionGeneration) return;
+        if (generation !== sessionGeneration || world !== terrainGeneration) return;
         nperfData = data;
         
         if (!initialCenterDone && nperfData.length > 0) {
@@ -531,15 +886,16 @@ async function fetchNperfData() {
             initialCenterDone = true;
         }
     } catch (e) {
-        console.error(e);
+        nperfNextAt = e.deferred ? e.retryAt : Date.now() + 2000;
+        if (!e.deferred) console.error(e);
     } finally {
         nperfPending = false;
     }
 }
-setInterval(fetchNperfData, 2000);
+setInterval(() => { if (Date.now() >= nperfNextAt) fetchNperfData(); }, 200);
 fetchNperfData();
 
-function drawCoverage() {
+function drawNperfCoverage() {
     const cb = document.getElementById('cov-nperf');
     if (!cb || !cb.checked || !nperfData) return;
 
@@ -561,57 +917,15 @@ function drawCoverage() {
 }
 
 
+let animationFrame;
+const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)');
 function draw() {
-    animationTime += 0.05;
+    if (document.hidden) return;
+    if (!reducedMotion?.matches) animationTime += 0.05;
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     
-    let minCx = Math.floor((-pan.x) / (16 * zoom));
-    let minCz = Math.floor((-pan.y) / (16 * zoom));
-    let maxCx = Math.floor((canvas.width - pan.x) / (16 * zoom));
-    let maxCz = Math.floor((canvas.height - pan.y) / (16 * zoom));
-
-    const centerCx = Math.floor((minCx + maxCx) / 2);
-    const centerCz = Math.floor((minCz + maxCz) / 2);
-    // Bound per-frame tile work, including on very large displays or extreme zoom-out.
-    minCx = Math.max(minCx, centerCx - 15);
-    maxCx = Math.min(maxCx, centerCx + 15);
-    minCz = Math.max(minCz, centerCz - 15);
-    maxCz = Math.min(maxCz, centerCz + 15);
-    
-    let fetchQueue = [];
-    
-    for (let cx = minCx; cx <= maxCx; cx++) {
-        for (let cz = minCz; cz <= maxCz; cz++) {
-            const key = `${cx},${cz}`;
-            const cached = tileCache.get(key);
-            if (cached && cached.expires < Date.now()) {
-                cached.image?.close();
-                tileCache.delete(key);
-            }
-            if (!tileCache.has(key)) {
-                fetchQueue.push({cx, cz, dist: (cx - centerCx)**2 + (cz - centerCz)**2});
-            } else {
-                const img = tileCache.get(key).image;
-                if (img) {
-                    ctx.drawImage(img, cx * 16 * zoom + pan.x, cz * 16 * zoom + pan.y, 16.2 * zoom, 16.2 * zoom);
-                }
-            }
-        }
-    }
-    
-    if (!tilesPaused && fetchQueue.length > 0) {
-        // Sort by distance to center so we load visible tiles first
-        fetchQueue.sort((a, b) => a.dist - b.dist);
-        for (const tile of fetchQueue) {
-            if (fetchBudget <= 0 || activeTileRequests >= 4) break;
-            fetchBudget--;
-            activeTileRequests++;
-            const key = `${tile.cx},${tile.cz}`;
-            tileCache.set(key, { expires: Infinity });
-            fetchTile(tile, key);
-        }
-    }
+    mapImageStore.draw(ctx, pan, zoom);
 
 
 
@@ -630,10 +944,11 @@ function draw() {
     }
     ctx.stroke();
 
+    drawComputedCoverage();
+    drawNperfCoverage();
+
     const showInfra = document.getElementById('show-infra');
     if (!showInfra || showInfra.checked) {
-        const nodeMap = new Map(networkData.nodes.map(n => [n.id, n]));
-        
         // SMALLER CABLES!
         ctx.lineWidth = Math.max(0.5, 1 * zoom);
         
@@ -646,6 +961,8 @@ function draw() {
                 const y1 = n1.z * zoom + pan.y;
                 const x2 = n2.x * zoom + pan.x;
                 const y2 = n2.z * zoom + pan.y;
+                if (Math.max(x1, x2) < -20 || Math.min(x1, x2) > canvas.width + 20
+                    || Math.max(y1, y2) < -20 || Math.min(y1, y2) > canvas.height + 20) continue;
                 
                 let maxUsage = Math.max(edge.usageDown, edge.usageUp);
                 let loadPct = Math.min(100, (maxUsage / edge.capacity) * 100);
@@ -686,12 +1003,11 @@ function draw() {
         }
     }
     
-    drawCoverage();
-
     if (!showInfra || showInfra.checked) {
         for (const node of networkData.nodes) {
             const x = node.x * zoom + pan.x;
             const y = node.z * zoom + pan.y;
+            if (x < -128 || y < -128 || x > canvas.width + 128 || y > canvas.height + 128) continue;
             
             const isHovered = hoveredNode && hoveredNode.id === node.id;
             let baseRadius = node.type === 'SERVER' ? 8 : (node.type === 'ANTENNA' ? 6 : 5);
@@ -731,12 +1047,23 @@ function draw() {
         }
     }
     
-    requestAnimationFrame(draw);
+    showCoverageTooltip();
+    animationFrame = requestAnimationFrame(draw);
 }
 
 resize();
-requestAnimationFrame(draw);
-
-setInterval(() => {
-    fetchBudget = Math.min(fetchBudget + 20, 100);
-}, 100);
+animationFrame = requestAnimationFrame(draw);
+document.addEventListener('visibilitychange', () => {
+    cancelAnimationFrame(animationFrame);
+    if (!document.hidden) {
+        resize();
+        updateComputedCoverage();
+        fetchNetworkData();
+        fetchNperfData();
+        animationFrame = requestAnimationFrame(draw);
+    } else {
+        mapPointer = null;
+        tooltip.style.display = 'none';
+    }
+});
+if (typeof ResizeObserver !== 'undefined') new ResizeObserver(resize).observe(canvas);

@@ -83,6 +83,11 @@ public class TelecomMod {
         httpServer.stop();
     }
 
+    @SubscribeEvent
+    public void onChunkSent(net.neoforged.neoforge.event.level.ChunkWatchEvent.Sent event) {
+        httpServer.captureChunk(event.getLevel(), event.getChunk().getPos());
+    }
+
     @EventBusSubscriber(modid = TelecomMod.MODID, value = Dist.CLIENT)
     static class ClientModEvents {
         @SubscribeEvent

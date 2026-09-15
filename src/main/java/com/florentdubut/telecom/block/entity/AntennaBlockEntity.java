@@ -48,7 +48,10 @@ public class AntennaBlockEntity extends BlockEntity {
                 graph.addNode(node);
                 com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel);
             }
-            node.setFrequenciesMask(enabledFrequenciesMask);
+            if (node.getFrequenciesMask() != enabledFrequenciesMask) {
+                node.setFrequenciesMask(enabledFrequenciesMask);
+                com.florentdubut.telecom.network.CoverageService.invalidateAntennas(serverLevel);
+            }
         }
     }
 
@@ -103,6 +106,7 @@ public class AntennaBlockEntity extends BlockEntity {
     }
 
     public void setEnabledFrequenciesMask(int mask) {
+        if (enabledFrequenciesMask == mask) return;
         this.enabledFrequenciesMask = mask;
         setChanged();
         if (level != null) {
@@ -113,6 +117,7 @@ public class AntennaBlockEntity extends BlockEntity {
                 if (node != null) {
                     node.setFrequenciesMask(mask);
                 }
+                com.florentdubut.telecom.network.CoverageService.invalidateAntennas(serverLevel);
             }
         }
     }

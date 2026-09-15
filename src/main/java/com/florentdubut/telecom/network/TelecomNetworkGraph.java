@@ -21,6 +21,9 @@ public class TelecomNetworkGraph extends SavedData {
     private final Map<Long, Integer> recordedCoverage = new java.util.concurrent.ConcurrentHashMap<>();
     private final Map<java.util.UUID, Integer> mobileAddresses = new HashMap<>();
     private int nextMobileAddress = 1;
+    private long topologyRevision;
+
+    public long getTopologyRevision() { return topologyRevision; }
 
     // Keep the existing NBT layout so worlds created before the API migration still load.
     public static final Codec<TelecomNetworkGraph> CODEC = CompoundTag.CODEC.comapFlatMap(tag -> {
@@ -237,12 +240,14 @@ public class TelecomNetworkGraph extends SavedData {
 
     public void addNode(NetworkNode node) {
         nodes.put(node.getPosition(), node);
+        topologyRevision++;
         pathCache.clear();
         setDirty();
     }
 
     public void removeNode(BlockPos pos) {
         nodes.remove(pos);
+        topologyRevision++;
         edges.removeIf(edge -> edge.getNodeA().equals(pos) || edge.getNodeB().equals(pos));
         pathCache.clear();
         setDirty();
@@ -250,11 +255,13 @@ public class TelecomNetworkGraph extends SavedData {
 
     public void addEdge(NetworkEdge edge) {
         edges.add(edge);
+        topologyRevision++;
         pathCache.clear();
         setDirty();
     }
 
     public void removeEdgeBetween(BlockPos a, BlockPos b) {
+        topologyRevision++;
         edges.removeIf(edge -> (edge.getNodeA().equals(a) && edge.getNodeB().equals(b)) ||
                                (edge.getNodeA().equals(b) && edge.getNodeB().equals(a)));
         pathCache.clear();
@@ -676,6 +683,7 @@ public class TelecomNetworkGraph extends SavedData {
     }
 
     public void clearEdges() {
+        topologyRevision++;
         synchronized(edges) {
             edges.clear();
         }
@@ -684,6 +692,7 @@ public class TelecomNetworkGraph extends SavedData {
     }
     
     public void setEdges(java.util.List<com.florentdubut.telecom.network.NetworkEdge> newEdges) {
+        topologyRevision++;
         synchronized(edges) {
             edges.clear();
             edges.addAll(newEdges);

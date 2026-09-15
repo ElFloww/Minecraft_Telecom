@@ -4,8 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Minecraft Telecom Dashboard</title>
-    <script type="module" crossorigin src="/assets/index-DZi4P_7i.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-CbE-LtKC.css">
+    <script type="module" crossorigin src="/assets/index-CiBSJzkP.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-CeypSqPs.css">
   </head>
   <body>
     <div id="app">
@@ -18,6 +18,7 @@
           <button class="speedtest-btn" id="clear-token" type="button">Effacer la session</button>
           <small>En mémoire uniquement. Requis pour les mutations et tout accès distant.</small>
           <p id="auth-status" role="status" aria-live="polite">Lecture locale sans token.</p>
+          <p id="terrain-status" role="status" aria-live="polite"></p>
         </form>
         
         <div class="stat-card">
@@ -44,14 +45,44 @@
         <div class="coverage-controls">
           <h3>Affichage</h3>
           <div class="coverage-toggles">
-            <label class="toggle-label"><input type="checkbox" id="cov-nperf" class="layer-checkbox" data-tech="nperf" checked> <span class="slider"></span> Nperf (Global)</label>
+            <label class="toggle-label"><input type="checkbox" id="cov-computed" class="layer-checkbox"> <span class="slider"></span> Couverture calculée</label>
+            <label class="toggle-label"><input type="checkbox" id="cov-nperf" class="layer-checkbox" data-tech="nperf"> <span class="slider"></span> Relevés Nperf (mesurés)</label>
             <label class="toggle-label"><input type="checkbox" id="show-infra" class="layer-checkbox" checked> <span class="slider"></span> Infrastructure</label>
           </div>
+          <fieldset id="coverage-filters" disabled>
+            <legend>Couverture calculée</legend>
+            <label for="coverage-antenna">Antenne</label>
+            <select id="coverage-antenna"><option value="all">Toutes les antennes actives</option></select>
+            <label for="coverage-technology">Technologie</label>
+            <select id="coverage-technology"><option value="all">Toutes (dominante)</option><option>2G</option><option>3G</option><option>4G</option><option>5G</option></select>
+            <label for="coverage-band">Bande</label>
+            <select id="coverage-band"><option value="all">Toutes les bandes</option></select>
+            <label for="coverage-height">Hauteur</label>
+            <select id="coverage-height"><option value="surface">Surface</option><option value="y">Y fixe</option></select>
+            <label for="coverage-y">Coordonnée Y <span id="coverage-y-range"></span></label>
+            <input id="coverage-y" type="number" step="1" disabled>
+            <label for="coverage-step">Pas minimal souhaité (blocs)</label>
+            <select id="coverage-step"><option value="auto">Auto (recommandé)</option><option value="1">1 bloc (précis à zoom fort)</option><option value="8">8 blocs (demi-chunk)</option><option value="16">16 blocs (chunk)</option></select>
+          </fieldset>
+          <button id="coverage-refresh" class="speedtest-btn" type="button">Actualiser la couverture</button>
+          <p id="coverage-status" role="status" aria-live="polite">Calque calculé désactivé.</p>
+          <small>Chaque case colorée est une zone estimée à partir de son centre. Le pas effectif augmente au dézoom pour couvrir tout l’écran, avec au plus 256 cellules par tuile. Les couvertures 2G, 3G, 4G et 5G sont indépendantes ; « Toutes » affiche la dominante (5G &gt; 4G &gt; 3G &gt; 2G).</small>
+          <div class="coverage-legend" aria-label="Légende du signal calculé">
+            <span><i style="background:#22c55e"></i> Fort &gt; -80 dBm</span>
+            <span><i style="background:#eab308"></i> Moyen &gt; -100 dBm</span>
+            <span><i style="background:#f97316"></i> Faible &gt; -120 dBm</span>
+            <span><i style="background:#ef4444"></i> Sous seuil ≤ -120 dBm</span>
+            <span><i style="background:#94a3b8"></i> Absent</span>
+            <span><i style="background:#c4b5fd"></i> Inconnu</span>
+            <span><i class="pending-swatch"></i> En attente / expiré</span>
+          </div>
+          <small class="coverage-note">Points calculés uniquement, sans interpolation. Signal radio et disponibilité du service sont distincts. Portée maximale : 4096 blocs. LOD radio adapté au viewport entier, sans troncature centrale. Les zones en attente ne représentent pas une absence de signal.</small>
         </div>
       </div>
       
       <div class="map-container">
         <canvas id="network-map"></canvas>
+        <div class="map-zoom" aria-label="Zoom de la carte"><button id="zoom-in" type="button" aria-label="Zoom avant">+</button><button id="zoom-out" type="button" aria-label="Zoom arrière">−</button></div>
         <div id="tooltip" class="glass-tooltip" style="display: none;"></div>
       </div>
 

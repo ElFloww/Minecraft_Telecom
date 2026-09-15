@@ -64,7 +64,7 @@ public class SmartphoneHUD {
                 guiGraphics.fill(startX + 120 + (i * 4), startY + 25 + (12 - (i * 3)), startX + 122 + (i * 4), startY + 37, color);
             }
         } else {
-            guiGraphics.drawString(font, "No Service", startX + 5, startY + 5, 0xFFFF0000);
+            guiGraphics.drawString(font, latestScan.displayName(), startX + 5, startY + 5, 0xFFFF0000);
         }
     }
 }

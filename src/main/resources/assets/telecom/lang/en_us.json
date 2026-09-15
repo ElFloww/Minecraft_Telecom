@@ -1,5 +1,7 @@
 {
   "itemGroup.telecom": "Telecom Mod",
+  "message.telecom.terrain_unavailable": "Radio path unknown",
+  "message.telecom.no_service": "No Service",
   "block.telecom.copper_cable": "Copper Cable",
   "block.telecom.fiber_cable": "Fiber Cable",
   "block.telecom.router": "Classic Box (2 Gbps)",

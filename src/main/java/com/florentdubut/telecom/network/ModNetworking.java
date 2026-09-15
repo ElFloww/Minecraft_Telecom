@@ -177,41 +177,48 @@ public class ModNetworking {
         TelecomNetworkGraph graph = TelecomNetworkGraph.get(level);
 
         // Discover candidates first; aggregate only on the selected serving antenna.
-        record FreqHit(AntennaBlockEntity antenna, TelecomFrequency freq, float signal) {}
+        record FreqHit(BlockPos position, String name, TelecomFrequency freq, float signal) {}
         java.util.List<FreqHit> hits = new java.util.ArrayList<>();
+        boolean incompleteTerrain = false;
+        BlockPos receiver = player.blockPosition().above();
 
         for (NetworkNode node : graph.getNodes()) {
             if (node.getType() != NetworkNode.NodeType.ANTENNA) continue;
-            if (node.getIpAddress() == null || node.getIpAddress().isBlank()) continue;
-            if (!isLoaded(level, node.getPosition())) continue;
+            if (node.getFrequenciesMask() == 0 || node.getPosition().distSqr(receiver) > (double) SignalPropagator.MAX_RANGE * SignalPropagator.MAX_RANGE) continue;
+            BlockPos position = node.getPosition();
+            AntennaBlockEntity antenna = null;
+            if (isLoaded(level, position)) {
+                BlockEntity be = level.getBlockEntity(position);
+                if (!(be instanceof AntennaBlockEntity loaded)) continue;
+                antenna = loaded;
+            }
+            String name = antenna == null ? "Antenna (" + position.getX() + ", " + position.getY() + ", " + position.getZ() + ")"
+                    : antenna.getAntennaName();
 
-            BlockEntity be = level.getBlockEntity(node.getPosition());
-            if (!(be instanceof AntennaBlockEntity antenna)) continue;
-
+            java.util.List<TelecomFrequency> frequencies = new java.util.ArrayList<>();
             for (TelecomFrequency freq : TelecomFrequency.values()) {
-                if (!antenna.isFrequencyEnabled(freq)) continue;
-                float signal = com.florentdubut.telecom.network.SignalPropagator.calculateSignal(
-                    level, antenna.getBlockPos(), player.blockPosition().above(), freq).powerDbm;
-                if (signal > -120f) {
-                    hits.add(new FreqHit(antenna, freq, signal));
+                if (antenna != null ? antenna.isFrequencyEnabled(freq) : (node.getFrequenciesMask() & (1 << freq.ordinal())) != 0) frequencies.add(freq);
+            }
+            if (frequencies.isEmpty()) continue;
+            var trace = new SignalPropagator.MultiTrace(position, receiver, frequencies);
+            while (!trace.advance(level, 256, Long.MAX_VALUE)) { }
+            for (SignalPropagator.SignalResult result : trace.results()) {
+                incompleteTerrain |= !result.known;
+                float signal = result.powerDbm;
+                if (result.known && signal > SignalPropagator.MIN_SIGNAL) {
+                    hits.add(new FreqHit(position, name, result.frequency, signal));
                 }
             }
         }
 
+        // An unknown alternative must not discard an independently verified radio link.
         if (hits.isEmpty()) {
-            return new NetworkScanResponsePayload(false, "No Service", -120, "", "", BlockPos.ZERO, 0, 0, 0);
+            return new NetworkScanResponsePayload(false, incompleteTerrain ? "Terrain unavailable" : "No Service", -120, "", "", BlockPos.ZERO, 0, 0, 0);
         }
 
-        // Determine the best technology available (5G > 4G > 3G > 2G)
-        String[] techOrder = {"5G", "4G", "3G", "2G"};
-        String bestTech = null;
-        for (String tech : techOrder) {
-            if (hits.stream().anyMatch(h -> h.freq().getTechnology().equals(tech))) {
-                bestTech = tech;
-                break;
-            }
-        }
-        final String activeTech = bestTech;
+        FreqHit serving = hits.stream().max((left, right) -> RadioSelection.compare(left.freq(), left.signal(), left.position(),
+                right.freq(), right.signal(), right.position())).orElseThrow();
+        final String activeTech = serving.freq().getTechnology();
 
         // Filter to only the best tech (phones aggregate within one tech family at a time)
         java.util.List<FreqHit> activeHits = hits.stream()
@@ -223,16 +230,13 @@ public class ModNetworking {
         int totalMaxUp = 0;
 
         // Best signal across all active hits (for display)
-        float bestSignal = activeHits.stream().map(FreqHit::signal).max(Float::compareTo).orElse(-120f);
+        float bestSignal = serving.signal();
 
         // Best antenna (the one with the best signal, used as "source" for routing)
-        AntennaBlockEntity primaryAntenna = activeHits.stream()
-            .max((a, b) -> Float.compare(a.signal(), b.signal()))
-            .map(FreqHit::antenna)
-            .orElse(null);
+        BlockPos primaryAntenna = serving.position();
 
         // Multi-site aggregation requires independent routed resources, not free extra capacity.
-        activeHits = activeHits.stream().filter(hit -> hit.antenna() == primaryAntenna).toList();
+        activeHits = activeHits.stream().filter(hit -> hit.position().equals(primaryAntenna)).toList();
 
         // Build label listing all frequencies used
         java.util.List<String> bandLabels = new java.util.ArrayList<>();
@@ -266,11 +270,11 @@ public class ModNetworking {
 
         return new NetworkScanResponsePayload(
             true,
-            primaryAntenna != null ? primaryAntenna.getAntennaName() : "Unknown",
+            serving.name(),
             (int) bestSignal,
             techLabel,
             mobileIp,
-            primaryAntenna != null ? primaryAntenna.getBlockPos() : BlockPos.ZERO,
+            primaryAntenna,
             totalMaxDown,
             Math.max(1, totalMaxUp),
             frequenciesMask

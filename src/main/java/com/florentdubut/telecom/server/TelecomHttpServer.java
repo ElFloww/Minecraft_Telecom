@@ -1,6 +1,8 @@
 package com.florentdubut.telecom.server;
 
 import com.florentdubut.telecom.network.NetworkEdge;
+import com.florentdubut.telecom.network.CoverageService;
+import com.florentdubut.telecom.network.SignalPropagator;
 import com.florentdubut.telecom.network.NetworkNode;
 import com.florentdubut.telecom.network.TelecomFrequency;
 import com.florentdubut.telecom.network.TelecomNetworkGraph;
@@ -14,6 +16,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.levelgen.Heightmap;
+import net.minecraft.world.level.storage.LevelResource;
 
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayOutputStream;
@@ -59,7 +62,17 @@ public class TelecomHttpServer {
     private byte[] token = new byte[0];
     private Set<String> origins = Set.of();
     private Set<String> hosts = Set.of();
-    private final Map<Long, Tile> tiles = new LinkedHashMap<>(256, 0.75f, true);
+    private final Map<Long, byte[]> tiles = new LinkedHashMap<>(256, 0.75f, true);
+    private final Map<Long, Long> unavailableTiles = new LinkedHashMap<>(1024, 0.75f, true);
+    private HttpReadQueue reads = new HttpReadQueue();
+    private final Object[] tileLocks = new Object[64];
+    private volatile TerrainTileStore tileStore;
+    private volatile WorldMapImageStore worldMap;
+    private volatile TerrainCaptureQueue terrainCapture;
+
+    public TelecomHttpServer() {
+        java.util.Arrays.setAll(tileLocks, ignored -> new Object());
+    }
 
     public synchronized void start(MinecraftServer ms) {
         if (server != null || !Boolean.parseBoolean(System.getProperty("telecom.http.enabled", "true"))) return;
@@ -113,6 +126,20 @@ public class TelecomHttpServer {
             hosts = Set.copyOf(allowedHosts);
             jobSlot = new Semaphore(1);
             nextJobAt = 0;
+            reads.clear();
+            reads = new HttpReadQueue();
+            var worldPath = ms == null ? null : ms.getWorldPath(LevelResource.ROOT);
+            if (worldPath != null) {
+                try {
+                    tileStore = new TerrainTileStore(worldPath.resolve("telecom-map/minecraft/overworld"));
+                    WorldMapImageStore image = new WorldMapImageStore(tileStore);
+                    worldMap = image;
+                    terrainCapture = new TerrainCaptureQueue(ms, tileStore, image::invalidate);
+                    if (ms.isSameThread()) terrainCapture.seedLoadedChunks();
+                } catch (IOException e) {
+                    System.err.println("Telecom terrain tiles disabled: " + e.getMessage());
+                }
+            }
             // JDK HTTP server limits are JVM-wide and read at first HttpServer initialization.
             defaultProperty("sun.net.httpserver.maxReqTime", "10");
             defaultProperty("sun.net.httpserver.maxRspTime", "10");
@@ -147,11 +174,19 @@ public class TelecomHttpServer {
         minecraftServer = null;
         FutureTask<?> job = pendingJob;
         if (job != null) job.cancel(false);
+        reads.clear();
+        TerrainCaptureQueue capture = terrainCapture;
+        terrainCapture = null;
+        if (capture != null) capture.close();
+        WorldMapImageStore image = worldMap;
+        worldMap = null;
+        if (image != null) image.close();
         if (server != null) server.stop(0);
         server = null;
         if (workers != null) workers.shutdownNow();
         workers = null;
-        synchronized (tiles) { tiles.clear(); }
+        synchronized (tiles) { tiles.clear(); unavailableTiles.clear(); }
+        tileStore = null;
         token = new byte[0];
     }
 
@@ -172,7 +207,7 @@ public class TelecomHttpServer {
             String path = exchange.getRequestURI().getPath();
             boolean api = path.startsWith("/api/");
             boolean mutation = path.equals("/api/speedtest");
-            if (api && !Set.of("/api/network", "/api/player", "/api/tile", "/api/nperf_map", "/api/speedtest").contains(path)) {
+            if (api && !Set.of("/api/network", "/api/player", "/api/tile", "/api/terrain", "/api/map-image", "/api/nperf_map", "/api/speedtest", "/api/coverage", "/api/coverage/options").contains(path)) {
                 throw new HttpFailure(404, "Unknown endpoint");
             }
             String allowedMethod = mutation ? "POST" : "GET";
@@ -183,13 +218,13 @@ public class TelecomHttpServer {
                 String headers = singleHeader(exchange, "Access-Control-Request-Headers");
                 if (headers != null) {
                     for (String header : headers.split(",")) {
-                        if (!Set.of("authorization", "content-type").contains(header.trim().toLowerCase(java.util.Locale.ROOT))) {
+                        if (!Set.of("authorization", "content-type", "if-none-match").contains(header.trim().toLowerCase(java.util.Locale.ROOT))) {
                             throw new HttpFailure(403, "Preflight header not allowed");
                         }
                     }
                 }
                 exchange.getResponseHeaders().set("Access-Control-Allow-Methods", allowedMethod);
-                exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Authorization, Content-Type");
+                exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Authorization, Content-Type, If-None-Match");
                 exchange.sendResponseHeaders(204, -1);
                 return;
             }
@@ -208,22 +243,36 @@ public class TelecomHttpServer {
             }
             if (!mutation && exchange.getRequestHeaders().containsKey("Transfer-Encoding")) throw new HttpFailure(400, "Body not allowed");
             switch (path) {
-                case "/api/network" -> sendJson(exchange, onServer(this::networkSnapshot));
-                case "/api/nperf_map" -> sendJson(exchange, onServer(this::coverageSnapshot));
-                case "/api/player" -> sendJson(exchange, onServer((level, deadline) -> {
-                    if (level.players().isEmpty()) throw new HttpFailure(404, "No player in overworld");
+                case "/api/network" -> sendJson(exchange, readOnServer("network", this::networkSnapshot).value());
+                case "/api/nperf_map" -> sendJson(exchange, readOnServer("nperf", this::coverageSnapshot).value());
+                case "/api/player" -> sendJson(exchange, readOnServer("player", (level, deadline) -> {
+                    if (level.players().isEmpty()) throw new HttpFailure(204, "No player in overworld");
                     var player = level.players().getFirst();
                     return "{\"x\":" + player.getBlockX() + ",\"z\":" + player.getBlockZ() + "}";
-                }));
+                }).value());
                 case "/api/tile" -> sendTile(exchange);
+                case "/api/terrain" -> throw new HttpFailure(410, "Terrain atlas API replaced; reload the dashboard");
+                case "/api/map-image" -> sendMapImage(exchange);
+                case "/api/coverage/options" -> sendJson(exchange, readOnServer("coverage-options", this::coverageOptions).value());
+                case "/api/coverage" -> sendCalculatedCoverage(exchange);
                 case "/api/speedtest" -> startSpeedtest(exchange);
                 case "/favicon.ico" -> exchange.sendResponseHeaders(204, -1);
                 default -> sendStatic(exchange, path);
             }
         } catch (HttpFailure e) {
-            if (e.status == 429 || e.status == 503) exchange.getResponseHeaders().set("Retry-After", "1");
+            if (e.status == 204) {
+                exchange.getResponseHeaders().set("Retry-After", "30");
+                exchange.sendResponseHeaders(204, -1);
+                return;
+            }
+            if (e.status == 202 || e.status == 429 || e.status == 503 || e.status == 504) {
+                exchange.getResponseHeaders().set("Retry-After", "1");
+            }
             JsonObject error = new JsonObject();
-            error.addProperty("error", e.getMessage());
+            if (e.status == 202) {
+                error.addProperty("status", "pending");
+                error.addProperty("message", e.getMessage());
+            } else error.addProperty("error", e.getMessage());
             send(exchange, e.status, "application/json; charset=utf-8", error.toString().getBytes(StandardCharsets.UTF_8));
         } catch (IllegalArgumentException e) {
             send(exchange, 400, "application/json", "{\"error\":\"Invalid request\"}".getBytes(StandardCharsets.UTF_8));
@@ -253,10 +302,36 @@ public class TelecomHttpServer {
     @FunctionalInterface
     private interface SnapshotJob<T> { T run(ServerLevel level, long deadline); }
 
+    private <T> HttpReadQueue.Completed<T> readOnServer(String key, SnapshotJob<T> work) {
+        MinecraftServer ms;
+        Semaphore generation;
+        HttpReadQueue queue;
+        synchronized (this) {
+            ms = minecraftServer;
+            generation = jobSlot;
+            queue = reads;
+            if (!running || ms == null) throw new HttpFailure(503, "Minecraft unavailable");
+        }
+        try {
+            return queue.request(key, ms, (level, deadline) -> {
+                if (!running || minecraftServer != ms || jobSlot != generation) throw new HttpFailure(503, "Minecraft stopping");
+                return work.run(level, deadline);
+            });
+        } catch (HttpReadQueue.Pending e) {
+            throw new HttpFailure(202, "Waiting for a Minecraft tick; the game may be paused or busy");
+        } catch (HttpReadQueue.Unavailable e) {
+            throw new HttpFailure(503, "Minecraft unavailable");
+        }
+    }
+
     private <T> T onServer(SnapshotJob<T> work) {
-        MinecraftServer ms = minecraftServer;
-        Semaphore slot = jobSlot;
-        if (!running || ms == null) throw new HttpFailure(503, "Minecraft unavailable");
+        MinecraftServer ms;
+        Semaphore slot;
+        synchronized (this) {
+            ms = minecraftServer;
+            slot = jobSlot;
+            if (!running || ms == null) throw new HttpFailure(503, "Minecraft unavailable");
+        }
         if (System.nanoTime() < nextJobAt || !slot.tryAcquire()) throw new HttpFailure(429, "Minecraft HTTP budget busy");
         long expires = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(WAIT_MS);
         FutureTask<T> task = new FutureTask<>(() -> {
@@ -306,6 +381,9 @@ public class TelecomHttpServer {
     private String networkSnapshot(ServerLevel level, long deadline) {
         TelecomNetworkGraph graph = TelecomNetworkGraph.get(level);
         JsonObject response = new JsonObject();
+        TerrainTileStore store = tileStore;
+        response.addProperty("mapId", store == null ? null : store.id());
+        response.add("mapImage", mapImageMetadata());
         JsonArray nodes = new JsonArray();
         for (NetworkNode node : graph.getNodes()) {
             checkBudget(deadline);
@@ -390,6 +468,68 @@ public class TelecomHttpServer {
         return snapshot;
     }
 
+    private String coverageOptions(ServerLevel level, long deadline) {
+        JsonObject options = new JsonObject();
+        options.addProperty("tileSize", CoverageService.TILE_SIZE);
+        options.addProperty("minLevel", -3);
+        options.addProperty("maxLevel", 6);
+        options.addProperty("maxSamplesPerSide", 16);
+        options.addProperty("sharedTechnologies", true);
+        options.addProperty("minY", level.getMinY());
+        options.addProperty("maxY", level.getMaxY());
+        options.addProperty("maxRange", SignalPropagator.MAX_RANGE);
+        options.addProperty("modelRevision", CoverageService.modelRevision(level));
+        JsonArray steps = new JsonArray();
+        for (int step : List.of(1, 8, 16, 32, 64, 128, 256, 512, 1024, 2048)) steps.add(step);
+        options.add("steps", steps);
+        JsonArray technologies = new JsonArray();
+        for (String technology : List.of("2G", "3G", "4G", "5G")) technologies.add(technology);
+        options.add("technologies", technologies);
+        JsonArray bands = new JsonArray();
+        for (TelecomFrequency frequency : TelecomFrequency.values()) {
+            JsonObject band = new JsonObject();
+            band.addProperty("id", frequency.name());
+            band.addProperty("technology", frequency.getTechnology());
+            band.addProperty("label", frequency.getFrequencyLabel());
+            bands.add(band);
+        }
+        options.add("bands", bands);
+        return options.toString();
+    }
+
+    private void sendCalculatedCoverage(HttpExchange exchange) throws IOException {
+        String query = exchange.getRequestURI().getRawQuery();
+        if (query == null || query.length() > 512) throw new HttpFailure(400, "Expected coverage tile and filters");
+        Map<String, String> params = new HashMap<>();
+        Set<String> allowed = Set.of("tx", "tz", "step", "y", "antenna", "technology", "band", "level");
+        for (String part : query.split("&")) {
+            String[] pair = part.split("=", 2);
+            if (pair.length != 2 || !allowed.contains(pair[0])
+                    || params.putIfAbsent(pair[0], URLDecoder.decode(pair[1], StandardCharsets.UTF_8)) != null) {
+                throw new HttpFailure(400, "Invalid coverage query");
+            }
+        }
+        if (!params.containsKey("tx") || !params.containsKey("tz")) throw new HttpFailure(400, "Expected tx and tz");
+        CoverageService.Request request = new CoverageService.Request(
+                Integer.parseInt(params.get("tx")), Integer.parseInt(params.get("tz")),
+                Integer.parseInt(params.getOrDefault("step", "32")), params.getOrDefault("y", "surface"),
+                params.getOrDefault("antenna", "all"), params.getOrDefault("technology", "all"), params.getOrDefault("band", "all"),
+                Integer.parseInt(params.getOrDefault("level", "0")));
+        HttpReadQueue.Completed<String> snapshot = readOnServer("coverage:" + request, (level, deadline) -> {
+            try {
+                return CoverageService.request(level, request, deadline);
+            } catch (CoverageService.BusyException busy) {
+                throw new HttpFailure(503, busy.getMessage());
+            } catch (IllegalArgumentException invalid) {
+                throw new HttpFailure(400, invalid.getMessage());
+            }
+        });
+        JsonObject body = JsonParser.parseString(snapshot.value()).getAsJsonObject();
+        body.addProperty("validForMs", Math.max(0, body.get("validForMs").getAsLong()
+                - TimeUnit.NANOSECONDS.toMillis(snapshot.ageNanos())));
+        sendJson(exchange, body.toString());
+    }
+
     private void startSpeedtest(HttpExchange exchange) throws IOException {
         String contentType = singleHeader(exchange, "Content-Type");
         if (contentType == null || !contentType.split(";", 2)[0].trim().equalsIgnoreCase("application/json")) {
@@ -424,8 +564,6 @@ public class TelecomHttpServer {
         }));
     }
 
-    private record Tile(byte[] png, long expires) { }
-
     private void sendTile(HttpExchange exchange) throws IOException {
         Semaphore generation = jobSlot;
         String query = exchange.getRequestURI().getRawQuery();
@@ -433,23 +571,159 @@ public class TelecomHttpServer {
         Map<String, String> params = new HashMap<>();
         for (String part : query.split("&")) {
             String[] pair = part.split("=", 2);
-            if (pair.length != 2 || params.putIfAbsent(pair[0], URLDecoder.decode(pair[1], StandardCharsets.UTF_8)) != null) {
+            if (pair.length != 2 || !Set.of("cx", "cz", "map").contains(pair[0])
+                    || params.putIfAbsent(pair[0], URLDecoder.decode(pair[1], StandardCharsets.UTF_8)) != null) {
                 throw new HttpFailure(400, "Invalid tile query");
             }
         }
         if (!params.containsKey("cx") || !params.containsKey("cz")) throw new HttpFailure(400, "Expected cx and cz");
         int cx = Integer.parseInt(params.get("cx")), cz = Integer.parseInt(params.get("cz"));
         if (Math.abs((long) cx) > 1874999 || Math.abs((long) cz) > 1874999) throw new HttpFailure(400, "Chunk outside world bounds");
-        long key = ChunkPos.asLong(cx, cz);
-        Tile cached;
-        synchronized (tiles) { cached = tiles.get(key); }
-        if (cached != null && cached.expires > System.nanoTime()) {
-            send(exchange, 200, "image/png", cached.png);
-            return;
+        TerrainTileStore store = tileStore;
+        if (store == null) throw new HttpFailure(503, "Terrain tile storage unavailable");
+        if (params.containsKey("map") && !store.id().equals(params.get("map"))) {
+            throw new HttpFailure(409, "Map belongs to a different world; refresh network data");
         }
-        List<Integer> colors = onServer((level, deadline) -> {
+        long key = ChunkPos.asLong(cx, cz);
+        byte[] png;
+        // Coalesce duplicate misses without ever holding a lock on the Minecraft thread.
+        synchronized (tileLocks[Math.floorMod(Long.hashCode(key), tileLocks.length)]) {
+            checkTileSession(generation, store);
+            synchronized (tiles) { png = tiles.get(key); }
+            if (png == null) {
+                synchronized (tiles) {
+                    Long retry = unavailableTiles.get(key);
+                    if (retry != null && System.nanoTime() < retry) throw new HttpFailure(204, "Terrain not loaded");
+                    unavailableTiles.remove(key);
+                }
+                try {
+                    png = store.read(cx, cz);
+                } catch (IOException e) {
+                    throw new HttpFailure(503, "Saved terrain tile cannot be read; check map storage");
+                }
+            }
+            if (png == null) {
+                try {
+                    png = renderTile(cx, cz, generation, store);
+                } catch (HttpFailure missing) {
+                    if (missing.status == 204) {
+                        synchronized (tiles) {
+                            checkTileSession(generation, store);
+                            unavailableTiles.put(key, System.nanoTime() + TimeUnit.SECONDS.toNanos(30));
+                            while (unavailableTiles.size() > 1024) unavailableTiles.remove(unavailableTiles.keySet().iterator().next());
+                        }
+                    }
+                    throw missing;
+                }
+                // No old HTTP session may publish into the cache after a world switch.
+                synchronized (this) {
+                    checkTileSession(generation, store);
+                    try {
+                        png = store.storeIfAbsent(cx, cz, png);
+                        WorldMapImageStore image = worldMap;
+                        if (image != null) image.invalidate(cx, cz);
+                    } catch (IOException e) {
+                        throw new HttpFailure(503, "Terrain tile cannot be saved; check map storage");
+                    }
+                }
+            }
+            synchronized (tiles) {
+                checkTileSession(generation, store);
+                tiles.put(key, png);
+                while (tiles.size() > 256) tiles.remove(tiles.keySet().iterator().next());
+            }
+        }
+        checkTileSession(generation, store);
+        send(exchange, 200, "image/png", png);
+    }
+
+    private void checkTileSession(Semaphore generation, TerrainTileStore store) {
+        if (!running || jobSlot != generation || tileStore != store) throw new HttpFailure(503, "Map session changed");
+    }
+
+    public void captureChunk(ServerLevel level, ChunkPos position) {
+        TerrainCaptureQueue capture = terrainCapture;
+        if (running && capture != null && level.getServer() == minecraftServer
+                && level.dimension().equals(net.minecraft.world.level.Level.OVERWORLD)) {
+            capture.offer(position.x, position.z);
+        }
+    }
+
+    private JsonObject mapImageMetadata() {
+        JsonObject metadata = new JsonObject();
+        metadata.addProperty("ready", false);
+        WorldMapImageStore image = worldMap;
+        if (image == null) return metadata;
+        try {
+            WorldMapImageStore.Snapshot snapshot = image.snapshot();
+            metadata.addProperty("ready", true);
+            metadata.addProperty("revision", snapshot.revision());
+            metadata.addProperty("originX", snapshot.originX());
+            metadata.addProperty("originZ", snapshot.originZ());
+            metadata.addProperty("blocksPerPixel", snapshot.blocksPerPixel());
+            metadata.addProperty("width", snapshot.width());
+            metadata.addProperty("height", snapshot.height());
+            metadata.addProperty("empty", snapshot.empty());
+            metadata.addProperty("updatedAt", snapshot.updatedAt());
+        } catch (WorldMapImageStore.Pending pending) {
+            metadata.addProperty("pending", true);
+        } catch (java.io.UncheckedIOException | IllegalStateException failure) {
+            metadata.addProperty("error", "Global map could not be built; check saved terrain images");
+        }
+        return metadata;
+    }
+
+    private void sendMapImage(HttpExchange exchange) throws IOException {
+        String query = exchange.getRequestURI().getRawQuery();
+        if (query != null && query.length() > 128) throw new HttpFailure(400, "Invalid map query");
+        Map<String, String> params = new HashMap<>();
+        for (String part : query == null || query.isBlank() ? new String[0] : query.split("&")) {
+            String[] pair = part.split("=", 2);
+            if (pair.length != 2 || !pair[0].equals("map")
+                    || params.putIfAbsent(pair[0], URLDecoder.decode(pair[1], StandardCharsets.UTF_8)) != null) {
+                throw new HttpFailure(400, "Invalid map query");
+            }
+        }
+        Semaphore generation = jobSlot;
+        TerrainTileStore store = tileStore;
+        WorldMapImageStore image = worldMap;
+        if (store == null || image == null) throw new HttpFailure(503, "Terrain storage unavailable");
+        checkTileSession(generation, store);
+        if (params.containsKey("map") && !params.get("map").equals(store.id())) throw new HttpFailure(409, "Map belongs to a different world");
+        try {
+            WorldMapImageStore.Snapshot result = image.snapshot();
+            checkTileSession(generation, store);
+            if (result.empty()) throw new HttpFailure(204, "No captured terrain yet");
+            var headers = exchange.getResponseHeaders();
+            String etag = "\"" + store.id() + ":" + result.revision() + "\"";
+            headers.set("ETag", etag);
+            headers.set("X-Map-Id", store.id());
+            headers.set("X-Map-Revision", result.revision());
+            headers.set("X-Map-Origin-X", Integer.toString(result.originX()));
+            headers.set("X-Map-Origin-Z", Integer.toString(result.originZ()));
+            headers.set("X-Map-Scale", Integer.toString(result.blocksPerPixel()));
+            headers.set("X-Map-Width", Integer.toString(result.width()));
+            headers.set("X-Map-Height", Integer.toString(result.height()));
+            headers.set("Access-Control-Expose-Headers", "ETag, X-Map-Id, X-Map-Revision, X-Map-Origin-X, X-Map-Origin-Z, X-Map-Scale, X-Map-Width, X-Map-Height");
+            String condition = singleHeader(exchange, "If-None-Match");
+            if (condition != null && java.util.Arrays.stream(condition.split(",")).map(String::trim)
+                    .anyMatch(value -> value.equals(etag) || value.equals("W/" + etag) || value.equals("*"))) {
+                exchange.sendResponseHeaders(304, -1);
+                return;
+            }
+            send(exchange, 200, "image/png", result.png());
+        } catch (WorldMapImageStore.Pending pending) {
+            throw new HttpFailure(202, "Preparing the global map image");
+        } catch (java.io.UncheckedIOException | IllegalStateException failure) {
+            throw new HttpFailure(503, "Global map unavailable; check saved terrain images");
+        }
+    }
+
+    private byte[] renderTile(int cx, int cz, Semaphore generation, TerrainTileStore store) throws IOException {
+        List<Integer> colors = readOnServer("tile:" + store.id() + ":" + cx + "," + cz, (level, deadline) -> {
+            checkTileSession(generation, store);
             var chunk = level.getChunkSource().getChunkNow(cx, cz);
-            if (chunk == null) throw new HttpFailure(404, "Chunk not loaded");
+            if (chunk == null) throw new HttpFailure(204, "Chunk not loaded");
             List<Integer> pixels = new ArrayList<>(256);
             for (int z = 0; z < 16; z++) {
                 checkBudget(deadline);
@@ -464,19 +738,12 @@ public class TelecomHttpServer {
                 }
             }
             return List.copyOf(pixels);
-        });
+        }).value();
         BufferedImage image = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
         for (int i = 0; i < 256; i++) image.setRGB(i % 16, i / 16, colors.get(i));
         ByteArrayOutputStream output = new ByteArrayOutputStream();
         javax.imageio.ImageIO.write(image, "png", output);
-        byte[] png = output.toByteArray();
-        synchronized (tiles) {
-            if (running && jobSlot == generation) {
-                tiles.put(key, new Tile(png, System.nanoTime() + TimeUnit.SECONDS.toNanos(30)));
-                while (tiles.size() > 256) tiles.remove(tiles.keySet().iterator().next());
-            }
-        }
-        send(exchange, 200, "image/png", png);
+        return output.toByteArray();
     }
 
     private static void sendStatic(HttpExchange exchange, String path) throws IOException {

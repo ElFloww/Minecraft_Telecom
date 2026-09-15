@@ -1,5 +1,7 @@
 {
   "itemGroup.telecom": "Mod Télécom",
+  "message.telecom.terrain_unavailable": "Trajet radio inconnu",
+  "message.telecom.no_service": "Aucun réseau",
   "block.telecom.copper_cable": "Câble en Cuivre",
   "block.telecom.fiber_cable": "Fibre Optique",
   "block.telecom.router": "Box Classic (2 Gbps)",
