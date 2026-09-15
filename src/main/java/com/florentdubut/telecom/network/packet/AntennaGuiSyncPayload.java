@@ -5,7 +5,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -23,7 +23,7 @@ public record AntennaGuiSyncPayload(
 ) implements CustomPacketPayload {
 
     public static final Type<AntennaGuiSyncPayload> TYPE = new Type<>(
-        ResourceLocation.fromNamespaceAndPath(TelecomMod.MODID, "antenna_gui_sync")
+        Identifier.fromNamespaceAndPath(TelecomMod.MODID, "antenna_gui_sync")
     );
 
     public static final StreamCodec<FriendlyByteBuf, AntennaGuiSyncPayload> STREAM_CODEC = StreamCodec.of(

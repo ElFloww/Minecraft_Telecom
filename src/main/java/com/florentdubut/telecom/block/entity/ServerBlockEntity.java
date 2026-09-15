@@ -18,25 +18,27 @@ public class ServerBlockEntity extends BlockEntity {
     @Override
     public void onLoad() {
         super.onLoad();
-        if (level != null && !level.isClientSide()) {
-            com.florentdubut.telecom.network.TelecomNetworkGraph graph = com.florentdubut.telecom.network.TelecomNetworkGraph.get((net.minecraft.server.level.ServerLevel) level);
-            if (graph.getNode(worldPosition) == null) {
-                com.florentdubut.telecom.network.NetworkNode node = new com.florentdubut.telecom.network.NetworkNode(worldPosition, com.florentdubut.telecom.network.NetworkNode.NodeType.SERVER);
-                node.setIpAddress("0.0.0.0");
-                graph.addNode(node);
-                com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation((net.minecraft.server.level.ServerLevel) level);
-            }
+        if (!isRemoved()) {
+            registerNodeIfMissing();
         }
     }
 
-    public void onPlaced() {
+    @Override
+    public void preRemoveSideEffects(BlockPos pos, BlockState state) {
+        super.preRemoveSideEffects(pos, state);
+        onRemoved();
+    }
+
+    private void registerNodeIfMissing() {
         if (level instanceof ServerLevel serverLevel) {
             TelecomNetworkGraph graph = TelecomNetworkGraph.get(serverLevel);
-            NetworkNode node = new NetworkNode(worldPosition, NetworkNode.NodeType.SERVER);
-            // Servers have the root IP
-            node.setIpAddress("192.168.0.1");
-            graph.addNode(node);
-            com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel);
+            if (graph.getNode(worldPosition) == null) {
+                NetworkNode node = new NetworkNode(worldPosition, NetworkNode.NodeType.SERVER);
+                // Servers have the root IP
+                node.setIpAddress("192.168.0.1");
+                graph.addNode(node);
+                com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel);
+            }
         }
     }
 

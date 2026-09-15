@@ -42,15 +42,15 @@ public class SmartphoneHUD {
         guiGraphics.fill(startX, startY, width - 10, startY + 50, 0xAA000000);
 
         if (latestScan == null) {
-            guiGraphics.drawString(font, "Scanning...", startX + 5, startY + 5, 0xAAAAAA);
+            guiGraphics.drawString(font, "Scanning...", startX + 5, startY + 5, 0xFFAAAAAA);
         } else if (latestScan.found()) {
-            guiGraphics.drawString(font, latestScan.name(), startX + 5, startY + 5, 0xFFFFFF);
-            guiGraphics.drawString(font, latestScan.tech(), startX + 5, startY + 15, 0x00FF00);
+            guiGraphics.drawString(font, latestScan.name(), startX + 5, startY + 5, 0xFFFFFFFF);
+            guiGraphics.drawString(font, latestScan.tech(), startX + 5, startY + 15, 0xFF00FF00);
             
             int signal = latestScan.signalStrength();
-            guiGraphics.drawString(font, signal + " dBm", startX + 5, startY + 25, 0xAAAAAA);
+            guiGraphics.drawString(font, signal + " dBm", startX + 5, startY + 25, 0xFFAAAAAA);
             
-            guiGraphics.drawString(font, "IP: " + latestScan.ipAddress(), startX + 5, startY + 35, 0x00FFFF);
+            guiGraphics.drawString(font, "IP: " + latestScan.ipAddress(), startX + 5, startY + 35, 0xFF00FFFF);
 
             // Draw Signal Bars
             int bars = 0;
@@ -64,7 +64,7 @@ public class SmartphoneHUD {
                 guiGraphics.fill(startX + 120 + (i * 4), startY + 25 + (12 - (i * 3)), startX + 122 + (i * 4), startY + 37, color);
             }
         } else {
-            guiGraphics.drawString(font, "No Service", startX + 5, startY + 5, 0xFF0000);
+            guiGraphics.drawString(font, "No Service", startX + 5, startY + 5, 0xFFFF0000);
         }
     }
 }

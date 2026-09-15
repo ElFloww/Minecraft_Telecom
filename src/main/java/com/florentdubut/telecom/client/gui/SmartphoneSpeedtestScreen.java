@@ -4,7 +4,7 @@ import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
-import net.neoforged.neoforge.network.PacketDistributor;
+import net.neoforged.neoforge.client.network.ClientPacketDistributor;
 
 public class SmartphoneSpeedtestScreen extends Screen {
 
@@ -70,7 +70,7 @@ public class SmartphoneSpeedtestScreen extends Screen {
                     extraPing = 200 + (int)(Math.random() * 200);
                 }
 
-                PacketDistributor.sendToServer(new com.florentdubut.telecom.network.packet.StartSpeedtestPayload(
+                ClientPacketDistributor.sendToServer(new com.florentdubut.telecom.network.packet.StartSpeedtestPayload(
                     scan.antennaPos(), 
                     scan.ipAddress(), 
                     scan.maxDown(),
@@ -84,7 +84,9 @@ public class SmartphoneSpeedtestScreen extends Screen {
                 this.lastDownBw = 0;
                 this.lastUpBw = 0;
             } else {
-                net.minecraft.client.Minecraft.getInstance().player.sendSystemMessage(Component.literal("No Network Signal!"));
+                if (minecraft.player != null) {
+                    minecraft.player.displayClientMessage(Component.literal("No Network Signal!"), false);
+                }
             }
         }).bounds(startX + 30, startY + 220, 100, 20).build());
         
@@ -111,23 +113,23 @@ public class SmartphoneSpeedtestScreen extends Screen {
         guiGraphics.fill(startX, startY, startX + screenW, startY + 15, 0x88000000);
         com.florentdubut.telecom.network.packet.NetworkScanResponsePayload scan = SmartphoneHUD.latestScan;
         if (scan != null && scan.found()) {
-            guiGraphics.drawString(this.font, scan.tech(), startX + 5, startY + 4, 0xFFFFFF);
+            guiGraphics.drawString(this.font, scan.tech(), startX + 5, startY + 4, 0xFFFFFFFF);
         } else {
-            guiGraphics.drawString(this.font, "No Service", startX + 5, startY + 4, 0xFF5555);
+            guiGraphics.drawString(this.font, "No Service", startX + 5, startY + 4, 0xFFFF5555);
         }
 
-        guiGraphics.drawCenteredString(this.font, "SPEEDTEST", startX + screenW / 2, startY + 45, 0xFFFFFF);
+        guiGraphics.drawCenteredString(this.font, "SPEEDTEST", startX + screenW / 2, startY + 45, 0xFFFFFFFF);
         
         if (currentSpeedtestData != null) {
-            guiGraphics.drawCenteredString(this.font, speedtestActive ? "Testing: " + currentSpeedtestData.state() : "FINISHED", startX + screenW / 2, startY + 70, speedtestActive ? 0xAAAAAA : 0x00FF00);
+            guiGraphics.drawCenteredString(this.font, speedtestActive ? "Testing: " + currentSpeedtestData.state() : "FINISHED", startX + screenW / 2, startY + 70, speedtestActive ? 0xFFAAAAAA : 0xFF00FF00);
             
-            guiGraphics.drawString(this.font, "Ping: " + currentSpeedtestData.pingMs() + " ms", startX + 20, startY + 90, 0x00FF00);
+            guiGraphics.drawString(this.font, "Ping: " + currentSpeedtestData.pingMs() + " ms", startX + 20, startY + 90, 0xFF00FF00);
             
             if (currentSpeedtestData.state().equals("DOWNLOAD") || currentSpeedtestData.state().equals("UPLOAD") || currentSpeedtestData.state().equals("FINISHED")) {
-                guiGraphics.drawString(this.font, "Down: " + this.lastDownBw + " Mbps", startX + 20, startY + 110, 0x00FFFF);
+                guiGraphics.drawString(this.font, "Down: " + this.lastDownBw + " Mbps", startX + 20, startY + 110, 0xFF00FFFF);
             }
             if (currentSpeedtestData.state().equals("UPLOAD") || currentSpeedtestData.state().equals("FINISHED")) {
-                guiGraphics.drawString(this.font, "Up: " + this.lastUpBw + " Mbps", startX + 20, startY + 130, 0xFF8800);
+                guiGraphics.drawString(this.font, "Up: " + this.lastUpBw + " Mbps", startX + 20, startY + 130, 0xFFFF8800);
             }
         }
     }

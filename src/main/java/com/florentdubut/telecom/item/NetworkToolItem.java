@@ -4,14 +4,13 @@ import com.florentdubut.telecom.network.NetworkEdge;
 import com.florentdubut.telecom.network.TelecomNetworkGraph;
 import com.florentdubut.telecom.registry.ModBlocks;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.context.UseOnContext;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
-import java.util.*;
 
 public class NetworkToolItem extends Item {
 
@@ -22,7 +21,8 @@ public class NetworkToolItem extends Item {
     @Override
     public InteractionResult useOn(UseOnContext context) {
         Level level = context.getLevel();
-        if (level.isClientSide) return InteractionResult.SUCCESS;
+        if (level.isClientSide()) return InteractionResult.SUCCESS;
+        if (!(context.getPlayer() instanceof ServerPlayer player)) return InteractionResult.PASS;
 
         BlockPos clickedPos = context.getClickedPos();
         BlockState state = level.getBlockState(clickedPos);
@@ -50,7 +50,7 @@ public class NetworkToolItem extends Item {
                 }
                 String typeStr = "Network Node (" + clickedNode.getType().name() + ")";
                 net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(
-                    (net.minecraft.server.level.ServerPlayer) context.getPlayer(),
+                    player,
                     new com.florentdubut.telecom.network.packet.NetworkToolSyncPayload(clickedPos, typeStr, 0, maxBandwidth == 0 ? 1000 : maxBandwidth, usageDown, usageUp)
                 );
                 return InteractionResult.SUCCESS;
@@ -77,12 +77,12 @@ public class NetworkToolItem extends Item {
                 int usageUp = graph.getActualBlockUsageUp(clickedPos);
                 
                 net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(
-                    (net.minecraft.server.level.ServerPlayer) context.getPlayer(),
+                    player,
                     new com.florentdubut.telecom.network.packet.NetworkToolSyncPayload(clickedPos, typeStr, clickedEdge.getLength(), clickedEdge.getBandwidthMax(), usageDown, usageUp)
                 );
                 return InteractionResult.SUCCESS;
             } else {
-                context.getPlayer().sendSystemMessage(net.minecraft.network.chat.Component.literal("Cable is incomplete or not connected to any network nodes."));
+                player.sendSystemMessage(net.minecraft.network.chat.Component.literal("Cable is incomplete or not connected to any network nodes."));
             }
         }
         

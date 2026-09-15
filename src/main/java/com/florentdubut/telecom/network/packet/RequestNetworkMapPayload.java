@@ -4,10 +4,10 @@ import com.florentdubut.telecom.TelecomMod;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 
 public record RequestNetworkMapPayload() implements CustomPacketPayload {
-    public static final Type<RequestNetworkMapPayload> TYPE = new Type<>(ResourceLocation.fromNamespaceAndPath(TelecomMod.MODID, "request_network_map"));
+    public static final Type<RequestNetworkMapPayload> TYPE = new Type<>(Identifier.fromNamespaceAndPath(TelecomMod.MODID, "request_network_map"));
     
     public static final StreamCodec<FriendlyByteBuf, RequestNetworkMapPayload> STREAM_CODEC = StreamCodec.ofMember(
         RequestNetworkMapPayload::write,

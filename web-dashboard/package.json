@@ -1,0 +1,15 @@
+{
+  "name": "telecom-dashboard",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "check": "node --check main.js",
+    "test": "node --test tests/dashboard.test.js"
+  },
+  "devDependencies": {
+    "vite": "6.4.3"
+  }
+}

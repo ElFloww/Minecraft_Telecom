@@ -29,20 +29,9 @@ public class RouterBlock extends Block implements EntityBlock, TelecomBlock {
     }
 
     @Override
-    public void onPlace(BlockState state, Level level, BlockPos pos, BlockState oldState, boolean isMoving) {
-        super.onPlace(state, level, pos, oldState, isMoving);
-        if (!level.isClientSide()) {
-            BlockEntity be = level.getBlockEntity(pos);
-            if (be instanceof RouterBlockEntity router) {
-                router.onPlaced();
-            }
-        }
-    }
-
-    @Override
     protected net.minecraft.world.InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos, net.minecraft.world.entity.player.Player player, net.minecraft.world.phys.BlockHitResult hitResult) {
         if (!level.isClientSide() && player instanceof net.minecraft.server.level.ServerPlayer serverPlayer) {
-            com.florentdubut.telecom.network.TelecomNetworkGraph graph = com.florentdubut.telecom.network.TelecomNetworkGraph.get(serverPlayer.serverLevel());
+            com.florentdubut.telecom.network.TelecomNetworkGraph graph = com.florentdubut.telecom.network.TelecomNetworkGraph.get(serverPlayer.level());
             com.florentdubut.telecom.network.NetworkNode node = graph.getNode(pos);
             
             if (node != null) {
@@ -96,19 +85,7 @@ public class RouterBlock extends Block implements EntityBlock, TelecomBlock {
                 );
             }
         }
-        return net.minecraft.world.InteractionResult.sidedSuccess(level.isClientSide);
+        return net.minecraft.world.InteractionResult.SUCCESS;
     }
 
-    @Override
-    public void onRemove(BlockState state, Level level, BlockPos pos, BlockState newState, boolean isMoving) {
-        if (state.getBlock() != newState.getBlock()) {
-            if (!level.isClientSide()) {
-                BlockEntity be = level.getBlockEntity(pos);
-                if (be instanceof RouterBlockEntity router) {
-                    router.onRemoved();
-                }
-            }
-            super.onRemove(state, level, pos, newState, isMoving);
-        }
-    }
 }

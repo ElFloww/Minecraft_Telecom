@@ -3,8 +3,6 @@ package com.florentdubut.telecom.block;
 import com.florentdubut.telecom.block.entity.TelecomHubBlockEntity;
 import com.florentdubut.telecom.network.NetworkNode;
 import net.minecraft.core.BlockPos;
-import net.minecraft.world.level.Level;
-import net.minecraft.world.level.block.BaseEntityBlock;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.EntityBlock;
 import net.minecraft.world.level.block.RenderShape;
@@ -16,7 +14,7 @@ import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.world.level.block.state.properties.BlockStateProperties;
-import net.minecraft.world.level.block.state.properties.DirectionProperty;
+import net.minecraft.world.level.block.state.properties.EnumProperty;
 import net.minecraft.world.level.block.state.StateDefinition;
 import net.minecraft.world.item.context.BlockPlaceContext;
 import net.minecraft.core.Direction;
@@ -49,7 +47,7 @@ public class TelecomHubBlock extends Block implements EntityBlock, TelecomBlock 
     public RenderShape getRenderShape(BlockState state) {
         return RenderShape.MODEL;
     }
-    public static final DirectionProperty FACING = BlockStateProperties.HORIZONTAL_FACING;
+    public static final EnumProperty<Direction> FACING = BlockStateProperties.HORIZONTAL_FACING;
 
     // Default shapes for non-directional or full blocks
     private static final VoxelShape NRO_SHAPE = Shapes.block();
@@ -82,27 +80,4 @@ public class TelecomHubBlock extends Block implements EntityBlock, TelecomBlock 
         return Shapes.block();
     }
 
-    @Override
-    public void onPlace(BlockState state, Level level, BlockPos pos, BlockState oldState, boolean isMoving) {
-        super.onPlace(state, level, pos, oldState, isMoving);
-        if (!level.isClientSide()) {
-            net.minecraft.world.level.block.entity.BlockEntity be = level.getBlockEntity(pos);
-            if (be instanceof com.florentdubut.telecom.block.entity.TelecomHubBlockEntity hub) {
-                hub.onPlaced();
-            }
-        }
-    }
-
-    @Override
-    public void onRemove(BlockState state, Level level, BlockPos pos, BlockState newState, boolean isMoving) {
-        if (state.getBlock() != newState.getBlock()) {
-            if (!level.isClientSide()) {
-                net.minecraft.world.level.block.entity.BlockEntity be = level.getBlockEntity(pos);
-                if (be instanceof com.florentdubut.telecom.block.entity.TelecomHubBlockEntity hub) {
-                    hub.onRemoved();
-                }
-            }
-            super.onRemove(state, level, pos, newState, isMoving);
-        }
-    }
 }

@@ -5,10 +5,10 @@ import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 
 public record SpeedtestUpdatePayload(String clientIp, String state, int pingMs, int actualBandwidth, int ticksElapsed, int totalTicksPerPhase) implements CustomPacketPayload {
-    public static final Type<SpeedtestUpdatePayload> TYPE = new Type<>(ResourceLocation.fromNamespaceAndPath(TelecomMod.MODID, "speedtest_update"));
+    public static final Type<SpeedtestUpdatePayload> TYPE = new Type<>(Identifier.fromNamespaceAndPath(TelecomMod.MODID, "speedtest_update"));
     
     public static final StreamCodec<FriendlyByteBuf, SpeedtestUpdatePayload> STREAM_CODEC = StreamCodec.of(
         (buf, payload) -> {

@@ -1,13 +1,11 @@
 package com.florentdubut.telecom.item;
 
 import net.minecraft.world.InteractionHand;
-import net.minecraft.world.InteractionResultHolder;
+import com.florentdubut.telecom.client.ClientHooks;
+import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
-import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
-import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.network.chat.Component;
 
 public class SmartphoneItem extends Item {
     public SmartphoneItem(Properties properties) {
@@ -15,10 +13,10 @@ public class SmartphoneItem extends Item {
     }
 
     @Override
-    public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand usedHand) {
-        if (level.isClientSide) {
-            net.minecraft.client.Minecraft.getInstance().setScreen(new com.florentdubut.telecom.client.gui.SmartphoneScreen());
+    public InteractionResult use(Level level, Player player, InteractionHand usedHand) {
+        if (level.isClientSide()) {
+            ClientHooks.openSmartphoneScreen();
         }
-        return InteractionResultHolder.sidedSuccess(player.getItemInHand(usedHand), level.isClientSide());
+        return level.isClientSide() ? InteractionResult.SUCCESS : InteractionResult.CONSUME;
     }
 }

@@ -5,10 +5,10 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 
 public record GuiRefreshRequestPayload(BlockPos pos) implements CustomPacketPayload {
-    public static final Type<GuiRefreshRequestPayload> TYPE = new Type<>(ResourceLocation.fromNamespaceAndPath(TelecomMod.MODID, "gui_refresh_request"));
+    public static final Type<GuiRefreshRequestPayload> TYPE = new Type<>(Identifier.fromNamespaceAndPath(TelecomMod.MODID, "gui_refresh_request"));
 
     public static final StreamCodec<FriendlyByteBuf, GuiRefreshRequestPayload> STREAM_CODEC = StreamCodec.of(
             (buf, payload) -> {

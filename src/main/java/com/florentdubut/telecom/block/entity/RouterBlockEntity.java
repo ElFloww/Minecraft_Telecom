@@ -7,6 +7,8 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.storage.ValueInput;
+import net.minecraft.world.level.storage.ValueOutput;
 
 public class RouterBlockEntity extends BlockEntity {
     private int lastDownBw = 0;
@@ -39,46 +41,46 @@ public class RouterBlockEntity extends BlockEntity {
     }
 
     @Override
-    protected void saveAdditional(net.minecraft.nbt.CompoundTag tag, net.minecraft.core.HolderLookup.Provider registries) {
-        super.saveAdditional(tag, registries);
+    protected void saveAdditional(ValueOutput tag) {
+        super.saveAdditional(tag);
         tag.putInt("LastDownBw", lastDownBw);
         tag.putInt("LastUpBw", lastUpBw);
         tag.putInt("LastPing", lastPing);
     }
 
     @Override
-    protected void loadAdditional(net.minecraft.nbt.CompoundTag tag, net.minecraft.core.HolderLookup.Provider registries) {
-        super.loadAdditional(tag, registries);
-        if (tag.contains("LastDownBw")) lastDownBw = tag.getInt("LastDownBw");
-        if (tag.contains("LastUpBw")) lastUpBw = tag.getInt("LastUpBw");
-        if (tag.contains("LastPing")) lastPing = tag.getInt("LastPing");
+    protected void loadAdditional(ValueInput tag) {
+        super.loadAdditional(tag);
+        lastDownBw = tag.getIntOr("LastDownBw", 0);
+        lastUpBw = tag.getIntOr("LastUpBw", 0);
+        lastPing = tag.getIntOr("LastPing", 0);
     }
 
 
     @Override
     public void onLoad() {
         super.onLoad();
-        if (level != null && !level.isClientSide()) {
-            com.florentdubut.telecom.network.TelecomNetworkGraph graph = com.florentdubut.telecom.network.TelecomNetworkGraph.get((net.minecraft.server.level.ServerLevel) level);
-            if (graph.getNode(worldPosition) == null) {
-                com.florentdubut.telecom.network.NetworkNode node = new com.florentdubut.telecom.network.NetworkNode(worldPosition, com.florentdubut.telecom.network.NetworkNode.NodeType.ROUTER);
-                node.setCapacityDown(getConfiguredMaxDown());
-                node.setCapacityUp(getConfiguredMaxUp());
-                graph.addNode(node);
-                com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation((net.minecraft.server.level.ServerLevel) level);
-            }
+        if (!isRemoved()) {
+            registerNodeIfMissing();
         }
     }
 
-    public void onPlaced() {
+    @Override
+    public void preRemoveSideEffects(BlockPos pos, BlockState state) {
+        super.preRemoveSideEffects(pos, state);
+        onRemoved();
+    }
+
+    private void registerNodeIfMissing() {
         if (level instanceof ServerLevel serverLevel) {
             TelecomNetworkGraph graph = TelecomNetworkGraph.get(serverLevel);
-            NetworkNode node = new NetworkNode(worldPosition, NetworkNode.NodeType.ROUTER);
-            node.setCapacityDown(getConfiguredMaxDown());
-            node.setCapacityUp(getConfiguredMaxUp());
-            graph.addNode(node);
-            
-            com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel);
+            if (graph.getNode(worldPosition) == null) {
+                NetworkNode node = new NetworkNode(worldPosition, NetworkNode.NodeType.ROUTER);
+                node.setCapacityDown(getConfiguredMaxDown());
+                node.setCapacityUp(getConfiguredMaxUp());
+                graph.addNode(node);
+                com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel);
+            }
         }
     }
 

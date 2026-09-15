@@ -26,6 +26,16 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web-dashboard/package-lock.json
+
+      - name: Build dashboard
+        run: npm ci --prefix web-dashboard && npm --prefix web-dashboard run build
+
       - name: Make gradlew executable
         run: chmod +x ./gradlew
 

@@ -1,13 +1,13 @@
 package com.florentdubut.telecom.network;
 
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.HolderLookup;
+import com.mojang.serialization.Codec;
+import com.mojang.serialization.DataResult;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
-import net.minecraft.nbt.NbtUtils;
-import net.minecraft.nbt.Tag;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.saveddata.SavedData;
+import net.minecraft.world.level.saveddata.SavedDataType;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.ArrayList;
@@ -19,55 +19,64 @@ public class TelecomNetworkGraph extends SavedData {
     private final Map<BlockPos, NetworkNode> nodes = new HashMap<>();
     private final List<NetworkEdge> edges = new ArrayList<>();
     private final Map<Long, Integer> recordedCoverage = new java.util.concurrent.ConcurrentHashMap<>();
+    private final Map<java.util.UUID, Integer> mobileAddresses = new HashMap<>();
+    private int nextMobileAddress = 1;
 
-    public static SavedData.Factory<TelecomNetworkGraph> factory() {
-        return new SavedData.Factory<>(
-                TelecomNetworkGraph::new,
-                TelecomNetworkGraph::load,
-                null
-        );
-    }
+    // Keep the existing NBT layout so worlds created before the API migration still load.
+    public static final Codec<TelecomNetworkGraph> CODEC = CompoundTag.CODEC.comapFlatMap(tag -> {
+        try {
+            return DataResult.success(load(tag));
+        } catch (IllegalArgumentException e) {
+            return DataResult.error(() -> "Invalid telecom network: " + e.getMessage());
+        }
+    }, TelecomNetworkGraph::save);
+    public static final SavedDataType<TelecomNetworkGraph> TYPE =
+            new SavedDataType<>(DATA_NAME, TelecomNetworkGraph::new, CODEC);
 
     public TelecomNetworkGraph() {}
 
-    public static TelecomNetworkGraph load(CompoundTag tag, HolderLookup.Provider lookupProvider) {
+    private static TelecomNetworkGraph load(CompoundTag tag) {
+        int version = tag.getIntOr("SchemaVersion", 0);
+        if (version < 0 || version > 1) {
+            throw new IllegalArgumentException("unsupported schema version " + version);
+        }
         TelecomNetworkGraph graph = new TelecomNetworkGraph();
         
-        ListTag nodesTag = tag.getList("Nodes", Tag.TAG_COMPOUND);
+        ListTag nodesTag = tag.getListOrEmpty("Nodes");
         for (int i = 0; i < nodesTag.size(); i++) {
-            CompoundTag nodeTag = nodesTag.getCompound(i);
-            BlockPos pos = NbtUtils.readBlockPos(nodeTag, "Pos").orElse(BlockPos.ZERO);
-            NetworkNode.NodeType type = NetworkNode.NodeType.valueOf(nodeTag.getString("Type"));
+            CompoundTag nodeTag = nodesTag.getCompound(i).orElseThrow(() -> new IllegalArgumentException("invalid node"));
+            BlockPos pos = nodeTag.read("Pos", BlockPos.CODEC).orElseThrow(() -> new IllegalArgumentException("invalid node position"));
+            NetworkNode.NodeType type = NetworkNode.NodeType.valueOf(nodeTag.getStringOr("Type", ""));
             NetworkNode node = new NetworkNode(pos, type);
             if (nodeTag.contains("IP")) {
-                node.setIpAddress(nodeTag.getString("IP"));
+                node.setIpAddress(nodeTag.getStringOr("IP", ""));
             }
             if (nodeTag.contains("CIDR")) {
-                node.setNetworkCidr(nodeTag.getString("CIDR"));
+                node.setNetworkCidr(nodeTag.getStringOr("CIDR", ""));
             }
             if (nodeTag.contains("FreqMask")) {
-                node.setFrequenciesMask(nodeTag.getInt("FreqMask"));
+                node.setFrequenciesMask(nodeTag.getIntOr("FreqMask", 0));
             }
             if (nodeTag.contains("CapDown")) {
-                node.setCapacityDown(nodeTag.getInt("CapDown"));
+                node.setCapacityDown(nodeTag.getIntOr("CapDown", 1000));
             }
             if (nodeTag.contains("CapUp")) {
-                node.setCapacityUp(nodeTag.getInt("CapUp"));
+                node.setCapacityUp(nodeTag.getIntOr("CapUp", 1000));
             }
             graph.nodes.put(pos, node);
         }
 
-        ListTag edgesTag = tag.getList("Edges", Tag.TAG_COMPOUND);
+        ListTag edgesTag = tag.getListOrEmpty("Edges");
         for (int i = 0; i < edgesTag.size(); i++) {
-            CompoundTag edgeTag = edgesTag.getCompound(i);
-            BlockPos nodeA = NbtUtils.readBlockPos(edgeTag, "NodeA").orElse(BlockPos.ZERO);
-            BlockPos nodeB = NbtUtils.readBlockPos(edgeTag, "NodeB").orElse(BlockPos.ZERO);
-            int bandwidthMax = edgeTag.getInt("BandwidthMax");
-            int length = edgeTag.getInt("Length");
-            NetworkEdge.EdgeType type = NetworkEdge.EdgeType.valueOf(edgeTag.getString("Type"));
+            CompoundTag edgeTag = edgesTag.getCompound(i).orElseThrow(() -> new IllegalArgumentException("invalid edge"));
+            BlockPos nodeA = edgeTag.read("NodeA", BlockPos.CODEC).orElseThrow(() -> new IllegalArgumentException("invalid edge source"));
+            BlockPos nodeB = edgeTag.read("NodeB", BlockPos.CODEC).orElseThrow(() -> new IllegalArgumentException("invalid edge target"));
+            int bandwidthMax = edgeTag.getIntOr("BandwidthMax", 0);
+            int length = edgeTag.getIntOr("Length", 0);
+            NetworkEdge.EdgeType type = NetworkEdge.EdgeType.valueOf(edgeTag.getStringOr("Type", ""));
             java.util.List<BlockPos> pathBlocks = new java.util.ArrayList<>();
             if (edgeTag.contains("PathBlocks")) {
-                long[] blocks = edgeTag.getLongArray("PathBlocks");
+                long[] blocks = edgeTag.getLongArray("PathBlocks").orElse(new long[0]);
                 for (long l : blocks) {
                     pathBlocks.add(BlockPos.of(l));
                 }
@@ -78,23 +87,36 @@ public class TelecomNetworkGraph extends SavedData {
 
         
         if (tag.contains("CoverageKeys") && tag.contains("CoverageValues")) {
-            long[] keys = tag.getLongArray("CoverageKeys");
-            int[] values = tag.getIntArray("CoverageValues");
+            long[] keys = tag.getLongArray("CoverageKeys").orElse(new long[0]);
+            int[] values = tag.getIntArray("CoverageValues").orElse(new int[0]);
             if (keys.length == values.length) {
                 for (int j = 0; j < keys.length; j++) {
                     graph.recordedCoverage.put(keys[j], values[j]);
                 }
             }
         }
-return graph;
+        java.util.Set<Integer> allocatedHosts = new java.util.HashSet<>();
+        for (net.minecraft.nbt.Tag entry : tag.getListOrEmpty("MobileAddresses")) {
+            CompoundTag address = entry.asCompound().orElseThrow(() -> new IllegalArgumentException("invalid mobile lease"));
+            java.util.UUID owner = java.util.UUID.fromString(address.getStringOr("Owner", ""));
+            int host = address.getIntOr("Host", 0);
+            if (host < 1 || host >= 0xFFFFF || graph.mobileAddresses.containsKey(owner)
+                    || !allocatedHosts.add(host)) {
+                throw new IllegalArgumentException("invalid or duplicate mobile lease");
+            }
+            graph.mobileAddresses.put(owner, host);
+            graph.nextMobileAddress = Math.max(graph.nextMobileAddress, host + 1);
+        }
+        return graph;
     }
 
-    @Override
-    public CompoundTag save(CompoundTag tag, HolderLookup.Provider lookupProvider) {
+    private CompoundTag save() {
+        CompoundTag tag = new CompoundTag();
+        tag.putInt("SchemaVersion", 1);
         ListTag nodesTag = new ListTag();
         for (NetworkNode node : nodes.values()) {
             CompoundTag nodeTag = new CompoundTag();
-            nodeTag.put("Pos", NbtUtils.writeBlockPos(node.getPosition()));
+            nodeTag.store("Pos", BlockPos.CODEC, node.getPosition());
             nodeTag.putString("Type", node.getType().name());
             if (node.getIpAddress() != null) {
                 nodeTag.putString("IP", node.getIpAddress());
@@ -112,8 +134,8 @@ return graph;
         ListTag edgesTag = new ListTag();
         for (NetworkEdge edge : edges) {
             CompoundTag edgeTag = new CompoundTag();
-            edgeTag.put("NodeA", NbtUtils.writeBlockPos(edge.getNodeA()));
-            edgeTag.put("NodeB", NbtUtils.writeBlockPos(edge.getNodeB()));
+            edgeTag.store("NodeA", BlockPos.CODEC, edge.getNodeA());
+            edgeTag.store("NodeB", BlockPos.CODEC, edge.getNodeB());
             edgeTag.putInt("BandwidthMax", edge.getBandwidthMax());
             edgeTag.putInt("Length", edge.getLength());
             edgeTag.putString("Type", edge.getType().name());
@@ -139,11 +161,50 @@ return graph;
         tag.putLongArray("CoverageKeys", covKeys);
         tag.putIntArray("CoverageValues", covValues);
 
+        ListTag addresses = new ListTag();
+        mobileAddresses.forEach((owner, host) -> {
+            CompoundTag address = new CompoundTag();
+            address.putString("Owner", owner.toString());
+            address.putInt("Host", host);
+            addresses.add(address);
+        });
+        tag.put("MobileAddresses", addresses);
+
         return tag;
     }
 
     public static TelecomNetworkGraph get(ServerLevel level) {
-        return level.getDataStorage().computeIfAbsent(factory(), DATA_NAME);
+        return get(level.getDataStorage());
+    }
+
+    static TelecomNetworkGraph get(net.minecraft.world.level.storage.DimensionDataStorage storage) {
+        TelecomNetworkGraph existing = storage.get(TYPE);
+        if (existing != null) return existing;
+        // Minecraft treats a failed decode like a missing file. Never replace such a file.
+        try {
+            storage.readTagFromDisk(DATA_NAME, null, 0);
+        } catch (java.nio.file.NoSuchFileException missing) {
+            TelecomNetworkGraph graph = new TelecomNetworkGraph();
+            storage.set(TYPE, graph);
+            return graph;
+        } catch (java.io.IOException | RuntimeException unreadable) {
+            throw new IllegalStateException("Cannot read telecom_network.dat; refusing to overwrite it. Restore a backup before continuing.", unreadable);
+        }
+        throw new IllegalStateException("Cannot decode existing telecom_network.dat; refusing to overwrite it. Check the schema or restore a backup.");
+    }
+
+    public String getMobileIp(java.util.UUID owner) {
+        Integer host = mobileAddresses.get(owner);
+        if (host == null) {
+            if (nextMobileAddress >= 0xFFFFF) {
+                throw new IllegalStateException("Mobile IPv4 pool exhausted");
+            }
+            host = nextMobileAddress++;
+            mobileAddresses.put(owner, host);
+            setDirty();
+        }
+        // A private /12 distinct from the existing fixed-network 10/8 allocation.
+        return "172." + (16 + (host >>> 16)) + "." + ((host >>> 8) & 255) + "." + (host & 255);
     }
 
     private boolean needsRecalculation = false;
@@ -224,6 +285,18 @@ return graph;
     private int totalBandwidthDown = 0;
 
     public void startSpeedtest(BlockPos sourcePos, String clientIp, int targetDownBw, int targetUpBw, int extraPing, int frequenciesMask, int durationTicks, boolean isPassive, @org.jetbrains.annotations.Nullable net.minecraft.server.level.ServerPlayer player) {
+        if (!nodes.containsKey(sourcePos) || clientIp == null || clientIp.isBlank() || clientIp.length() > 45
+                || targetDownBw < 1 || targetDownBw > 1_000_000 || targetUpBw < 1 || targetUpBw > 1_000_000
+                || extraPing < 0 || extraPing > 60_000 || durationTicks < 1 || durationTicks > 12_000
+                || (frequenciesMask & ~((1 << TelecomFrequency.values().length) - 1)) != 0
+                || activeSessions.size() >= 256) {
+            if (player != null) player.sendSystemMessage(net.minecraft.network.chat.Component.literal("Speedtest rejected: invalid request or session limit reached."));
+            return;
+        }
+        if (player != null && activeSessions.stream().anyMatch(s -> player.getUUID().equals(s.getOwnerId()))) {
+            player.sendSystemMessage(net.minecraft.network.chat.Component.literal("You already have an active speedtest."));
+            return;
+        }
         TrafficSession existing = getSessionByIp(clientIp);
         if (existing != null) {
             if (!isPassive && existing.isPassive()) {
@@ -254,6 +327,7 @@ return graph;
         
         if (bestServer != null && bestStats != null) {
             TrafficSession session = new TrafficSession(sourcePos, bestServer.getPosition(), clientIp, targetDownBw, targetUpBw, durationTicks, isPassive);
+            if (player != null) session.setOwnerId(player.getUUID());
             session.setExtraPing(extraPing);
             session.setPingMs(bestStats.pingMs());
             session.setAntennaPos(sourcePos); // Used by mobile sessions to map back to antenna
@@ -262,7 +336,6 @@ return graph;
         } else if (!isPassive && player != null) {
             player.sendSystemMessage(net.minecraft.network.chat.Component.literal("Failed to start Speedtest: No complete path to a Server or NRO was found."));
         }
-        setDirty();
     }
 
     private void tickPassiveTraffic(ServerLevel level) {
@@ -315,7 +388,7 @@ return graph;
                                         bestSignal = signal;
                                         bestAntenna = antenna;
                                         bestFreq = freq;
-                                        bestIp = "10.0." + (antenna.getBlockPos().getX() % 255) + "." + (player.getId() % 255);
+                                        bestIp = getMobileIp(player.getUUID());
                                     }
                                 }
                             }
@@ -376,6 +449,10 @@ return graph;
         Map<BlockPos, Integer> blockCapacity = new HashMap<>();
 
         for (TrafficSession session : activeSessions) {
+            if (session.getOwnerId() != null && level.getPlayerByUUID(session.getOwnerId()) == null) {
+                toRemove.add(session);
+                continue;
+            }
             session.tick();
             
             if (session.getState() == TrafficSession.SessionState.FINISHED) {
@@ -384,7 +461,9 @@ return graph;
                 if (!session.isPassive()) {
                     com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload update = new com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload(
                         session.getClientIp(), "FINISHED", session.getPingMs(), 0, session.getTicksElapsed(), session.getTotalTicksPerPhase());
-                    net.neoforged.neoforge.network.PacketDistributor.sendToAllPlayers(update);
+                    if (session.getOwnerId() != null && level.getPlayerByUUID(session.getOwnerId()) instanceof net.minecraft.server.level.ServerPlayer owner) {
+                        net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(owner, update);
+                    }
                 }
                 
                 // Save results to RouterBlockEntity if applicable
@@ -434,7 +513,9 @@ return graph;
                 
                 com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload update = new com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload(
                     session.getClientIp(), session.getState().name(), displayPing, session.getActualBandwidth(), session.getTicksElapsed(), session.getTotalTicksPerPhase());
-                net.neoforged.neoforge.network.PacketDistributor.sendToAllPlayers(update);
+                if (session.getOwnerId() != null && level.getPlayerByUUID(session.getOwnerId()) instanceof net.minecraft.server.level.ServerPlayer owner) {
+                    net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(owner, update);
+                }
             }
         }
         
@@ -644,7 +725,12 @@ return graph;
         return latency; // Returns ticks to wait for packet arrival
     }
 
-    private transient final Map<String, List<NetworkEdge>> pathCache = new HashMap<>();
+    private transient final Map<String, List<NetworkEdge>> pathCache = new java.util.LinkedHashMap<>(128, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, List<NetworkEdge>> eldest) {
+            return size() > 1024;
+        }
+    };
     
     private List<NetworkEdge> findShortestPath(BlockPos start, BlockPos end) {
         if (start.equals(end)) return new ArrayList<>();

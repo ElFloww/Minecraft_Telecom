@@ -10,54 +10,40 @@ import net.neoforged.neoforge.registries.DeferredRegister;
 public class ModItems {
     public static final DeferredRegister.Items ITEMS = DeferredRegister.createItems(TelecomMod.MODID);
 
-    public static final DeferredItem<BlockItem> COPPER_CABLE = ITEMS.register("copper_cable",
-            () -> new BlockItem(ModBlocks.COPPER_CABLE.get(), new Item.Properties()));
+    public static final DeferredItem<BlockItem> COPPER_CABLE = ITEMS.registerSimpleBlockItem(ModBlocks.COPPER_CABLE);
 
-    public static final DeferredItem<BlockItem> FIBER_CABLE = ITEMS.register("fiber_cable",
-            () -> new BlockItem(ModBlocks.FIBER_CABLE.get(), new Item.Properties()));
+    public static final DeferredItem<BlockItem> FIBER_CABLE = ITEMS.registerSimpleBlockItem(ModBlocks.FIBER_CABLE);
 
-    public static final DeferredItem<BlockItem> ROUTER = ITEMS.register("router",
-            () -> new BlockItem(ModBlocks.ROUTER.get(), new Item.Properties()));
+    public static final DeferredItem<BlockItem> ROUTER = ITEMS.registerSimpleBlockItem(ModBlocks.ROUTER);
             
-    public static final DeferredItem<BlockItem> ROUTER_LITE = ITEMS.register("router_lite",
-            () -> new BlockItem(ModBlocks.ROUTER_LITE.get(), new Item.Properties()));
+    public static final DeferredItem<BlockItem> ROUTER_LITE = ITEMS.registerSimpleBlockItem(ModBlocks.ROUTER_LITE);
             
-    public static final DeferredItem<BlockItem> ROUTER_MAX = ITEMS.register("router_max",
-            () -> new BlockItem(ModBlocks.ROUTER_MAX.get(), new Item.Properties()));
+    public static final DeferredItem<BlockItem> ROUTER_MAX = ITEMS.registerSimpleBlockItem(ModBlocks.ROUTER_MAX);
             
-    public static final DeferredItem<BlockItem> ROUTER_PRO = ITEMS.register("router_pro",
-            () -> new BlockItem(ModBlocks.ROUTER_PRO.get(), new Item.Properties()));
+    public static final DeferredItem<BlockItem> ROUTER_PRO = ITEMS.registerSimpleBlockItem(ModBlocks.ROUTER_PRO);
 
-    public static final DeferredItem<BlockItem> SERVER = ITEMS.register("server",
-            () -> new BlockItem(ModBlocks.SERVER.get(), new Item.Properties()));
+    public static final DeferredItem<BlockItem> SERVER = ITEMS.registerSimpleBlockItem(ModBlocks.SERVER);
 
-    public static final DeferredItem<BlockItem> ANTENNA = ITEMS.register("antenna",
-            () -> new BlockItem(ModBlocks.ANTENNA.get(), new Item.Properties()));
+    public static final DeferredItem<BlockItem> ANTENNA = ITEMS.registerSimpleBlockItem(ModBlocks.ANTENNA);
 
-    public static final DeferredItem<BlockItem> MEDIUM_FIBER_CABLE = ITEMS.register("medium_fiber_cable",
-            () -> new BlockItem(ModBlocks.MEDIUM_FIBER_CABLE.get(), new Item.Properties()));
+    public static final DeferredItem<BlockItem> MEDIUM_FIBER_CABLE = ITEMS.registerSimpleBlockItem(ModBlocks.MEDIUM_FIBER_CABLE);
 
-    public static final DeferredItem<BlockItem> BIG_FIBER_CABLE = ITEMS.register("big_fiber_cable",
-            () -> new BlockItem(ModBlocks.BIG_FIBER_CABLE.get(), new Item.Properties()));
+    public static final DeferredItem<BlockItem> BIG_FIBER_CABLE = ITEMS.registerSimpleBlockItem(ModBlocks.BIG_FIBER_CABLE);
 
-    public static final DeferredItem<BlockItem> NRO_BLOCK = ITEMS.register("nro",
-            () -> new BlockItem(ModBlocks.NRO_BLOCK.get(), new Item.Properties()));
+    public static final DeferredItem<BlockItem> NRO_BLOCK = ITEMS.registerSimpleBlockItem(ModBlocks.NRO_BLOCK);
 
-    public static final DeferredItem<BlockItem> NRA_BLOCK = ITEMS.register("nra",
-            () -> new BlockItem(ModBlocks.NRA_BLOCK.get(), new Item.Properties()));
+    public static final DeferredItem<BlockItem> NRA_BLOCK = ITEMS.registerSimpleBlockItem(ModBlocks.NRA_BLOCK);
 
-    public static final DeferredItem<BlockItem> PM_BLOCK = ITEMS.register("pm",
-            () -> new BlockItem(ModBlocks.PM_BLOCK.get(), new Item.Properties()));
+    public static final DeferredItem<BlockItem> PM_BLOCK = ITEMS.registerSimpleBlockItem(ModBlocks.PM_BLOCK);
 
-    public static final DeferredItem<BlockItem> SR_BLOCK = ITEMS.register("sr",
-            () -> new BlockItem(ModBlocks.SR_BLOCK.get(), new Item.Properties()));
+    public static final DeferredItem<BlockItem> SR_BLOCK = ITEMS.registerSimpleBlockItem(ModBlocks.SR_BLOCK);
 
-    public static final DeferredItem<SmartphoneItem> SMARTPHONE = ITEMS.register("smartphone",
-            () -> new SmartphoneItem(new Item.Properties().stacksTo(1)));
+    public static final DeferredItem<SmartphoneItem> SMARTPHONE = ITEMS.registerItem("smartphone",
+            SmartphoneItem::new, () -> new Item.Properties().stacksTo(1));
 
-    public static final DeferredItem<Item> NETWORK_TOOL = ITEMS.register("network_tool",
-            () -> new com.florentdubut.telecom.item.NetworkToolItem(new Item.Properties().stacksTo(1)));
+    public static final DeferredItem<Item> NETWORK_TOOL = ITEMS.registerItem("network_tool",
+            com.florentdubut.telecom.item.NetworkToolItem::new, () -> new Item.Properties().stacksTo(1));
 
-    public static final DeferredItem<Item> NETWORK_MAP = ITEMS.register("network_map",
-            () -> new com.florentdubut.telecom.item.NetworkMapItem(new Item.Properties().stacksTo(1)));
+    public static final DeferredItem<Item> NETWORK_MAP = ITEMS.registerItem("network_map",
+            com.florentdubut.telecom.item.NetworkMapItem::new, () -> new Item.Properties().stacksTo(1));
 }

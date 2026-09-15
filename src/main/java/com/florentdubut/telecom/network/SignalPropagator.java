@@ -39,6 +39,8 @@ public class SignalPropagator {
         int consecutiveSolidBlocks = 0;
         
         for (int i = 0; i < steps; i++) {
+            // Every remaining contribution is a loss: an undetectable signal cannot recover.
+            if (currentPower <= -120f) break;
             BlockPos currentBlock = BlockPos.containing(start.add(dir.scale(i)));
             if (currentBlock.equals(antennaPos) || currentBlock.equals(playerPos)) {
                 continue;

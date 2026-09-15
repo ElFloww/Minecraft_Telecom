@@ -5,13 +5,13 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 
 import java.util.ArrayList;
 import java.util.List;
 
 public record NetworkMapResponsePayload(List<MapNodeData> nodes) implements CustomPacketPayload {
-    public static final Type<NetworkMapResponsePayload> TYPE = new Type<>(ResourceLocation.fromNamespaceAndPath(TelecomMod.MODID, "network_map_response"));
+    public static final Type<NetworkMapResponsePayload> TYPE = new Type<>(Identifier.fromNamespaceAndPath(TelecomMod.MODID, "network_map_response"));
     
     public static final StreamCodec<FriendlyByteBuf, NetworkMapResponsePayload> STREAM_CODEC = StreamCodec.ofMember(
         NetworkMapResponsePayload::write,

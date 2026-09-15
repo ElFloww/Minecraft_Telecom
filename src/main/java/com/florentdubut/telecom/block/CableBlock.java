@@ -17,7 +17,9 @@ import net.minecraft.world.phys.shapes.VoxelShape;
 import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraft.core.Direction;
 import net.minecraft.world.item.context.BlockPlaceContext;
-import net.minecraft.world.level.LevelAccessor;
+import net.minecraft.world.level.LevelReader;
+import net.minecraft.world.level.ScheduledTickAccess;
+import net.minecraft.util.RandomSource;
 
 public class CableBlock extends Block implements EntityBlock {
 
@@ -107,7 +109,7 @@ public class CableBlock extends Block implements EntityBlock {
     }
 
     @Override
-    public BlockState updateShape(BlockState state, Direction direction, BlockState neighborState, LevelAccessor level, BlockPos currentPos, BlockPos neighborPos) {
+    public BlockState updateShape(BlockState state, LevelReader level, ScheduledTickAccess ticks, BlockPos currentPos, Direction direction, BlockPos neighborPos, BlockState neighborState, RandomSource random) {
         BooleanProperty property = getPropertyForDirection(direction);
         return state.setValue(property, connectsTo(state, neighborState));
     }
@@ -130,26 +132,12 @@ public class CableBlock extends Block implements EntityBlock {
     }
 
     @Override
-    public void onPlace(BlockState state, Level level, BlockPos pos, BlockState oldState, boolean isMoving) {
+    protected void onPlace(BlockState state, Level level, BlockPos pos, BlockState oldState, boolean isMoving) {
         super.onPlace(state, level, pos, oldState, isMoving);
-        if (!level.isClientSide()) {
-            BlockEntity be = level.getBlockEntity(pos);
-            if (be instanceof CableBlockEntity cable) {
-                cable.onPlaced();
-            }
+        // onPlace precedes block entity creation; schedule from the actual topology change, not onLoad.
+        if (!oldState.is(state.getBlock()) && level instanceof net.minecraft.server.level.ServerLevel serverLevel) {
+            com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel);
         }
     }
 
-    @Override
-    public void onRemove(BlockState state, Level level, BlockPos pos, BlockState newState, boolean isMoving) {
-        if (state.getBlock() != newState.getBlock()) {
-            if (!level.isClientSide()) {
-                BlockEntity be = level.getBlockEntity(pos);
-                if (be instanceof CableBlockEntity cable) {
-                    cable.onRemoved();
-                }
-            }
-            super.onRemove(state, level, pos, newState, isMoving);
-        }
-    }
 }

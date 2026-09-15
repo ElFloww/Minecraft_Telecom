@@ -27,6 +27,7 @@ sourceSets.main.resources {
 }
 
 repositories {
+    mavenCentral()
     // Add here additional repositories if required by some of the dependencies below.
 }
 
@@ -37,9 +38,19 @@ base {
 // Mojang ships Java 21 to end users in 1.21, so mods should target Java 21.
 java.toolchain.languageVersion = JavaLanguageVersion.of(21)
 
+sourceSets {
+    gameTest {
+        java.srcDirs = ['src/gametest/java']
+        resources.srcDirs = ['src/gametest/resources']
+        compileClasspath += sourceSets.main.output
+        runtimeClasspath += sourceSets.main.output
+    }
+}
+
 neoForge {
     // Specify the version of NeoForge to use.
     version = project.neo_version
+    addModdingDependenciesTo sourceSets.gameTest
 
     parchment {
         mappingsVersion = project.parchment_mappings_version
@@ -70,6 +81,8 @@ neoForge {
         // The gametest system is also enabled by default for other run configs under the /test command.
         gameTestServer {
             type = "gameTestServer"
+            gameDirectory = project.file('build/gametest')
+            systemProperty 'telecom.http.enabled', 'false'
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
         }
 
@@ -105,7 +118,13 @@ neoForge {
         // multi mod projects should define one per mod
         "${mod_id}" {
             sourceSet(sourceSets.main)
+            sourceSet(sourceSets.gameTest)
         }
+    }
+
+    unitTest {
+        enable()
+        testedMod = mods.getByName(mod_id)
     }
 }
 
@@ -118,6 +137,11 @@ configurations {
 }
 
 dependencies {
+    testImplementation platform('org.junit:junit-bom:5.11.4')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    testImplementation "net.neoforged:testframework:${neo_version}"
+    testImplementation 'org.mockito:mockito-core:5.14.2'
     // Example optional mod dependency with JEI
     // The JEI API is declared for compile time use, while the full JEI artifact is used at runtime
     // compileOnly "mezz.jei:jei-${mc_version}-common-api:${jei_version}"
@@ -181,6 +205,11 @@ publishing {
 
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8' // Use the UTF-8 charset for Java compilation
+}
+
+tasks.named('test', Test).configure {
+    useJUnitPlatform()
+    systemProperty 'jdk.httpclient.allowRestrictedHeaders', 'host'
 }
 
 // IDEA no longer automatically downloads sources/javadoc jars for dependencies, so we need to explicitly enable the behavior.

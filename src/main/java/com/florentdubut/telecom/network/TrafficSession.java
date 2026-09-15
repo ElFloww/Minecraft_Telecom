@@ -13,6 +13,7 @@ public class TrafficSession {
     }
 
     private final UUID sessionId;
+    private UUID ownerId;
     private final BlockPos sourcePos;
     private final BlockPos destPos;
     private SessionState state;
@@ -52,6 +53,10 @@ public class TrafficSession {
     public UUID getSessionId() {
         return sessionId;
     }
+
+    public UUID getOwnerId() { return ownerId; }
+
+    public void setOwnerId(UUID ownerId) { this.ownerId = ownerId; }
 
     public BlockPos getSourcePos() {
         return sourcePos;

@@ -4,7 +4,6 @@ import com.florentdubut.telecom.network.NetworkNode;
 import com.florentdubut.telecom.network.TelecomNetworkGraph;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.block.entity.BlockEntity;
-import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockState;
 
 public class TelecomHubBlockEntity extends BlockEntity {
@@ -28,22 +27,24 @@ public class TelecomHubBlockEntity extends BlockEntity {
     @Override
     public void onLoad() {
         super.onLoad();
-        if (level != null && !level.isClientSide()) {
-            com.florentdubut.telecom.network.TelecomNetworkGraph graph = com.florentdubut.telecom.network.TelecomNetworkGraph.get((net.minecraft.server.level.ServerLevel) level);
-            if (graph.getNode(worldPosition) == null) {
-                graph.addNode(new com.florentdubut.telecom.network.NetworkNode(worldPosition, hubType));
-                com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation((net.minecraft.server.level.ServerLevel) level);
-            }
+        if (!isRemoved()) {
+            registerNodeIfMissing();
         }
     }
 
-    public void onPlaced() {
+    @Override
+    public void preRemoveSideEffects(BlockPos pos, BlockState state) {
+        super.preRemoveSideEffects(pos, state);
+        onRemoved();
+    }
+
+    private void registerNodeIfMissing() {
         if (level instanceof net.minecraft.server.level.ServerLevel serverLevel) {
             TelecomNetworkGraph graph = TelecomNetworkGraph.get(serverLevel);
             if (graph.getNode(worldPosition) == null) {
                 graph.addNode(new NetworkNode(worldPosition, hubType));
+                com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel);
             }
-            com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel);
         }
     }
 

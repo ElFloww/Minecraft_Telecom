@@ -1,13 +1,11 @@
 package com.florentdubut.telecom.client.gui;
 
 import com.florentdubut.telecom.network.packet.RouterGuiSyncPayload;
-import com.florentdubut.telecom.network.packet.RouterConfigPayload;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
-import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
-import net.neoforged.neoforge.network.PacketDistributor;
+import net.neoforged.neoforge.client.network.ClientPacketDistributor;
 
 public class RouterScreen extends Screen {
 
@@ -24,7 +22,7 @@ public class RouterScreen extends Screen {
         refreshTick++;
         if (refreshTick >= 20) {
             refreshTick = 0;
-            net.neoforged.neoforge.network.PacketDistributor.sendToServer(new com.florentdubut.telecom.network.packet.GuiRefreshRequestPayload(payload.pos()));
+            ClientPacketDistributor.sendToServer(new com.florentdubut.telecom.network.packet.GuiRefreshRequestPayload(payload.pos()));
         }
     }
 
@@ -93,14 +91,16 @@ public class RouterScreen extends Screen {
             int confUp = payload.configuredMaxUp();
             if (this.speedtestActive) return;
             if (payload.isConnected() && confDown > 0 && confUp > 0) {
-                net.neoforged.neoforge.network.PacketDistributor.sendToServer(new com.florentdubut.telecom.network.packet.StartSpeedtestPayload(payload.pos(), payload.ipAddress(), confDown, confUp, 0, 0, DURATION_TICKS[durationIndex]));
+                ClientPacketDistributor.sendToServer(new com.florentdubut.telecom.network.packet.StartSpeedtestPayload(payload.pos(), payload.ipAddress(), confDown, confUp, 0, 0, DURATION_TICKS[durationIndex]));
                 this.speedtestActive = true;
                 this.currentSpeedtestData = null;
                 this.lastDownBw = 0;
                 this.lastUpBw = 0;
             } else {
                 String reason = !payload.isConnected() ? "No network connection!" : "Bandwidth not configured!";
-                net.minecraft.client.Minecraft.getInstance().player.sendSystemMessage(net.minecraft.network.chat.Component.literal("Failed to start: " + reason));
+                if (minecraft.player != null) {
+                    minecraft.player.displayClientMessage(Component.literal("Failed to start: " + reason), false);
+                }
             }
         }).bounds(startX + 20, startY + 145, 100, 20).build());
     }
@@ -128,27 +128,26 @@ public class RouterScreen extends Screen {
         // Border
         guiGraphics.renderOutline(startX, startY, boxWidth, boxHeight, 0xDD44AAFF);
 
-        guiGraphics.pose().pushPose();
-        guiGraphics.pose().translate(0, 0, 100);
+        guiGraphics.nextStratum();
 
         // Title
-        guiGraphics.drawCenteredString(this.font, "ROUTER CONFIGURATION", centerX, startY + 10, 0xFFFFFF);
+        guiGraphics.drawCenteredString(this.font, "ROUTER CONFIGURATION", centerX, startY + 10, 0xFFFFFFFF);
 
         // Status
         String statusText = payload.isConnected() ? "CONNECTED TO NETWORK" : "OFFLINE";
-        int statusColor = payload.isConnected() ? 0x00FF00 : 0xFF0000;
+        int statusColor = payload.isConnected() ? 0xFF00FF00 : 0xFFFF0000;
         guiGraphics.drawString(this.font, "Status: " + statusText, startX + 20, startY + 30, statusColor);
 
         // IP Address
-        guiGraphics.drawString(this.font, "IP Address: " + (!payload.ipAddress().isEmpty() ? payload.ipAddress() : "N/A"), startX + 20, startY + 45, 0xCCCCCC);
+        guiGraphics.drawString(this.font, "IP Address: " + (!payload.ipAddress().isEmpty() ? payload.ipAddress() : "N/A"), startX + 20, startY + 45, 0xFFCCCCCC);
 
         // Max Hardware Bandwidth
-        guiGraphics.drawString(this.font, "Hardware Max: " + (payload.isConnected() ? payload.bandwidthMbps() + " Mbps" : "---"), startX + 20, startY + 60, 0xCCCCCC);
+        guiGraphics.drawString(this.font, "Hardware Max: " + (payload.isConnected() ? payload.bandwidthMbps() + " Mbps" : "---"), startX + 20, startY + 60, 0xFFCCCCCC);
         
-        guiGraphics.drawString(this.font, "Plan Down: " + payload.configuredMaxDown() + " Mbps", startX + 20, startY + 90, 0x00FFFF);
-        guiGraphics.drawString(this.font, "Plan Up: " + payload.configuredMaxUp() + " Mbps", startX + 20, startY + 110, 0xFF8800);
+        guiGraphics.drawString(this.font, "Plan Down: " + payload.configuredMaxDown() + " Mbps", startX + 20, startY + 90, 0xFF00FFFF);
+        guiGraphics.drawString(this.font, "Plan Up: " + payload.configuredMaxUp() + " Mbps", startX + 20, startY + 110, 0xFFFF8800);
 
-        guiGraphics.drawString(this.font, "Press ESC to save and close", startX + 130, startY + 150, 0x555555);
+        guiGraphics.drawString(this.font, "Press ESC to save and close", startX + 130, startY + 150, 0xFF555555);
 
         // Speedtest overlay logic (shifted right)
         int stX = startX + 265;
@@ -160,19 +159,18 @@ public class RouterScreen extends Screen {
             guiGraphics.fill(stX, stY, stX + stW, stY + stH, 0xFF111111);
             guiGraphics.renderOutline(stX, stY, stW, stH, 0xFF555555);
             
-            guiGraphics.drawString(this.font, speedtestActive ? "TESTING: " + currentSpeedtestData.state() : "FINISHED", stX + 10, stY + 10, 0xFFFFFF);
-            guiGraphics.drawString(this.font, "Ping: " + currentSpeedtestData.pingMs() + " ms", stX + 10, stY + 30, 0x00FF00);
+            guiGraphics.drawString(this.font, speedtestActive ? "TESTING: " + currentSpeedtestData.state() : "FINISHED", stX + 10, stY + 10, 0xFFFFFFFF);
+            guiGraphics.drawString(this.font, "Ping: " + currentSpeedtestData.pingMs() + " ms", stX + 10, stY + 30, 0xFF00FF00);
             
             if (currentSpeedtestData.state().equals("DOWNLOAD") || currentSpeedtestData.state().equals("UPLOAD") || currentSpeedtestData.state().equals("FINISHED")) {
-                guiGraphics.drawString(this.font, "Down: " + this.lastDownBw + " Mbps", stX + 10, stY + 50, 0x00FFFF);
+                guiGraphics.drawString(this.font, "Down: " + this.lastDownBw + " Mbps", stX + 10, stY + 50, 0xFF00FFFF);
             }
             if (currentSpeedtestData.state().equals("UPLOAD") || currentSpeedtestData.state().equals("FINISHED")) {
-                guiGraphics.drawString(this.font, "Up: " + this.lastUpBw + " Mbps", stX + 10, stY + 70, 0xFF8800);
+                guiGraphics.drawString(this.font, "Up: " + this.lastUpBw + " Mbps", stX + 10, stY + 70, 0xFFFF8800);
             }
         }
 
-        guiGraphics.pose().popPose();
-
+        guiGraphics.nextStratum();
         super.render(guiGraphics, mouseX, mouseY, partialTick);
     }
 }

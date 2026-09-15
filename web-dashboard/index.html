@@ -1,16 +1,22 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="fr">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Minecraft Telecom Dashboard</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="./style.css">
   </head>
   <body>
     <div id="app">
       <div class="sidebar glass">
         <h1>Telecom Dashboard</h1>
+        <form id="session-auth" autocomplete="off">
+          <label for="session-token">Token HTTP de session</label>
+          <input id="session-token" type="password" autocomplete="off" maxlength="1024" placeholder="TELECOM_HTTP_TOKEN" />
+          <button class="speedtest-btn" type="submit">Appliquer</button>
+          <button class="speedtest-btn" id="clear-token" type="button">Effacer la session</button>
+          <small>En mémoire uniquement. Requis pour les mutations et tout accès distant.</small>
+          <p id="auth-status" role="status" aria-live="polite">Lecture locale sans token.</p>
+        </form>
         
         <div class="stat-card">
           <h3>Network Nodes</h3>

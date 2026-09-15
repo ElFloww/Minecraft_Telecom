@@ -30,6 +30,7 @@ public class TelecomMod {
 
     public static final DeferredHolder<CreativeModeTab, CreativeModeTab> TELECOM_TAB = CREATIVE_MODE_TABS.register("telecom_tab", () -> CreativeModeTab.builder()
             .title(Component.translatable("itemGroup.telecom"))
+            .icon(() -> ModItems.SMARTPHONE.get().getDefaultInstance())
             .displayItems((parameters, output) -> {
                 output.accept(ModItems.COPPER_CABLE.get());
                 output.accept(ModItems.FIBER_CABLE.get());
@@ -82,7 +83,7 @@ public class TelecomMod {
         httpServer.stop();
     }
 
-    @EventBusSubscriber(modid = TelecomMod.MODID, bus = EventBusSubscriber.Bus.MOD, value = Dist.CLIENT)
+    @EventBusSubscriber(modid = TelecomMod.MODID, value = Dist.CLIENT)
     static class ClientModEvents {
         @SubscribeEvent
         static void onClientSetup(FMLClientSetupEvent event) {

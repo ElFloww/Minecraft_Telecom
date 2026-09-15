@@ -11,7 +11,6 @@ import org.jetbrains.annotations.Nullable;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.phys.BlockHitResult;
-import com.florentdubut.telecom.client.ClientHooks;
 
 import net.minecraft.world.phys.shapes.CollisionContext;
 import net.minecraft.world.phys.shapes.VoxelShape;
@@ -32,7 +31,7 @@ public class AntennaBlock extends Block implements EntityBlock, TelecomBlock {
 
     @Override
     protected InteractionResult useWithoutItem(BlockState state, Level level, BlockPos pos, Player player, BlockHitResult hitResult) {
-        if (!level.isClientSide && player instanceof net.minecraft.server.level.ServerPlayer serverPlayer) {
+        if (!level.isClientSide() && player instanceof net.minecraft.server.level.ServerPlayer serverPlayer) {
             BlockEntity be = level.getBlockEntity(pos);
             if (be instanceof AntennaBlockEntity antenna) {
                 com.florentdubut.telecom.network.ModNetworking.openAntennaGuiForPlayer(serverPlayer, antenna);
@@ -47,27 +46,4 @@ public class AntennaBlock extends Block implements EntityBlock, TelecomBlock {
         return new AntennaBlockEntity(pos, state);
     }
 
-    @Override
-    public void onPlace(BlockState state, Level level, BlockPos pos, BlockState oldState, boolean isMoving) {
-        super.onPlace(state, level, pos, oldState, isMoving);
-        if (!level.isClientSide()) {
-            BlockEntity be = level.getBlockEntity(pos);
-            if (be instanceof AntennaBlockEntity antenna) {
-                antenna.onPlaced();
-            }
-        }
-    }
-
-    @Override
-    public void onRemove(BlockState state, Level level, BlockPos pos, BlockState newState, boolean isMoving) {
-        if (state.getBlock() != newState.getBlock()) {
-            if (!level.isClientSide()) {
-                BlockEntity be = level.getBlockEntity(pos);
-                if (be instanceof AntennaBlockEntity antenna) {
-                    antenna.onRemoved();
-                }
-            }
-            super.onRemove(state, level, pos, newState, isMoving);
-        }
-    }
 }

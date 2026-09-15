@@ -1,5 +1,67 @@
 import './style.css';
 
+let sessionToken = '';
+let sessionGeneration = 0;
+let requestQueue = Promise.resolve();
+let queuedRequests = 0;
+let speedtestPending = false;
+let tilesPaused = false;
+const authStatus = document.getElementById('auth-status');
+
+// Serialize the small, bounded set of polling/tile requests to respect the server job budget.
+function apiFetch(path, options = {}) {
+    if (queuedRequests >= 8) return Promise.reject(new Error('HTTP request queue full'));
+    queuedRequests++;
+    const generation = sessionGeneration;
+    const request = requestQueue.then(async () => {
+        if (generation !== sessionGeneration) throw new Error('Session changed');
+        const headers = new Headers(options.headers);
+        if (sessionToken) headers.set('Authorization', `Bearer ${sessionToken}`);
+        const response = await fetch(path, { ...options, headers, cache: 'no-store', credentials: 'omit',
+            redirect: 'error', signal: AbortSignal.timeout(5000) });
+        if (generation !== sessionGeneration) throw new Error('Session changed');
+        if (response.status === 401 || response.status === 403) {
+            authStatus.textContent = 'Accès refusé : vérifier le token et l’origine autorisée.';
+            tilesPaused = true;
+        } else if ([429, 503, 504].includes(response.status)) {
+            authStatus.textContent = 'Serveur occupé ou délai dépassé. Nouvelle lecture au prochain cycle.';
+        } else if (response.ok) {
+            authStatus.textContent = sessionToken ? 'Session avec token actif.' : 'Lecture locale sans token.';
+        }
+        return response;
+    });
+    requestQueue = request.catch(() => {}).then(() => new Promise(resolve => setTimeout(resolve, 60))).finally(() => { queuedRequests--; });
+    return request;
+}
+
+function setSessionToken(value) {
+    sessionToken = value;
+    sessionGeneration++;
+    tilesPaused = false;
+    for (const tile of tileCache.values()) tile.image?.close();
+    tileCache.clear();
+    networkData = { nodes: [], edges: [] };
+    document.getElementById('stat-nodes').textContent = '0';
+    document.getElementById('stat-edges').textContent = '0';
+    nperfData = [];
+    selectedNode = selectedEdge = hoveredNode = hoveredEdge = null;
+    detailsPanel.style.display = 'none';
+    authStatus.textContent = value ? 'Vérification du token...' : 'Token effacé.';
+    document.getElementById('session-token').value = '';
+    fetchNetworkData();
+    fetchNperfData();
+}
+
+document.getElementById('session-auth').addEventListener('submit', event => {
+    event.preventDefault();
+    setSessionToken(document.getElementById('session-token').value.trim());
+});
+document.getElementById('clear-token').addEventListener('click', () => setSessionToken(''));
+
+function escapeHtml(value) {
+    return String(value).replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
+}
+
 const canvas = document.getElementById('network-map');
 const ctx = canvas.getContext('2d');
 const tooltip = document.getElementById('tooltip');
@@ -42,11 +104,17 @@ function resize() {
 window.addEventListener('resize', resize);
 
 let initialCenterDone = false;
+let networkPending = false;
 async function fetchNetworkData() {
+    if (networkPending) return;
+    networkPending = true;
+    const generation = sessionGeneration;
     try {
-        const res = await fetch('/api/network?t=' + Date.now());
+        const res = await apiFetch('/api/network');
         if (res.ok) {
-            networkData = await res.json();
+            const data = await res.json();
+            if (generation !== sessionGeneration) return;
+            networkData = data;
             document.getElementById('stat-nodes').innerText = networkData.nodes.length;
             document.getElementById('stat-edges').innerText = networkData.edges.length;
             
@@ -82,15 +150,19 @@ async function fetchNetworkData() {
         }
     } catch (e) {
         console.warn("Could not fetch network data. Is the Minecraft server running?", e);
+    } finally {
+        networkPending = false;
     }
 }
 
 setTimeout(async () => {
     if (!initialCenterDone) {
         try {
-            const res = await fetch('/api/player?t=' + Date.now());
+            const generation = sessionGeneration;
+            const res = await apiFetch('/api/player');
             if (res.ok) {
                 const p = await res.json();
+                if (generation !== sessionGeneration) return;
                 pan.x = canvas.width / 2 - (p.x * zoom);
                 pan.y = canvas.height / 2 - (p.z * zoom);
                 initialCenterDone = true;
@@ -108,14 +180,16 @@ setTimeout(async () => {
 setInterval(fetchNetworkData, 2000);
 fetchNetworkData();
 
-canvas.addEventListener('mousedown', e => {
+canvas.addEventListener('pointerdown', e => {
+    canvas.setPointerCapture(e.pointerId);
     isDragging = true;
     hasDragged = false;
     lastMouse = { x: e.clientX, y: e.clientY };
 });
-window.addEventListener('mouseup', () => {
+window.addEventListener('pointerup', () => {
     isDragging = false;
 });
+window.addEventListener('pointercancel', () => { isDragging = false; });
 
 canvas.addEventListener('click', e => {
     if (hasDragged) return; // Don't open if they were panning the map
@@ -157,8 +231,8 @@ function showNodeDetails(node) {
         <div class="section-title">Informations Générales</div>
         <div class="info-row"><span class="label">Statut</span> <span>${loadPct >= 100 ? '<span style="color:#ef4444">Saturé</span>' : (loadPct > 0 ? '<span style="color:#22c55e">En Ligne</span>' : '<span style="color:#94a3b8">Inactif</span>')}</span></div>
         <div class="info-row"><span class="label">Position (X,Y,Z)</span> <span>${node.x}, ${node.y}, ${node.z}</span></div>
-        <div class="info-row"><span class="label">Adresse IP</span> <span>${node.ip || 'Non assignée'}</span></div>
-        ${node.cidr ? `<div class="info-row"><span class="label">Réseau (CIDR)</span> <span>${node.cidr}</span></div>` : ''}
+        <div class="info-row"><span class="label">Adresse IP</span> <span>${escapeHtml(node.ip || 'Non assignée')}</span></div>
+        ${node.cidr ? `<div class="info-row"><span class="label">Réseau (CIDR)</span> <span>${escapeHtml(node.cidr)}</span></div>` : ''}
         ${machines > 0 ? `<div class="info-row"><span class="label">Appareils connectés</span> <span>${machines}</span></div>` : ''}
         
         <div class="section-title">Bande Passante (Global)</div>
@@ -202,29 +276,35 @@ function showNodeDetails(node) {
         `;
     }
 
+    const previousDuration = document.getElementById('speedtest-duration')?.value;
     detailsContent.innerHTML = html;
+    if (previousDuration && node.type === 'ROUTER') document.getElementById('speedtest-duration').value = previousDuration;
 
     if (node.type === 'ROUTER') {
         const btn = document.getElementById('btn-speedtest');
+        btn.disabled = !sessionToken || speedtestPending;
+        if (!sessionToken) btn.innerText = 'Token requis pour démarrer';
         btn.addEventListener('click', () => {
+            if (speedtestPending || !sessionToken) return;
+            speedtestPending = true;
             const duration = document.getElementById('speedtest-duration').value;
             btn.disabled = true;
             btn.innerText = "Démarrage...";
-            fetch('/api/speedtest', {
+            apiFetch('/api/speedtest', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ pos: node.id, duration: parseInt(duration), maxDown: node.capacityDown, maxUp: node.capacityUp })
+                body: JSON.stringify({ pos: node.id, duration: parseInt(duration) })
             }).then(r => {
                 if(r.ok) {
                     btn.innerText = "Speedtest en cours !";
                 } else {
-                    btn.innerText = "Erreur";
+                    btn.innerText = `Erreur HTTP ${r.status}`;
                     btn.disabled = false;
                 }
             }).catch(e => {
                 btn.innerText = "Erreur de connexion";
                 btn.disabled = false;
-            });
+            }).finally(() => { speedtestPending = false; });
         });
     }
 }
@@ -306,7 +386,7 @@ function formatSpeed(mbps) {
     return mbps + ' Mbps';
 }
 
-window.addEventListener('mousemove', e => {
+window.addEventListener('pointermove', e => {
     if (isDragging) {
         pan.x += e.clientX - lastMouse.x;
         pan.y += e.clientY - lastMouse.y;
@@ -379,14 +459,44 @@ canvas.addEventListener('wheel', e => {
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
     
-    const wheel = e.deltaY < 0 ? 1.1 : 0.9;
-    zoom *= wheel;
+    const nextZoom = Math.max(0.25, Math.min(16, zoom * (e.deltaY < 0 ? 1.1 : 0.9)));
+    const wheel = nextZoom / zoom;
+    zoom = nextZoom;
     
     pan.x = mouseX - (mouseX - pan.x) * wheel;
     pan.y = mouseY - (mouseY - pan.y) * wheel;
 });
 
 let tileCache = new Map();
+
+async function fetchTile(tile, key) {
+    const generation = sessionGeneration;
+    let image;
+    let expires = Date.now() + 3000;
+    try {
+        const response = await apiFetch(`/api/tile?cx=${tile.cx}&cz=${tile.cz}`);
+        if (response.ok) {
+            image = await createImageBitmap(await response.blob());
+            expires = Date.now() + 30000;
+        } else if (response.status === 404) {
+            expires = Date.now() + 10000;
+        }
+        if (generation !== sessionGeneration) {
+            image?.close();
+            return;
+        }
+        tileCache.set(key, { image, expires });
+    } catch (error) {
+        if (generation === sessionGeneration) tileCache.set(key, { expires });
+    } finally {
+        activeTileRequests--;
+        while (tileCache.size > 1024) {
+            const oldest = tileCache.keys().next().value;
+            tileCache.get(oldest).image?.close();
+            tileCache.delete(oldest);
+        }
+    }
+}
 
 
 const nperfColors = {
@@ -397,11 +507,17 @@ const nperfColors = {
     5: ['rgba(168, 85, 247, 0.25)', 'rgba(168, 85, 247, 0.5)', 'rgba(168, 85, 247, 0.75)', 'rgba(168, 85, 247, 1)']  // Purple (5G)
 };
 
+let nperfPending = false;
 async function fetchNperfData() {
+    if (nperfPending) return;
+    nperfPending = true;
+    const generation = sessionGeneration;
     try {
-        const response = await fetch('/api/nperf_map?t=' + Date.now());
+        const response = await apiFetch('/api/nperf_map');
         if (!response.ok) return;
-        nperfData = await response.json();
+        const data = await response.json();
+        if (generation !== sessionGeneration) return;
+        nperfData = data;
         
         if (!initialCenterDone && nperfData.length > 0) {
             let sumX = 0;
@@ -416,6 +532,8 @@ async function fetchNperfData() {
         }
     } catch (e) {
         console.error(e);
+    } finally {
+        nperfPending = false;
     }
 }
 setInterval(fetchNperfData, 2000);
@@ -455,24 +573,34 @@ function draw() {
 
     const centerCx = Math.floor((minCx + maxCx) / 2);
     const centerCz = Math.floor((minCz + maxCz) / 2);
+    // Bound per-frame tile work, including on very large displays or extreme zoom-out.
+    minCx = Math.max(minCx, centerCx - 15);
+    maxCx = Math.min(maxCx, centerCx + 15);
+    minCz = Math.max(minCz, centerCz - 15);
+    maxCz = Math.min(maxCz, centerCz + 15);
     
     let fetchQueue = [];
     
     for (let cx = minCx; cx <= maxCx; cx++) {
         for (let cz = minCz; cz <= maxCz; cz++) {
             const key = `${cx},${cz}`;
+            const cached = tileCache.get(key);
+            if (cached && cached.expires < Date.now()) {
+                cached.image?.close();
+                tileCache.delete(key);
+            }
             if (!tileCache.has(key)) {
                 fetchQueue.push({cx, cz, dist: (cx - centerCx)**2 + (cz - centerCz)**2});
             } else {
-                const img = tileCache.get(key);
-                if (img && img !== false) {
+                const img = tileCache.get(key).image;
+                if (img) {
                     ctx.drawImage(img, cx * 16 * zoom + pan.x, cz * 16 * zoom + pan.y, 16.2 * zoom, 16.2 * zoom);
                 }
             }
         }
     }
     
-    if (fetchQueue.length > 0) {
+    if (!tilesPaused && fetchQueue.length > 0) {
         // Sort by distance to center so we load visible tiles first
         fetchQueue.sort((a, b) => a.dist - b.dist);
         for (const tile of fetchQueue) {
@@ -480,12 +608,8 @@ function draw() {
             fetchBudget--;
             activeTileRequests++;
             const key = `${tile.cx},${tile.cz}`;
-            tileCache.set(key, null);
-            const img = new Image();
-            img.crossOrigin = "Anonymous";
-            img.src = `/api/tile?cx=${tile.cx}&cz=${tile.cz}&t=${Date.now()}`;
-            img.onload = () => { tileCache.set(key, img); activeTileRequests--; };
-            img.onerror = () => { tileCache.set(key, false); activeTileRequests--; };
+            tileCache.set(key, { expires: Infinity });
+            fetchTile(tile, key);
         }
     }
 

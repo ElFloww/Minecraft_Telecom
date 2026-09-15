@@ -10,7 +10,7 @@ import net.minecraft.client.gui.components.Checkbox;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
-import net.neoforged.neoforge.network.PacketDistributor;
+import net.neoforged.neoforge.client.network.ClientPacketDistributor;
 
 import java.util.*;
 
@@ -99,7 +99,7 @@ public class AntennaScreen extends Screen {
             Checkbox box = checkboxes.get(freq);
             if (box != null && box.selected()) mask |= (1 << freq.ordinal());
         }
-        PacketDistributor.sendToServer(new AntennaConfigPayload(payload.pos(), nameBox.getValue(), mask));
+        ClientPacketDistributor.sendToServer(new AntennaConfigPayload(payload.pos(), nameBox.getValue(), mask));
         this.onClose();
     }
 
@@ -110,7 +110,7 @@ public class AntennaScreen extends Screen {
         if (refreshTick >= REFRESH_INTERVAL) {
             refreshTick = 0;
             // Ask the server for fresh utilization data
-            PacketDistributor.sendToServer(new AntennaRefreshRequestPayload(payload.pos()));
+            ClientPacketDistributor.sendToServer(new AntennaRefreshRequestPayload(payload.pos()));
         }
     }
 
@@ -127,12 +127,12 @@ public class AntennaScreen extends Screen {
 
         // ── Left panel: config ────────────────────────
         g.fill(winX + 1, winY + 1, winX + LEFT_W, winY + WIN_H - 1, 0x551A1A2E);
-        g.drawCenteredString(this.font, "⚙ Configuration", winX + LEFT_W / 2, winY + 8, 0x88BBFF);
-        g.drawString(this.font, "Nom :", winX + PADDING, winY + 22, 0x888888);
+        g.drawCenteredString(this.font, "⚙ Configuration", winX + LEFT_W / 2, winY + 8, 0xFF88BBFF);
+        g.drawString(this.font, "Nom :", winX + PADDING, winY + 22, 0xFF888888);
 
         // Tech column headers
         String[] techLabels  = {"2G (GSM)", "3G", "4G (LTE)", "5G (NR)"};
-        int[]    techColors  = {0xAA88FF, 0xFF9944, 0x44DDAA, 0x44AAFF};
+        int[]    techColors  = {0xFFAA88FF, 0xFFFF9944, 0xFF44DDAA, 0xFF44AAFF};
         int colW = (LEFT_W - PADDING * 2) / 4;
         for (int i = 0; i < 4; i++) {
             g.drawString(this.font, techLabels[i],
@@ -145,7 +145,7 @@ public class AntennaScreen extends Screen {
         // ── Right panel: utilization ──────────────────
         int rightX = winX + LEFT_W + PADDING;
         g.drawCenteredString(this.font, "📡 Utilisation en temps réel",
-            winX + LEFT_W + RIGHT_W / 2, winY + 8, 0x88BBFF);
+            winX + LEFT_W + RIGHT_W / 2, winY + 8, 0xFF88BBFF);
 
         TelecomFrequency[] allFreqs = TelecomFrequency.values();
         int lineH = 15;
@@ -161,10 +161,10 @@ public class AntennaScreen extends Screen {
             if (!freq.getTechnology().equals(currentTech)) {
                 currentTech = freq.getTechnology();
                 int headerColor = switch (currentTech) {
-                    case "2G" -> 0xAA88FF;
-                    case "3G" -> 0xFF9944;
-                    case "4G" -> 0x44DDAA;
-                    default   -> 0x44AAFF;
+                    case "2G" -> 0xFFAA88FF;
+                    case "3G" -> 0xFFFF9944;
+                    case "4G" -> 0xFF44DDAA;
+                    default   -> 0xFF44AAFF;
                 };
                 g.drawString(this.font, "── " + currentTech + " ──", rightX, yOff, headerColor);
                 yOff += lineH;
@@ -179,7 +179,7 @@ public class AntennaScreen extends Screen {
             int barColor = pct < 50 ? 0xFF00CC44 : (pct < 80 ? 0xFFFFCC00 : 0xFFFF3333);
 
             String label = freq.getFrequencyLabel();
-            g.drawString(this.font, label, rightX, yOff, 0xCCCCCC);
+            g.drawString(this.font, label, rightX, yOff, 0xFFCCCCCC);
 
             int barX = rightX + 60;
             // Background
@@ -191,14 +191,14 @@ public class AntennaScreen extends Screen {
 
             // Percentage + Mbps
             g.drawString(this.font, pct + "% | " + actual + "/" + max + " Mbps",
-                barX + barMaxW + 4, yOff, 0xAAAAAA);
+                barX + barMaxW + 4, yOff, 0xFFAAAAAA);
 
             yOff += lineH;
         }
 
         if (currentTech == null) {
             g.drawCenteredString(this.font, "Aucune fréquence activée",
-                winX + LEFT_W + RIGHT_W / 2, winY + WIN_H / 2, 0x666666);
+                winX + LEFT_W + RIGHT_W / 2, winY + WIN_H / 2, 0xFF666666);
         }
     }
 

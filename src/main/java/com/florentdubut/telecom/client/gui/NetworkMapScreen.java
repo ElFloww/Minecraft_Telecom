@@ -1,11 +1,10 @@
 package com.florentdubut.telecom.client.gui;
 
 import com.florentdubut.telecom.network.packet.MapNodeData;
-import com.mojang.blaze3d.systems.RenderSystem;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.entity.player.Player;
 
 import java.util.ArrayList;
@@ -20,8 +19,6 @@ public class NetworkMapScreen extends Screen {
     private double panY = 0;
     private double zoom = 1.0;
     private boolean isDragging = false;
-    private double lastMouseX = 0;
-    private double lastMouseY = 0;
 
     public NetworkMapScreen() {
         super(Component.literal("Network Map"));
@@ -41,8 +38,6 @@ public class NetworkMapScreen extends Screen {
 
     @Override
     public void render(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
-        this.renderBackground(guiGraphics, mouseX, mouseY, partialTick);
-        
         int width = this.width;
         int height = this.height;
         
@@ -50,7 +45,7 @@ public class NetworkMapScreen extends Screen {
         int centerY = height / 2;
 
         if (loading) {
-            guiGraphics.drawCenteredString(this.font, "Loading Map Data...", centerX, centerY, 0xFFFFFF);
+            guiGraphics.drawCenteredString(this.font, "Loading Map Data...", centerX, centerY, 0xFFFFFFFF);
             return;
         }
 
@@ -77,7 +72,7 @@ public class NetworkMapScreen extends Screen {
             // Skip off-screen
             if (nx < -50 || nx > width + 50 || ny < -50 || ny > height + 50) continue;
 
-            int color = 0xFFFFFF;
+            int color = 0xFFFFFFFF;
             switch(node.type()) {
                 case "SERVER": color = 0xFFFF0000; break;
                 case "ROUTER": color = 0xFFFFAA00; break;
@@ -98,8 +93,8 @@ public class NetworkMapScreen extends Screen {
         }
 
         // Overlay text
-        guiGraphics.drawString(this.font, "Zoom: " + String.format("%.2fx", zoom), 10, 10, 0xFFFFFF);
-        guiGraphics.drawString(this.font, "Nodes: " + nodes.size(), 10, 25, 0xFFFFFF);
+        guiGraphics.drawString(this.font, "Zoom: " + String.format("%.2fx", zoom), 10, 10, 0xFFFFFFFF);
+        guiGraphics.drawString(this.font, "Nodes: " + nodes.size(), 10, 25, 0xFFFFFFFF);
 
         // Render Tooltip
         if (hoveredNode != null) {
@@ -112,40 +107,38 @@ public class NetworkMapScreen extends Screen {
             if (hoveredNode.extraInfo() != null && !hoveredNode.extraInfo().isEmpty()) {
                 tooltip.add(Component.literal("Tech: " + hoveredNode.extraInfo()).withStyle(net.minecraft.ChatFormatting.GREEN));
             }
-            guiGraphics.renderTooltip(this.font, tooltip, java.util.Optional.empty(), mouseX, mouseY);
+            guiGraphics.setComponentTooltipForNextFrame(this.font, tooltip, mouseX, mouseY);
         }
         
         super.render(guiGraphics, mouseX, mouseY, partialTick);
     }
 
     @Override
-    public boolean mouseClicked(double mouseX, double mouseY, int button) {
-        if (button == 0 || button == 1) { // Left or Right click to drag
+    public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
+        if (event.button() == 0 || event.button() == 1) { // Left or Right click to drag
             isDragging = true;
-            lastMouseX = mouseX;
-            lastMouseY = mouseY;
             return true;
         }
-        return super.mouseClicked(mouseX, mouseY, button);
+        return super.mouseClicked(event, doubleClick);
     }
 
     @Override
-    public boolean mouseReleased(double mouseX, double mouseY, int button) {
-        if (button == 0 || button == 1) {
+    public boolean mouseReleased(MouseButtonEvent event) {
+        if (event.button() == 0 || event.button() == 1) {
             isDragging = false;
             return true;
         }
-        return super.mouseReleased(mouseX, mouseY, button);
+        return super.mouseReleased(event);
     }
 
     @Override
-    public boolean mouseDragged(double mouseX, double mouseY, int button, double dragX, double dragY) {
+    public boolean mouseDragged(MouseButtonEvent event, double dragX, double dragY) {
         if (isDragging) {
             panX += dragX;
             panY += dragY;
             return true;
         }
-        return super.mouseDragged(mouseX, mouseY, button, dragX, dragY);
+        return super.mouseDragged(event, dragX, dragY);
     }
 
     @Override

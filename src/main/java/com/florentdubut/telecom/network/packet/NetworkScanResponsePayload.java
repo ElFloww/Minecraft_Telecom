@@ -5,12 +5,12 @@ import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 
 import net.minecraft.core.BlockPos;
 
 public record NetworkScanResponsePayload(boolean found, String name, int signalStrength, String tech, String ipAddress, BlockPos antennaPos, int maxDown, int maxUp, int frequenciesMask) implements CustomPacketPayload {
-    public static final Type<NetworkScanResponsePayload> TYPE = new Type<>(ResourceLocation.fromNamespaceAndPath(TelecomMod.MODID, "network_scan_response"));
+    public static final Type<NetworkScanResponsePayload> TYPE = new Type<>(Identifier.fromNamespaceAndPath(TelecomMod.MODID, "network_scan_response"));
 
     public static final StreamCodec<FriendlyByteBuf, NetworkScanResponsePayload> STREAM_CODEC = StreamCodec.of(
         (buf, payload) -> {

@@ -45,13 +45,13 @@ public class SmartphoneScreen extends Screen {
                     if (stack.is(com.florentdubut.telecom.registry.ModItems.SMARTPHONE.get())) {
                         if (stack.has(net.minecraft.core.component.DataComponents.CUSTOM_DATA)) {
                             net.minecraft.nbt.CompoundTag tag = stack.get(net.minecraft.core.component.DataComponents.CUSTOM_DATA).copyTag();
-                            currentState = tag.getBoolean("nperfActive");
+                            currentState = tag.getBooleanOr("nperfActive", false);
                         }
                         break;
                     }
                 }
             }
-            net.neoforged.neoforge.network.PacketDistributor.sendToServer(new com.florentdubut.telecom.network.packet.ToggleNperfPayload(!currentState));
+            net.neoforged.neoforge.client.network.ClientPacketDistributor.sendToServer(new com.florentdubut.telecom.network.packet.ToggleNperfPayload(!currentState));
             this.onClose();
         }).bounds(startX + 85, startY + 110, 60, 60).build());
 
@@ -69,8 +69,6 @@ public class SmartphoneScreen extends Screen {
 
     @Override
     public void render(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
-        super.renderBackground(guiGraphics, mouseX, mouseY, partialTick);
-
         int screenW = 160;
         int screenH = 260;
         int startX = (this.width - screenW) / 2;
@@ -87,15 +85,13 @@ public class SmartphoneScreen extends Screen {
         
         com.florentdubut.telecom.network.packet.NetworkScanResponsePayload scan = SmartphoneHUD.latestScan;
         if (scan != null && scan.found() && (System.currentTimeMillis() - SmartphoneHUD.lastScanTime) < 5000) {
-            guiGraphics.drawString(this.font, scan.tech(), startX + 5, startY + 4, 0xFFFFFF);
-            guiGraphics.drawString(this.font, scan.signalStrength() + " dBm", startX + screenW - 45, startY + 4, 0xFFFFFF);
+            guiGraphics.drawString(this.font, scan.tech(), startX + 5, startY + 4, 0xFFFFFFFF);
+            guiGraphics.drawString(this.font, scan.signalStrength() + " dBm", startX + screenW - 45, startY + 4, 0xFFFFFFFF);
         } else {
-            guiGraphics.drawString(this.font, "No Service", startX + 5, startY + 4, 0xFF5555);
+            guiGraphics.drawString(this.font, "No Service", startX + 5, startY + 4, 0xFFFF5555);
         }
 
-        guiGraphics.pose().pushPose();
-        guiGraphics.pose().translate(0, 0, 100);
+        guiGraphics.nextStratum();
         super.render(guiGraphics, mouseX, mouseY, partialTick);
-        guiGraphics.pose().popPose();
     }
 }

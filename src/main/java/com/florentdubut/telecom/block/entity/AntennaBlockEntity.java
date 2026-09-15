@@ -9,6 +9,8 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.nbt.CompoundTag;
+import net.minecraft.world.level.storage.ValueInput;
+import net.minecraft.world.level.storage.ValueOutput;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientGamePacketListener;
 import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket;
@@ -26,23 +28,27 @@ public class AntennaBlockEntity extends BlockEntity {
     @Override
     public void onLoad() {
         super.onLoad();
-        if (level != null && !level.isClientSide()) {
-            com.florentdubut.telecom.network.TelecomNetworkGraph graph = com.florentdubut.telecom.network.TelecomNetworkGraph.get((net.minecraft.server.level.ServerLevel) level);
-            if (graph.getNode(worldPosition) == null) {
-                com.florentdubut.telecom.network.NetworkNode node = new com.florentdubut.telecom.network.NetworkNode(worldPosition, com.florentdubut.telecom.network.NetworkNode.NodeType.ANTENNA);
-                graph.addNode(node);
-                com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation((net.minecraft.server.level.ServerLevel) level);
-            }
+        if (!isRemoved()) {
+            restoreNode();
         }
     }
 
-    public void onPlaced() {
+    @Override
+    public void preRemoveSideEffects(BlockPos pos, BlockState state) {
+        super.preRemoveSideEffects(pos, state);
+        onRemoved();
+    }
+
+    private void restoreNode() {
         if (level instanceof ServerLevel serverLevel) {
             TelecomNetworkGraph graph = TelecomNetworkGraph.get(serverLevel);
-            NetworkNode node = new NetworkNode(worldPosition, NetworkNode.NodeType.ANTENNA);
+            NetworkNode node = graph.getNode(worldPosition);
+            if (node == null) {
+                node = new NetworkNode(worldPosition, NetworkNode.NodeType.ANTENNA);
+                graph.addNode(node);
+                com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel);
+            }
             node.setFrequenciesMask(enabledFrequenciesMask);
-            graph.addNode(node);
-            com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel);
         }
     }
 
@@ -55,26 +61,22 @@ public class AntennaBlockEntity extends BlockEntity {
     }
 
     @Override
-    protected void saveAdditional(CompoundTag tag, net.minecraft.core.HolderLookup.Provider registries) {
-        super.saveAdditional(tag, registries);
+    protected void saveAdditional(ValueOutput tag) {
+        super.saveAdditional(tag);
         tag.putString("antennaName", antennaName);
         tag.putInt("enabledFrequenciesMask", enabledFrequenciesMask);
     }
 
     @Override
-    protected void loadAdditional(CompoundTag tag, net.minecraft.core.HolderLookup.Provider registries) {
-        super.loadAdditional(tag, registries);
-        if (tag.contains("antennaName")) {
-            antennaName = tag.getString("antennaName");
-        }
-        enabledFrequenciesMask = tag.getInt("enabledFrequenciesMask");
+    protected void loadAdditional(ValueInput tag) {
+        super.loadAdditional(tag);
+        antennaName = tag.getStringOr("antennaName", antennaName);
+        enabledFrequenciesMask = tag.getIntOr("enabledFrequenciesMask", 0);
     }
 
     @Override
     public CompoundTag getUpdateTag(net.minecraft.core.HolderLookup.Provider registries) {
-        CompoundTag tag = new CompoundTag();
-        saveAdditional(tag, registries);
-        return tag;
+        return saveCustomOnly(registries);
     }
 
     @Override

@@ -5,10 +5,10 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 
 public record RouterGuiSyncPayload(BlockPos pos, boolean isConnected, String ipAddress, int pingMs, int bandwidthMbps, int configuredMaxDown, int configuredMaxUp, int lastDownBw, int lastUpBw, int lastPing) implements CustomPacketPayload {
-    public static final Type<RouterGuiSyncPayload> TYPE = new Type<>(ResourceLocation.fromNamespaceAndPath(TelecomMod.MODID, "router_gui_sync"));
+    public static final Type<RouterGuiSyncPayload> TYPE = new Type<>(Identifier.fromNamespaceAndPath(TelecomMod.MODID, "router_gui_sync"));
     
     public static final StreamCodec<FriendlyByteBuf, RouterGuiSyncPayload> STREAM_CODEC = StreamCodec.of(
             (buf, payload) -> {
