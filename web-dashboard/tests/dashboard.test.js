@@ -5,6 +5,7 @@ import vm from 'node:vm';
 import * as coverage from '../coverage.js';
 import { MapImageStore } from '../map-image.js';
 import * as zone from '../zone.js';
+import { SpeedtestStore, speedtestPlot } from '../speedtest.js';
 import { metadata, pngResponse } from './map-image-fixture.js';
 
 const source = (await readFile(new URL('../main.js', import.meta.url), 'utf8')).replace(/^import .*;$/gm, '');
@@ -344,15 +345,15 @@ test('a restarted server with no job eventually clears an old acknowledged job',
     assert.equal(run('zoneAwaitingId'), null);
 });
 
-async function dashboard({ fetcher, bitmap, offscreen, manualTimers = false } = {}) {
+async function dashboard({ fetcher, bitmap, offscreen, manualTimers = false, reduceMotion = false } = {}) {
     let now = Date.now();
     const requests = [], draws = [], timers = [], logs = [];
     const elements = new Map(), documentListeners = {}, windowListeners = {};
     const canvasContext = new Proxy({}, { get(target, key) {
-        return key in target ? target[key] : (...args) => draws.push({ method: key, args, color: target.fillStyle });
+        return key in target ? target[key] : (...args) => draws.push({ method: key, args, color: target.fillStyle, stroke: target.strokeStyle });
     } });
     const context = vm.createContext({
-        ...coverage, ...zone, MapImageStore, OffscreenCanvas: offscreen,
+        ...coverage, ...zone, MapImageStore, SpeedtestStore, speedtestPlot, OffscreenCanvas: offscreen,
         document: {
             hidden: false, body: { style: {} },
             addEventListener(name, fn) { documentListeners[name] = fn; },
@@ -374,13 +375,17 @@ async function dashboard({ fetcher, bitmap, offscreen, manualTimers = false } = 
                             elements.delete('speedtest-duration');
                             elements.delete('speedtest-server');
                             elements.delete('speedtest-refresh');
+                            for (const id of ['value', 'arc', 'progress', 'progress-text', 'phase-progress', 'wait', 'activity-dot']) {
+                                elements.delete(`speedtest-${id}`);
+                            }
                         },
                     });
                 }
                 return elements.get(id);
             },
         },
-        window: { innerWidth: 1100, innerHeight: 600, addEventListener(name, fn) { windowListeners[name] = fn; } },
+        window: { innerWidth: 1100, innerHeight: 600, matchMedia: () => ({ matches: reduceMotion }),
+            addEventListener(name, fn) { windowListeners[name] = fn; } },
         console: { warn: (...args) => logs.push(args), error: (...args) => logs.push(args) }, Headers, AbortSignal, AbortController, URLSearchParams,
         Date: class extends Date { static now() { return now; } },
         Option: class { constructor(text, value) { this.text = text; this.value = value; } },
@@ -784,6 +789,92 @@ test('untrusted IP text is escaped before HTML interpolation', async () => {
     assert.equal(run(`escapeHtml('<img src=x onerror="steal()">')`), '&lt;img src=x onerror=&quot;steal()&quot;&gt;');
 });
 
+test('shared cable load is identical in details, hover and drawing, including deployed DTOs without capacityMode', async () => {
+    for (const mode of [undefined, 'SHARED']) {
+        const nodes = [{ id: '1', type: 'PM', x: 40, y: 64, z: 40 }, { id: '2', type: 'PM', x: 240, y: 64, z: 40 }];
+        const edge = { source: '1', target: '2', type: 'FIBER', length: 200, capacity: 100,
+            usageDown: 50, usageUp: 50, ...(mode ? { capacityMode: mode, nominalCapacity: 100 } : {}) };
+        const { run, elements, windowListeners, draws, requests } = await dashboard({ fetcher: async () => ({
+            status: 200, json: async () => ({ nodes, edges: [edge] }),
+        }) });
+        run('pan={x:0,y:0};zoom=1;showEdgeDetails(networkData.edges[0]);draw()');
+        assert.match(elements.get('details-content').innerHTML, /Charge partagée \(DOWN \+ UP\)/);
+        assert.match(elements.get('details-content').innerHTML, /100\.0%/);
+        assert.match(elements.get('details-content').innerHTML, /Saturé/);
+        assert.ok(draws.some(draw => draw.method === 'stroke' && draw.stroke === 'hsla(0, 100%, 50%, 0.8)'));
+        assert.ok(!draws.some(draw => draw.method === 'setLineDash' && draw.args[0]?.length === 2));
+        windowListeners.pointermove({ clientX: 440, clientY: 40, target: run('canvas') });
+        assert.match(elements.get('tooltip').innerHTML, /Charge partagée \(DOWN \+ UP\) : 100\.0%/);
+        assert.equal(requests.length, 0, 'load views introduce no network reads');
+    }
+});
+
+test('asymmetric node load uses each directional budget in details, hover and animation', async () => {
+    for (const mode of [undefined, 'DIRECTIONAL']) {
+        const node = { id: '1', type: 'ROUTER', x: 40, y: 64, z: 40, capacity: 1000,
+            capacityDown: 1000, capacityUp: 100, usageDown: 0, usageUp: 100, capacityMode: mode };
+        const { run, elements, windowListeners, draws } = await dashboard({ fetcher: async () => ({
+            status: 200, json: async () => ({ nodes: [node], edges: [] }),
+        }) });
+        run('pan={x:0,y:0};zoom=1;showNodeDetails(networkData.nodes[0]);animationTime=0;draw()');
+        const html = elements.get('details-content').innerHTML;
+        assert.match(html, /Charge directionnelle<\/span> <span>100\.0%/);
+        assert.match(html, /Saturé/);
+        assert.match(html, /width: 0%/);
+        assert.match(html, /width: 100%/);
+        assert.equal(run('nodeLoadPercent(networkData.nodes[0])'), 100);
+        const pulse = draws.filter(draw => draw.method === 'arc').at(-1);
+        const expected = run('5 + ((animationTime * 6) % 2) * 15');
+        assert.equal(pulse.args[2], expected);
+        windowListeners.pointermove({ clientX: 340, clientY: 40, target: run('canvas') });
+        assert.match(elements.get('tooltip').innerHTML, /Charge directionnelle : 100\.0%/);
+    }
+});
+
+test('zero and invalid loads stay finite, and effective capacity never exceeds nominal', async () => {
+    const { run, elements } = await dashboard();
+    for (const value of ['0', 'NaN', 'undefined', 'Infinity', '-1']) {
+        run(`showEdgeDetails({type:'COPPER',length:0,capacity:${value},usageDown:${value},usageUp:${value}})`);
+        assert.match(elements.get('details-content').innerHTML, /0\.0%/);
+        assert.doesNotMatch(elements.get('details-content').innerHTML, /NaN|Infinity|undefined/);
+        run(`showNodeDetails({type:'PM',capacityDown:${value},capacityUp:${value},usageDown:${value},usageUp:${value},x:0,y:0,z:0})`);
+        assert.match(elements.get('details-content').innerHTML, /0\.0%/);
+        assert.doesNotMatch(elements.get('details-content').innerHTML, /NaN|Infinity|undefined/);
+    }
+    assert.equal(run('edgeLoadPercent({capacity:0,usageUp:100})'), 100);
+    assert.equal(run('nodeLoadPercent({capacityDown:1000,capacityUp:0,usageUp:100})'), 100);
+    assert.equal(run('edgeCapacity({capacity:1000,nominalCapacity:100})'), 100);
+    run(`showEdgeDetails({type:'COPPER',length:250,capacity:500,nominalCapacity:1000,capacityMode:'SHARED',usageDown:250,usageUp:250})`);
+    const html = elements.get('details-content').innerHTML;
+    assert.match(html, /Capacité effective partagée<\/span> <span class="capacity-text">500 Mbps/);
+    assert.match(html, /Capacité nominale<\/span> <span class="capacity-text">1\.0 Gbps/);
+    assert.match(html, /100\.0%/);
+});
+
+test('antenna collection and existing radio frequency capacity stay distinct and escaped', async () => {
+    const { run, elements } = await dashboard();
+    run(`showNodeDetails({type:'ANTENNA',x:0,y:64,z:0,capacityDown:1000000,capacityUp:1000000,
+        usageDown:0,usageUp:0,frequencies:[{label:'<img src=x>',technology:'<4G>',max:150,usage:75}]})`);
+    const html = elements.get('details-content').innerHTML;
+    assert.match(html, /Collecte filaire/);
+    assert.match(html, /Radio : utilisation par Fréquence/);
+    assert.match(html, /1000\.0 Gbps/);
+    assert.match(html, /75 Mbps \/ 150 Mbps/);
+    assert.match(html, /width: 50%/);
+    assert.match(html, /&lt;img src=x&gt; \(&lt;4G&gt;\)/);
+    assert.doesNotMatch(html, /<img/);
+});
+
+test('server catalogue describes a downstream path ceiling, not guaranteed duplex', async () => {
+    const { run, elements } = await dashboard();
+    run(`routerSettings('1').servers=[{id:'2',name:'<img src=x>',available:true,estimatedPingMs:10,bandwidthMbps:100}];
+        showNodeDetails({id:'1',type:'ROUTER',x:0,y:64,z:0})`);
+    const html = elements.get('details-content').innerHTML;
+    assert.match(html, /plafond descendant du trajet 100 Mbps/);
+    assert.match(html, /&lt;img src=x&gt;/);
+    assert.doesNotMatch(html, /<img|duplex|garanti/);
+});
+
 const routers = () => ['-9223372036854775808', '9223372036854775807'].map((id, x) => ({
     id, x, y: 64, z: 0, type: 'ROUTER', ip: '192.168.1.1', speedtest: null,
     capacityDown: 100, capacityUp: 50, usageDown: 0, usageUp: 0,
@@ -854,7 +945,8 @@ test('node snapshot is authoritative for active status, progress and per-device 
         json: async () => ({ nodes, edges: [], mapId: 'world-a' }) }) });
     selectRouter(run, 0);
     assert.equal(elements.get('btn-speedtest').disabled, true);
-    assert.match(elements.get('details-content').innerHTML, /50 %/);
+    assert.equal(elements.get('speedtest-phase-progress').textContent, '51 %', '150 confirmed ticks plus 200 ms of presentation time');
+    assert.equal(elements.get('speedtest-progress-text').textContent, '32 %', 'includes the 60-tick ping in 660 total ticks');
     assert.match(elements.get('details-content').innerHTML, /12 ms/);
     assert.match(elements.get('details-content').innerHTML, /75/);
     assert.match(elements.get('details-content').innerHTML, /25/);
@@ -868,6 +960,238 @@ test('node snapshot is authoritative for active status, progress and per-device 
     await run('fetchNetworkData()');
     selectRouter(run, 1);
     assert.doesNotMatch(elements.get('details-content').innerHTML, /12 ms|FINISHED/);
+});
+
+test('speedtest history is captured only by accepted network snapshots, not frames, panel rebuilds or duplicate polls', async () => {
+    const nodes = routers();
+    nodes[0].speedtest = speedtest(nodes[0].id, 'live');
+    nodes[1].speedtest = { ...speedtest(nodes[1].id, 'other'), actualBandwidth: 19 };
+    const { run, elements, advance, requests } = await dashboard({ fetcher: async () => ({ status: 200,
+        json: async () => ({ nodes, edges: [], mapId: 'world' }) }) });
+    assert.equal(run('speedtestStore.devices.size'), 2, 'unselected devices also retain samples');
+    selectRouter(run, 0);
+    elements.get('speedtest-duration').value = '1200';
+    elements.get('speedtest-duration').listeners.change();
+    elements.get('speedtest-server').value = '9223372036854775807';
+    elements.get('speedtest-server').listeners.change();
+    const entry = run(`speedtestStore.get('${nodes[0].id}')`);
+    advance(1000);
+    run('draw()');
+    const oldValue = elements.get('speedtest-value');
+    selectRouter(run, 0);
+    assert.notEqual(elements.get('speedtest-value'), oldValue, 'DOM bindings were rebuilt');
+    assert.equal(elements.get('speedtest-value').textContent, oldValue.textContent, 'smoothing survived the rebuild');
+    for (let i = 0; i < 120; i++) run('draw()');
+    assert.equal(requests.length, 0, 'animation and selection never start reads');
+    assert.equal(entry.down.length, 1);
+    await run('fetchNetworkData()');
+    assert.equal(entry.down.length, 1);
+    assert.equal(run('networkNextAt - Date.now()'), 2000, 'existing network cadence is unchanged');
+    assert.equal(elements.get('speedtest-duration').value, '1200');
+    assert.equal(elements.get('speedtest-server').value, '9223372036854775807');
+    advance(6001);
+    run('draw()');
+    assert.match(elements.get('speedtest-wait').textContent, /plus de 6 s/);
+    const frozen = elements.get('speedtest-value').textContent;
+    const progress = elements.get('speedtest-progress').value;
+    advance(10000);
+    run('draw()');
+    assert.equal(elements.get('speedtest-value').textContent, frozen);
+    assert.equal(elements.get('speedtest-progress').value, progress);
+    assert.equal(elements.get('speedtest-activity-dot').style.opacity, '0');
+    nodes[0].speedtest = { ...nodes[0].speedtest, ticksElapsed: 190, actualBandwidth: 21, downloadBandwidth: 62 };
+    await run('fetchNetworkData()');
+    assert.equal(elements.get('speedtest-value').textContent, '21.0');
+    assert.match(elements.get('details-content').innerHTML, /62 Mbps/);
+    assert.equal(entry.down.length, 2);
+    assert.equal(entry.down[1].value, 21);
+    assert.match(elements.get('details-content').innerHTML, /dernières 2 secondes \/ phase/);
+    assert.match(elements.get('details-content').innerHTML, /Dernier snapshot \/ phase/);
+    selectRouter(run, 1);
+    assert.notEqual(elements.get('speedtest-value').textContent, '21.0');
+    assert.equal(run(`speedtestStore.get('${nodes[1].id}').down.length`), 1);
+});
+
+test('speedtest rejects late network JSON across read resets, hidden tabs and old world generations', async () => {
+    const nodes = routers();
+    nodes[0].speedtest = speedtest(nodes[0].id, 'live');
+    let release, delay = false, mapId = 'world-a';
+    const { run, elements, advance } = await dashboard({ fetcher: async () => ({ status: 200, json: () => delay
+        ? new Promise(resolve => { release = resolve; }) : Promise.resolve({ nodes, edges: [], mapId }) }) });
+    selectRouter(run, 0);
+    const entry = run(`speedtestStore.get('${nodes[0].id}')`);
+    delay = true;
+    const late = run('fetchNetworkData()');
+    await run('requestQueue');
+    run('resetDashboardSession()');
+    release({ nodes: [{ ...nodes[0], speedtest: { ...nodes[0].speedtest, ticksElapsed: 200 } }], edges: [], mapId: 'old' });
+    await late;
+    assert.equal(entry.down.length, 1);
+    assert.equal(run('terrainMapId'), 'world-a');
+    const hidden = run('fetchNetworkData()');
+    await run('requestQueue');
+    run('document.hidden = true');
+    release({ nodes: [{ ...nodes[0], speedtest: { ...nodes[0].speedtest, ticksElapsed: 200 } }], edges: [], mapId });
+    await hidden;
+    assert.equal(entry.down.length, 1);
+    run('document.hidden = false');
+    delay = false;
+    await run('fetchNetworkData()');
+    assert.equal(run(`speedtestStore.get('${nodes[0].id}')`), entry, 'reconnect preserves same-world history');
+    mapId = 'world-b';
+    nodes[0].speedtest = { ...nodes[0].speedtest, actualBandwidth: 5 };
+    await run('fetchNetworkData()');
+    assert.notEqual(run(`speedtestStore.get('${nodes[0].id}')`), entry, 'same UUID/ticks in a different world must reset');
+    assert.equal(run(`speedtestStore.get('${nodes[0].id}').down[0].value`), 5);
+    assert.equal(elements.get('details-panel').style.display, 'none');
+    selectRouter(run, 0);
+    advance(1000);
+    run('draw()');
+    assert.ok(Number(elements.get('speedtest-value').textContent) <= 5);
+});
+
+test('terminal speedtest keeps exact server averages and destination across refreshes, failure never shows success', async () => {
+    for (const state of ['FINISHED', 'FAILED']) {
+        const nodes = routers();
+        nodes[0].speedtest = { ...speedtest(nodes[0].id, 'terminal', false), state,
+            downloadBandwidth: 123456, uploadBandwidth: 7654, serverName: '<Server>' };
+        const { run, elements, advance } = await dashboard({ fetcher: async () => ({ status: 200,
+            json: async () => ({ nodes, edges: [] }) }) });
+        selectRouter(run, 0);
+        assert.equal(elements.get('speedtest-value').textContent, '123456');
+        assert.match(elements.get('details-content').innerHTML, /123456 Mbps/);
+        assert.match(elements.get('details-content').innerHTML, /7654 Mbps/);
+        assert.match(elements.get('details-content').innerHTML, /&lt;Server&gt;/);
+        assert.equal(elements.get('speedtest-progress').value === 100, state === 'FINISHED');
+        assert.match(elements.get('speedtest-wait').textContent, state === 'FINISHED' ? /finaux/ : /interrompu/);
+        advance(10000);
+        run('draw()');
+        nodes[0].speedtest = { ...nodes[0].speedtest, downloadBandwidth: 1, serverName: 'Wrong' };
+        await run('fetchNetworkData()');
+        assert.equal(elements.get('speedtest-value').textContent, '123456');
+        assert.doesNotMatch(elements.get('details-content').innerHTML, /Wrong/);
+        assert.equal(run(`speedtestStore.get('${nodes[0].id}').down.length`), 0);
+    }
+});
+
+test('failed UI distinguishes unknown advancement from the last confirmed snapshot of the same session', async () => {
+    const nodes = routers();
+    nodes[0].speedtest = { ...speedtest(nodes[0].id, 'isolated', false), state: 'FAILED' };
+    const { run, elements, advance } = await dashboard({ fetcher: async () => ({ status: 200,
+        json: async () => ({ nodes, edges: [] }) }) });
+    selectRouter(run, 0);
+    assert.match(elements.get('details-content').innerHTML, /Dernier avancement confirmé/);
+    assert.equal(elements.get('speedtest-progress-text').textContent, 'Inconnu');
+    assert.equal(elements.get('speedtest-phase-progress').textContent, 'Inconnu');
+    assert.equal(elements.get('speedtest-progress').hidden, true);
+    assert.equal(elements.get('speedtest-progress').value, 0, 'hidden bar remains finite without asserting zero progress');
+    assert.doesNotMatch(elements.get('details-content').innerHTML, /NaN|value="null"/);
+    nodes[0].speedtest = { ...speedtest(nodes[0].id, 'next'), ticksElapsed: 100 };
+    await run('fetchNetworkData()');
+    const confirmed = elements.get('speedtest-progress').value;
+    const phase = elements.get('speedtest-phase-progress').textContent;
+    advance(3000);
+    run('draw()');
+    assert.ok(elements.get('speedtest-progress').value > confirmed);
+    nodes[0].speedtest = { ...nodes[0].speedtest, state: 'FAILED', active: false, ticksElapsed: 190 };
+    await run('fetchNetworkData()');
+    assert.equal(elements.get('speedtest-progress').hidden, false);
+    assert.equal(elements.get('speedtest-progress').value, confirmed);
+    assert.equal(elements.get('speedtest-phase-progress').textContent, phase);
+    assert.match(elements.get('details-content').innerHTML, /Dernier avancement confirmé/);
+    nodes[0].speedtest = { ...nodes[0].speedtest, sessionId: 'new-failed' };
+    await run('fetchNetworkData()');
+    assert.equal(elements.get('speedtest-progress-text').textContent, 'Inconnu');
+    assert.equal(elements.get('speedtest-progress').hidden, true);
+    nodes[0].speedtest = { ...nodes[0].speedtest, sessionId: 'new-finished', state: 'FINISHED' };
+    await run('fetchNetworkData()');
+    assert.equal(elements.get('speedtest-progress').hidden, false);
+    assert.equal(elements.get('speedtest-progress').value, 100);
+    assert.equal(elements.get('speedtest-progress-text').textContent, '100 %');
+});
+
+test('new ACK destination replaces old terminal results during long read backoff until its own snapshot', async () => {
+    const nodes = routers();
+    const old = { ...speedtest(nodes[0].id, 'A', false), serverName: 'Old server A', downloadBandwidth: 123456 };
+    nodes[0].speedtest = old;
+    let acknowledge, busy = false;
+    const { run, elements, advance, requests } = await dashboard({ manualTimers: true, fetcher: async path => {
+        if (path === '/api/speedtest') return { status: 200, ok: true,
+            json: () => new Promise(resolve => { acknowledge = resolve; }) };
+        return busy ? { status: 503, headers: new Headers({ 'Retry-After': '20' }) }
+            : { status: 200, json: async () => ({ nodes, edges: [] }) };
+    } });
+    selectRouter(run, 0);
+    assert.match(elements.get('details-content').innerHTML, /123456 Mbps/);
+    elements.get('speedtest-server').value = '200';
+    elements.get('speedtest-server').listeners.change();
+    const starting = elements.get('btn-speedtest').listeners.click();
+    await run('requestQueue');
+    assert.equal(elements.get('speedtest-server').value, '200');
+    assert.equal(run('speedtestElements'), null);
+    assert.doesNotMatch(elements.get('details-content').innerHTML, /Old server A|123456 Mbps|speedtest-gauge/);
+    acknowledge({ status: 'started', deviceId: `router:${nodes[0].id}`, sessionId: 'B', serverId: '200', serverName: 'New server B' });
+    await starting;
+    const assertWaitingForB = () => {
+        assert.match(elements.get('details-content').innerHTML, /Destination utilisée.*New server B.*\[200\]/s);
+        assert.doesNotMatch(elements.get('details-content').innerHTML, /Old server A|123456 Mbps|speedtest-gauge|speedtest-chart/);
+        assert.match(elements.get('details-content').innerHTML, /en attente du premier snapshot/);
+        assert.equal(elements.get('speedtest-server').value, '200');
+        assert.equal(elements.get('btn-speedtest').disabled, true);
+        assert.equal(run('speedtestElements'), null);
+        assert.equal(run('speedtestPending.size'), 1);
+    };
+    assertWaitingForB();
+    advance(200);
+    await run('fetchNetworkData()');
+    assertWaitingForB();
+    busy = true;
+    advance(200);
+    await run('fetchNetworkData()');
+    const requestCount = requests.length;
+    const deferred = run('fetchNetworkData()');
+    await flush();
+    advance(10000);
+    await flush();
+    run('draw();showNodeDetails(selectedNode)');
+    assertWaitingForB();
+    assert.equal(requests.length, requestCount, 'read backoff was not bypassed');
+    busy = false;
+    nodes[0].speedtest = { ...speedtest(nodes[0].id, 'B'), serverId: '200', serverName: 'New server B',
+        ticksElapsed: 0, actualBandwidth: 0, downloadBandwidth: 0, uploadBandwidth: 0 };
+    advance(10000);
+    await deferred;
+    assert.equal(run('speedtestPending.size'), 0);
+    assert.equal(elements.get('speedtest-value').textContent, '0.0');
+    assert.match(elements.get('details-content').innerHTML, /New server B/);
+    assert.equal(run(`speedtestStore.get('${nodes[0].id}').down.length`), 1, 'real tick-zero allocation is retained');
+    nodes[0].speedtest = old;
+    advance(200);
+    await run('fetchNetworkData()');
+    assert.equal(run(`speedtestStore.get('${nodes[0].id}').snapshot.sessionId`), 'B');
+    assert.match(elements.get('details-content').innerHTML, /New server B/);
+    assert.doesNotMatch(elements.get('details-content').innerHTML, /Old server A|123456 Mbps/);
+    assert.equal(elements.get('btn-speedtest').disabled, true, 'retired terminal cannot unlock the active session');
+});
+
+test('reduced motion removes speedtest motion while retaining real samples, mobile sizing and the sole draw loop', async () => {
+    const nodes = routers();
+    nodes[0].speedtest = speedtest(nodes[0].id, 'live');
+    const { run, elements, advance, requests } = await dashboard({ reduceMotion: true, fetcher: async () => ({ status: 200,
+        json: async () => ({ nodes, edges: [] }) }) });
+    selectRouter(run, 0);
+    assert.equal(elements.get('speedtest-value').textContent, '80.0');
+    const progress = elements.get('speedtest-progress').value;
+    advance(1500);
+    run('draw()');
+    assert.equal(elements.get('speedtest-progress').value, progress);
+    assert.equal(elements.get('speedtest-activity-dot').style.opacity, '0');
+    assert.equal(requests.length, 0);
+    assert.equal((source.match(/renderSpeedtest\(Date.now\(\)\)/g) || []).length, 1);
+    const css = await readFile(new URL('../style.css', import.meta.url), 'utf8');
+    assert.match(css, /prefers-reduced-motion: reduce[\s\S]*\.speedtest-activity \{ visibility: hidden/);
+    assert.match(css, /\.details-panel \{ width: min\(350px, 100vw\); max-width: 100%; height: 100%/);
+    assert.match(css, /\.speedtest-chart \{ display: block; width: 100%; height: auto/);
 });
 
 test('failure unlocks only its device and malformed or misrouted acknowledgements are rejected', async () => {
@@ -895,6 +1219,19 @@ test('failure unlocks only its device and malformed or misrouted acknowledgement
         releases[1](started(nodes[1].id, 'session-b'));
         await b;
     }
+});
+
+test('network allocation budget refusal is explicit and never automatically restarts the test', async () => {
+    const nodes = routers();
+    const { run, elements, requests } = await dashboard({ fetcher: async path => path === '/api/network'
+        ? { status: 200, json: async () => ({ nodes, edges: [] }) }
+        : { ok: false, status: 503, json: async () => ({ errorCode: 'network_limit' }) } });
+    selectRouter(run, 0);
+    await elements.get('btn-speedtest').listeners.click();
+    assert.match(elements.get('details-content').innerHTML, /Limite de calcul réseau atteinte/);
+    assert.equal(run('speedtestPending.size'), 0);
+    assert.equal(elements.get('btn-speedtest').disabled, false);
+    assert.equal(requests.filter(r => r.path === '/api/speedtest').length, 1);
 });
 
 test('world changes and read resets invalidate late JSON callbacks; only world changes clear device preferences', async () => {

@@ -1,6 +1,7 @@
 import './style.css';
 import { CoverageStore, COVERAGE_STYLES, signalState, coverageStep, visibleCoverageTiles, retryDelay } from './coverage.js';
 import { MapImageStore } from './map-image.js';
+import { SpeedtestStore, speedtestPlot } from './speedtest.js';
 import { worldPoint, zoneBounds, validBounds, zoneTileCount, zoneError, exactCoverageTiles, exactCoverageViewport } from './zone.js';
 
 let sessionGeneration = 0;
@@ -11,6 +12,8 @@ let apiRetryAt = 0;
 const routeRetries = new Map();
 const speedtestPending = new Map();
 const speedtestSettings = new Map();
+const speedtestStore = new SpeedtestStore();
+let speedtestElements = null;
 let speedtestViewId = null;
 let speedtestViewGeneration = 0;
 let tilesPaused = false;
@@ -736,7 +739,7 @@ async function fetchNetworkData() {
         networkNextAt = Date.now() + (res.status === 202 ? retryDelay(res.headers?.get('Retry-After'), 1, Date.now()) : 2000);
         if (res.status === 200) {
             const data = await res.json();
-            if (generation !== sessionGeneration) return;
+            if (generation !== sessionGeneration || document.hidden) return;
             if ((typeof data.mapId === 'string' || data.mapId === null) && data.mapId !== terrainMapId) {
                 terrainMapId = data.mapId;
                 speedtestPending.clear();
@@ -744,6 +747,8 @@ async function fetchNetworkData() {
                 selectedNode = selectedEdge = hoveredNode = hoveredEdge = null;
                 detailsPanel.style.display = 'none';
                 invalidateTerrainImage();
+                speedtestStore.resetWorld(terrainGeneration);
+                speedtestElements = null;
                 coverageStore.invalidate(true);
                 appliedCoverageOptions = null;
                 nperfData = [];
@@ -753,9 +758,10 @@ async function fetchNetworkData() {
             updateTerrain();
             networkData = data;
             for (const node of data.nodes) {
+                speedtestStore.capture(node, terrainGeneration, Date.now(), reducedMotion?.matches);
                 const pending = speedtestPending.get(node.id);
                 const test = nodeSpeedtest(node);
-                if (pending?.sessionId && test && (test.active || test.sessionId === pending.sessionId)) {
+                if (pending?.sessionId && test?.sessionId === pending.sessionId) {
                     speedtestPending.delete(node.id);
                 }
             }
@@ -901,7 +907,77 @@ detailsClose.addEventListener('click', () => {
 });
 
 function nodeSpeedtest(node) {
-    return typeof node.id === 'string' && node.speedtest?.deviceId === `router:${node.id}` ? node.speedtest : null;
+    if (typeof node.id !== 'string' || node.speedtest?.deviceId !== `router:${node.id}`) return null;
+    const entry = speedtestStore.get(node.id);
+    // A rejected replay must not replace the displayed state or unlock a pending start.
+    return entry?.seenSessionIds.has(node.speedtest.sessionId) ? entry.snapshot : node.speedtest;
+}
+
+function displayedSpeedtest(node) {
+    const entry = speedtestStore.get(node.id);
+    const pending = speedtestPending.get(node.id);
+    return entry && entry.snapshot.sessionId === nodeSpeedtest(node)?.sessionId
+        && (!pending || pending.sessionId === entry.snapshot.sessionId) ? entry : null;
+}
+
+function speedtestReadout(value) {
+    return Number.isFinite(value) && value >= 0 ? `${value} Mbps` : 'En attente';
+}
+
+function speedtestMarkup(node) {
+    const entry = displayedSpeedtest(node);
+    if (!entry) return speedtestPending.has(node.id)
+        ? '<div role="status">Nouveau test : en attente du premier snapshot.</div>' : '';
+    const test = entry.snapshot;
+    const view = speedtestStore.view(entry, Date.now(), reducedMotion?.matches);
+    const plot = speedtestPlot(entry);
+    const curve = (points, phase) => `<polyline class="speedtest-${phase}" points="${points.map(p => `${p.x},${p.y}`).join(' ')}"/>`
+        + points.map(p => `<circle class="speedtest-${phase}" cx="${p.x}" cy="${p.y}" r="2"/>`).join('');
+    return `<section class="speedtest-live" aria-label="Mesures Speedtest">
+        <div class="info-row"><span class="label">Phase</span><span>${escapeHtml(test.state)}</span></div>
+        <div class="speedtest-gauge">
+            <svg viewBox="0 0 300 170" aria-hidden="true"><path class="speedtest-track" d="M 30 145 A 120 120 0 0 1 270 145"/>
+                <path id="speedtest-arc" class="speedtest-${test.state === 'UPLOAD' ? 'up' : 'down'}" d="M 30 145 A 120 120 0 0 1 270 145" pathLength="100"/></svg>
+            <div class="speedtest-number"><strong id="speedtest-value"></strong><span>Mbps</span></div>
+        </div>
+        <div class="speedtest-caption">${view.terminal ? 'Moyenne DOWN' : 'Débit instantané'} · échelle : maximum observé</div>
+        <div id="speedtest-wait" class="speedtest-caption" role="status"></div>
+        <div class="speedtest-activity" aria-hidden="true"><span id="speedtest-activity-dot"></span></div>
+        <div class="info-row"><span class="label">${view.terminal && !view.finished ? 'Dernier avancement confirmé (total)' : `Progression totale (${view.totalSeconds} s)`}</span><span id="speedtest-progress-text"></span></div>
+        <progress id="speedtest-progress" max="100" value="${view.progress ?? 0}" ${view.progress === null ? 'hidden' : ''} aria-label="${view.terminal && !view.finished ? 'Dernier avancement confirmé' : 'Progression totale'}"></progress>
+        <div class="info-row"><span class="label">${view.terminal && !view.finished ? 'Dernier avancement confirmé (phase)' : 'Progression de phase'}</span><span id="speedtest-phase-progress">${view.phaseProgress === null ? 'Inconnu' : `${Math.floor(view.phaseProgress)} %`}</span></div>
+        <div class="info-row"><span class="label">Ping</span><span>${test.state !== 'PING' && Number.isFinite(test.pingMs) && test.pingMs >= 0 ? `${test.pingMs} ms` : 'En attente'}</span></div>
+        <div class="info-row"><span class="speedtest-down">DOWN moyen</span><span>${speedtestReadout(test.downloadBandwidth)}</span></div>
+        <div class="info-row"><span class="speedtest-up">UP moyen</span><span>${speedtestReadout(test.uploadBandwidth)}</span></div>
+        <div class="speedtest-caption">Max observé : ${speedtestReadout(plot.max)} · échelle linéaire</div>
+        <svg class="speedtest-chart" viewBox="0 0 300 110" role="img" aria-label="Débits instantanés : DOWN cyan, UP orange. Points des snapshots reçus.">
+            <path class="speedtest-grid" d="M8 8H292 M8 55H292 M8 102H292"/>
+            ${curve(plot.down, 'down')}${curve(plot.up, 'up')}
+        </svg>
+        <div class="speedtest-chart-axis"><span>-${plot.windowSeconds} s</span><span>Dernier snapshot / phase</span></div>
+        <div class="speedtest-caption">Fenêtre glissante : dernières ${plot.windowSeconds} secondes / phase · 0 Mbps en bas</div>
+        <div class="speedtest-caption"><span class="speedtest-down">DOWN</span> / <span class="speedtest-up">UP</span> · snapshots réels, 120 points / phase maximum</div>
+    </section>`;
+}
+
+function renderSpeedtest(now = Date.now()) {
+    if (!speedtestElements || speedtestViewId !== speedtestElements.id || detailsPanel.style.display === 'none') return;
+    const entry = speedtestStore.get(speedtestElements.id);
+    if (!entry || entry.snapshot.sessionId !== speedtestElements.sessionId) return;
+    const view = speedtestStore.view(entry, now, reducedMotion?.matches);
+    const ui = speedtestElements;
+    ui.value.textContent = view.terminal ? String(view.value) : (Math.floor(view.value * 10) / 10).toFixed(1);
+    ui.arc.style.strokeDasharray = `${Math.min(100, entry.max ? view.value / entry.max * 100 : 0)} 100`;
+    ui.progress.hidden = view.progress === null;
+    ui.progress.value = view.progress ?? 0;
+    ui.progressText.textContent = view.progress === null ? 'Inconnu' : `${Math.floor(view.progress)} %`;
+    ui.phaseProgress.textContent = view.phaseProgress === null ? 'Inconnu' : `${Math.floor(view.phaseProgress)} %`;
+    const status = view.stale ? 'En attente de données récentes (plus de 6 s).'
+        : view.terminal ? (view.finished ? 'Résultats finaux' : 'Test interrompu : moyennes partielles')
+            : view.waitingPhase ? 'En attente de confirmation de phase.' : 'Mesure en cours';
+    if (ui.wait.textContent !== status) ui.wait.textContent = status;
+    ui.activity.style.left = `${view.activity * 94}%`;
+    ui.activity.style.opacity = view.terminal || view.stale || reducedMotion?.matches ? '0' : '1';
 }
 
 function routerSettings(id) {
@@ -919,13 +995,14 @@ function speedtestError(code, fallback = 'Erreur Speedtest') {
         session_limit: 'Limite de sessions atteinte, réessayer plus tard.',
         server_unavailable: 'Serveur choisi disparu ou inaccessible. Aucun repli automatique.',
         route_lost: 'Connexion au serveur perdue pendant le test. Aucun repli automatique.',
-        catalogue_limit: 'Réseau trop volumineux pour le catalogue (8192 équipements / 16384 liens maximum).',
+        catalogue_limit: 'Réseau trop volumineux pour le catalogue (8192 équipements, 16384 liens ou 262144 références de positions de câble maximum).',
+        network_limit: 'Limite de calcul réseau atteinte : réduire les chemins physiques ou le nombre de tests simultanés.',
         no_server: 'Aucun serveur Speedtest accessible.' })[code] || fallback;
 }
 
 function speedtestServerLabel(server) {
     return `${server.name || 'Serveur'} [${server.id}] · ${server.available
-        ? `${server.estimatedPingMs} ms estimés · ${formatSpeed(server.bandwidthMbps)}`
+        ? `${server.estimatedPingMs} ms estimés · plafond descendant du trajet ${formatSpeed(server.bandwidthMbps)}`
         : speedtestError(server.reason, 'Indisponible')}`;
 }
 
@@ -1025,7 +1102,7 @@ async function startSpeedtest(deviceId) {
         pending.serverId = result.serverId;
         pending.serverName = result.serverName;
         const test = nodeSpeedtest(nodeMap.get(deviceId) || node);
-        if (test && (test.active || test.sessionId === pending.sessionId)) speedtestPending.delete(deviceId);
+        if (test?.sessionId === pending.sessionId) speedtestPending.delete(deviceId);
         networkNextAt = 0;
         refresh();
     } catch (error) {
@@ -1046,41 +1123,41 @@ function showNodeDetails(node) {
     detailsTitle.innerText = `Équipement: ${node.type}`;
     detailsTitle.style.color = COLORS[node.type] || '#fff';
     
-    // We use the maximum of the ratios to determine the overall load
-    let loadPctDown = Math.min(100, (node.usageDown / node.capacityDown) * 100);
-    let loadPctUp = Math.min(100, (node.usageUp / node.capacityUp) * 100);
-    let loadPct = Math.max(loadPctDown, loadPctUp) || 0;
+    const loadPctDown = loadPercent(node.usageDown, node.capacityDown ?? node.capacity);
+    const loadPctUp = loadPercent(node.usageUp, node.capacityUp ?? node.capacity);
+    const loadPct = nodeLoadPercent(node);
     
     let machines = ['SERVER', 'NRO', 'NRA', 'PM', 'SR'].includes(node.type) ? countDownstream(node) : 0;
     
     let html = `
         <div class="section-title">Informations Générales</div>
         <div class="info-row"><span class="label">Statut</span> <span>${loadPct >= 100 ? '<span style="color:#ef4444">Saturé</span>' : (loadPct > 0 ? '<span style="color:#22c55e">En Ligne</span>' : '<span style="color:#94a3b8">Inactif</span>')}</span></div>
-        <div class="info-row"><span class="label">Position (X,Y,Z)</span> <span>${node.x}, ${node.y}, ${node.z}</span></div>
+        <div class="info-row"><span class="label">Position (X,Y,Z)</span> <span>${escapeHtml(node.x)}, ${escapeHtml(node.y)}, ${escapeHtml(node.z)}</span></div>
         <div class="info-row"><span class="label">Adresse IP</span> <span>${escapeHtml(node.ip || 'Non assignée')}</span></div>
         ${node.cidr ? `<div class="info-row"><span class="label">Réseau (CIDR)</span> <span>${escapeHtml(node.cidr)}</span></div>` : ''}
         ${machines > 0 ? `<div class="info-row"><span class="label">Appareils connectés</span> <span>${machines}</span></div>` : ''}
         
-        <div class="section-title">Bande Passante (Global)</div>
-        <div class="info-row"><span class="label">Capacité Descendante</span> <span class="capacity-text">${formatSpeed(node.capacityDown)}</span></div>
+        <div class="section-title">${node.type === 'ANTENNA' ? 'Collecte filaire' : 'Bande Passante'} (budgets directionnels)</div>
+        <div class="info-row"><span class="label">Charge directionnelle</span> <span>${loadPct.toFixed(1)}%</span></div>
+        <div class="info-row"><span class="label">Capacité Descendante</span> <span class="capacity-text">${formatSpeed(node.capacityDown ?? node.capacity)}</span></div>
         <div class="info-row"><span class="label">Téléchargement (Down)</span> <span class="usage-down">${formatSpeed(node.usageDown)}</span></div>
         <div class="progress-container" style="height: 4px; margin-bottom: 12px;"><div class="progress-bar" style="width: ${loadPctDown}%; background: hsl(${120 - loadPctDown*1.2}, 100%, 50%)"></div></div>
 
-        <div class="info-row"><span class="label">Capacité Montante</span> <span class="capacity-text">${formatSpeed(node.capacityUp)}</span></div>
+        <div class="info-row"><span class="label">Capacité Montante</span> <span class="capacity-text">${formatSpeed(node.capacityUp ?? node.capacity)}</span></div>
         <div class="info-row"><span class="label">Envoi (Up)</span> <span class="usage-up">${formatSpeed(node.usageUp)}</span></div>
         <div class="progress-container" style="height: 4px;"><div class="progress-bar" style="width: ${loadPctUp}%; background: hsl(${120 - loadPctUp*1.2}, 100%, 50%)"></div></div>
     `;
 
     if (node.type === 'ANTENNA' && node.frequencies && node.frequencies.length > 0) {
-        html += `<div class="section-title">Utilisation par Fréquence</div>`;
+        html += `<div class="section-title">Radio : utilisation par Fréquence</div>`;
         
         for (const freq of node.frequencies) {
-            let freqLoad = Math.min(100, (freq.usage / freq.max) * 100);
+            let freqLoad = loadPercent(freq.usage, freq.max);
             let color = freq.technology === '5G' ? '#44AAFF' : (freq.technology === '4G' ? '#44DDAA' : (freq.technology === '3G' ? '#FF9944' : '#AA88FF'));
             
             html += `
                 <div class="info-row" style="margin-bottom: 2px;">
-                    <span class="label" style="color: ${color}">${freq.label} (${freq.technology})</span> 
+                    <span class="label" style="color: ${color}">${escapeHtml(freq.label)} (${escapeHtml(freq.technology)})</span>
                     <span>${formatSpeed(freq.usage)} / ${formatSpeed(freq.max)}</span>
                 </div>
                 <div class="progress-container" style="height: 4px;"><div class="progress-bar" style="width: ${freqLoad}%; background: ${freqLoad > 90 ? '#ef4444' : color}"></div></div>
@@ -1089,25 +1166,17 @@ function showNodeDetails(node) {
     }
     
     if (node.type === 'ROUTER') {
-        const test = nodeSpeedtest(node);
+        const snapshot = nodeSpeedtest(node);
+        const entry = speedtestStore.get(node.id);
+        const test = entry && entry.snapshot.sessionId === snapshot?.sessionId ? entry.snapshot : snapshot;
         const settings = routerSettings(node.id);
-        const destination = speedtestPending.get(node.id)?.sessionId ? speedtestPending.get(node.id) : test;
-        const progress = test && Number.isFinite(test.ticksElapsed) && test.totalTicksPerPhase > 0
-            ? Math.max(0, Math.min(100, test.ticksElapsed / test.totalTicksPerPhase * 100)) : 0;
-        const speed = value => Number.isFinite(value) && value >= 0 ? formatSpeed(value) : 'En attente';
+        const pending = speedtestPending.get(node.id);
+        const destination = pending?.sessionId ? pending : pending ? null : test;
         html += `
             <div class="section-title">Speedtest Distant</div>
             ${destination?.serverId ? `<div class="info-row"><span class="label">Destination utilisée</span><span>${escapeHtml(destination.serverName || 'Serveur')} [${escapeHtml(destination.serverId)}]</span></div>` : ''}
-            ${test?.errorCode ? `<div role="status">${escapeHtml(speedtestError(test.errorCode))}</div>` : ''}
-            ${test ? `
-                <div class="info-row"><span class="label">Phase</span><span>${escapeHtml(test.state)}</span></div>
-                <div class="info-row"><span class="label">Progression de phase</span><span>${Math.round(progress)} %</span></div>
-                <div class="progress-container"><div class="progress-bar" style="width: ${progress}%; background: #38bdf8"></div></div>
-                <div class="info-row"><span class="label">Ping</span><span>${Number.isFinite(test.pingMs) && test.pingMs >= 0 ? `${test.pingMs} ms` : 'En attente'}</span></div>
-                <div class="info-row"><span class="label">Débit instantané</span><span>${speed(test.actualBandwidth)}</span></div>
-                <div class="info-row"><span class="label">Téléchargement (Down)</span><span>${speed(test.downloadBandwidth)}</span></div>
-                <div class="info-row"><span class="label">Envoi (Up)</span><span>${speed(test.uploadBandwidth)}</span></div>
-            ` : ''}
+            ${!pending && test?.errorCode ? `<div role="status">${escapeHtml(speedtestError(test.errorCode))}</div>` : ''}
+            ${speedtestMarkup(node)}
             <label for="speedtest-server" class="label">Serveur de destination</label>
             <select id="speedtest-server" class="duration-select">
                 <option value="">Auto (meilleur serveur accessible)</option>
@@ -1131,8 +1200,18 @@ function showNodeDetails(node) {
     }
 
     detailsContent.innerHTML = html;
+    speedtestElements = null;
 
     if (node.type === 'ROUTER') {
+        const entry = displayedSpeedtest(node);
+        if (entry) {
+            speedtestElements = { id: node.id, sessionId: entry.snapshot.sessionId,
+                value: document.getElementById('speedtest-value'), arc: document.getElementById('speedtest-arc'),
+                progress: document.getElementById('speedtest-progress'), progressText: document.getElementById('speedtest-progress-text'),
+                phaseProgress: document.getElementById('speedtest-phase-progress'), wait: document.getElementById('speedtest-wait'),
+                activity: document.getElementById('speedtest-activity-dot') };
+            renderSpeedtest();
+        }
         const btn = document.getElementById('btn-speedtest');
         const duration = document.getElementById('speedtest-duration');
         duration.value = routerSettings(node.id).duration;
@@ -1165,19 +1244,20 @@ function showEdgeDetails(edge) {
     detailsTitle.innerText = `Câble: ${edge.type}`;
     detailsTitle.style.color = '#fff';
     
-    let loadPct = Math.min(100, Math.max(edge.usageDown, edge.usageUp) / edge.capacity * 100);
+    const loadPct = edgeLoadPercent(edge);
     
     let html = `
         <div class="section-title">Informations Câble</div>
         <div class="info-row"><span class="label">Statut</span> <span>${loadPct >= 100 ? '<span style="color:#ef4444">Saturé</span>' : (loadPct > 0 ? '<span style="color:#22c55e">Actif</span>' : '<span style="color:#94a3b8">Inactif</span>')}</span></div>
-        <div class="info-row"><span class="label">Longueur</span> <span>${edge.length} blocs</span></div>
+        <div class="info-row"><span class="label">Longueur</span> <span>${escapeHtml(edge.length)} blocs</span></div>
         
         <div class="section-title">Bande Passante</div>
-        <div class="info-row"><span class="label">Capacité Max</span> <span class="capacity-text">${formatSpeed(edge.capacity)}</span></div>
+        <div class="info-row"><span class="label">${edge.capacityMode ? 'Capacité effective partagée' : 'Capacité publiée partagée (ancienne API)'}</span> <span class="capacity-text">${formatSpeed(edgeCapacity(edge))}</span></div>
+        ${Number.isFinite(edge.nominalCapacity) ? `<div class="info-row"><span class="label">Capacité nominale</span> <span class="capacity-text">${formatSpeed(edge.nominalCapacity)}</span></div>` : ''}
         <div class="info-row"><span class="label">Flux Descendant</span> <span class="usage-down">${formatSpeed(edge.usageDown)}</span></div>
         <div class="info-row"><span class="label">Flux Montant</span> <span class="usage-up">${formatSpeed(edge.usageUp)}</span></div>
         
-        <div class="section-title">Charge Câble</div>
+        <div class="section-title">Charge partagée (DOWN + UP)</div>
         <div class="info-row"><span class="label">Saturation</span> <span>${loadPct.toFixed(1)}%</span></div>
         <div class="progress-container"><div class="progress-bar" style="width: ${loadPct}%; background: hsl(${120 - loadPct*1.2}, 100%, 50%)"></div></div>
     `;
@@ -1230,7 +1310,33 @@ function countDownstream(startNode) {
     return count;
 }
 
+function nonNegative(value) {
+    return Number.isFinite(value) ? Math.max(0, value) : 0;
+}
+
+function loadPercent(usage, capacity) {
+    usage = nonNegative(usage);
+    capacity = nonNegative(capacity);
+    return usage === 0 ? 0 : capacity === 0 ? 100 : Math.min(100, usage / capacity * 100);
+}
+
+function edgeCapacity(edge) {
+    const capacity = nonNegative(edge.capacity);
+    return Number.isFinite(edge.nominalCapacity) ? Math.min(capacity, nonNegative(edge.nominalCapacity)) : capacity;
+}
+
+// Deployed DTOs without capacityMode already use shared links and directional nodes.
+function edgeLoadPercent(edge) {
+    return loadPercent(nonNegative(edge.usageDown) + nonNegative(edge.usageUp), edgeCapacity(edge));
+}
+
+function nodeLoadPercent(node) {
+    return Math.max(loadPercent(node.usageDown, node.capacityDown ?? node.capacity),
+        loadPercent(node.usageUp, node.capacityUp ?? node.capacity));
+}
+
 function formatSpeed(mbps) {
+    mbps = nonNegative(mbps);
     if (mbps >= 1000) return (mbps / 1000).toFixed(1) + ' Gbps';
     return mbps + ' Mbps';
 }
@@ -1300,16 +1406,16 @@ window.addEventListener('pointermove', e => {
         tooltip.style.display = 'block';
         tooltip.style.left = (e.clientX + 15) + 'px';
         tooltip.style.top = (e.clientY + 15) + 'px';
-        tooltip.innerHTML = `<div class="title" style="color: ${COLORS[hoveredNode.type]}; border: none; padding: 0; margin: 0;">${hoveredNode.type} <span style="font-size: 0.75rem; color: #94a3b8">(Clic pour détails)</span></div>`;
+        tooltip.innerHTML = `<div class="title" style="color: ${COLORS[hoveredNode.type] || '#fff'}; border: none; padding: 0; margin: 0;">${escapeHtml(hoveredNode.type)} <span style="font-size: 0.75rem; color: #94a3b8">(Clic pour détails)</span></div><div>${hoveredNode.type === 'ANTENNA' ? 'Collecte filaire : ' : ''}Charge directionnelle : ${nodeLoadPercent(hoveredNode).toFixed(1)}%</div>`;
         document.body.style.cursor = 'pointer';
     } else if (hoveredEdge) {
         tooltip.style.display = 'block';
         tooltip.style.left = (e.clientX + 15) + 'px';
         tooltip.style.top = (e.clientY + 15) + 'px';
-        let loadPct = Math.min(100, Math.max(hoveredEdge.usageDown, hoveredEdge.usageUp) / hoveredEdge.capacity * 100);
+        const loadPct = edgeLoadPercent(hoveredEdge);
         let color = `hsl(${120 - loadPct*1.2}, 100%, 50%)`;
         if(loadPct === 0) color = '#94a3b8';
-        tooltip.innerHTML = `<div class="title" style="color: ${color}; border: none; padding: 0; margin: 0;">Câble ${hoveredEdge.type} <span style="font-size: 0.75rem; color: #94a3b8">(Clic pour détails)</span></div>`;
+        tooltip.innerHTML = `<div class="title" style="color: ${color}; border: none; padding: 0; margin: 0;">Câble ${escapeHtml(hoveredEdge.type)} <span style="font-size: 0.75rem; color: #94a3b8">(Clic pour détails)</span></div><div>Charge partagée (DOWN + UP) : ${loadPct.toFixed(1)}%</div>`;
         document.body.style.cursor = 'pointer';
     } else {
         tooltip.style.display = 'none';
@@ -1438,6 +1544,7 @@ let animationFrame;
 const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)');
 function draw() {
     if (document.hidden) return;
+    renderSpeedtest(Date.now());
     if (!reducedMotion?.matches) animationTime += 0.05;
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -1494,13 +1601,12 @@ function draw() {
                 if (Math.max(x1, x2) < -20 || Math.min(x1, x2) > canvas.width + 20
                     || Math.max(y1, y2) < -20 || Math.min(y1, y2) > canvas.height + 20) continue;
                 
-                let maxUsage = Math.max(edge.usageDown, edge.usageUp);
-                let loadPct = Math.min(100, (maxUsage / edge.capacity) * 100);
+                const loadPct = edgeLoadPercent(edge);
                 
                 // COLOR CHANGE LOGIC
                 let hue = 120 - (loadPct * 1.2); // 120 is Green, 0 is Red
                 
-                if (maxUsage === 0) {
+                if (loadPct === 0) {
                     // If 0 usage, make it dull transparent grey
                     ctx.strokeStyle = (hoveredEdge === edge) ? 'rgba(255, 255, 255, 0.8)' : 'rgba(255, 255, 255, 0.5)';
                 } else {
@@ -1514,7 +1620,7 @@ function draw() {
                 ctx.lineTo(x2, y2);
                 ctx.stroke();
                 
-                if (maxUsage > 0 && loadPct < 100) {
+                if (loadPct > 0 && loadPct < 100) {
                     let speed = 1 + (loadPct / 100) * 5;
                     // Dash animation using a brighter color or white to represent packets
                     ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
@@ -1544,9 +1650,10 @@ function draw() {
             const radius = Math.max(3, baseRadius * Math.min(2, Math.max(0.5, zoom))) * (isHovered ? 1.5 : 1);
             
             const color = COLORS[node.type] || '#ffffff';
+            const loadPct = nodeLoadPercent(node);
             
             ctx.shadowColor = color;
-            ctx.shadowBlur = isHovered ? 20 : (node.usageDown > 0 ? 10 : 0);
+            ctx.shadowBlur = isHovered ? 20 : (loadPct > 0 ? 10 : 0);
             
             ctx.fillStyle = color;
             ctx.beginPath();
@@ -1560,9 +1667,7 @@ function draw() {
             ctx.stroke();
             
             // Pulse animation if there is traffic
-            let maxUsage = Math.max(node.usageDown, node.usageUp);
-            if (maxUsage > 0 && node.capacity > 0) {
-                let loadPct = Math.min(100, (maxUsage / node.capacity) * 100);
+            if (loadPct > 0) {
                 let speed = 1 + (loadPct / 100) * 5;
                 let pulseTime = (animationTime * speed) % 2; // 0 to 2
                 

@@ -63,16 +63,14 @@ public class RouterBlock extends Block implements EntityBlock, TelecomBlock {
                     }
                 }
                 
-                int maxDown = 1000;
-                int maxUp = 1000;
+                int maxDown = node.getCapacityDown();
+                int maxUp = node.getCapacityUp();
                 int lastDown = 0;
                 int lastUp = 0;
                 int lastPing = 0;
                 
                 BlockEntity be = level.getBlockEntity(pos);
                 if (be instanceof RouterBlockEntity routerBE) {
-                    maxDown = routerBE.getConfiguredMaxDown();
-                    maxUp = routerBE.getConfiguredMaxUp();
                     lastDown = routerBE.getLastDownBw();
                     lastUp = routerBE.getLastUpBw();
                     lastPing = routerBE.getLastPing();

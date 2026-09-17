@@ -294,7 +294,7 @@ public final class TelecomWorldGameTests {
         Map<BlockPos, Block> blocks = Map.ofEntries(
                 Map.entry(server, ModBlocks.SERVER.get()),
                 Map.entry(cable, ModBlocks.FIBER_CABLE.get()),
-                Map.entry(router, ModBlocks.ROUTER.get()),
+                Map.entry(router, ModBlocks.ROUTER_LITE.get()),
                 Map.entry(new BlockPos(5, 1, 1), ModBlocks.ANTENNA.get()),
                 Map.entry(new BlockPos(7, 1, 1), ModBlocks.NRO_BLOCK.get()),
                 Map.entry(new BlockPos(9, 1, 1), ModBlocks.NRA_BLOCK.get()),
@@ -341,6 +341,28 @@ public final class TelecomWorldGameTests {
                     helper.assertValueEqual(nodes.size(), 7, "All node classes must participate in restoration");
                     edges.set(List.copyOf(graph.getEdges()));
                     helper.assertTrue(!edges.get().isEmpty(), "Regression requires actual edges");
+                    NetworkNode routerNode = graph.getNode(helper.absolutePos(router));
+                    RouterBlockEntity routerEntity = helper.getBlockEntity(router, RouterBlockEntity.class);
+                    routerNode.setCapacityDown(999);
+                    routerNode.setCapacityUp(1000);
+                    routerNode.setCapacitySyncRequired(true);
+                    graph.setDirty(false);
+                    routerEntity.onLoad();
+                    helper.assertValueEqual(routerNode.getCapacityDown(), 1000, "Lite download profile must be restored");
+                    helper.assertValueEqual(routerNode.getCapacityUp(), 700, "Legacy Lite upload must be corrected to 700");
+                    helper.assertTrue(graph.isDirty(), "Corrected capacities must be persisted");
+                    helper.assertTrue(!routerNode.requiresCapacitySync(), "Legacy synchronization flag must be cleared");
+                    assertUnchanged.run();
+                    graph.setDirty(false);
+                    routerEntity.onLoad();
+                    helper.assertTrue(!graph.isDirty(), "Repeated onLoad must not invalidate an unchanged graph");
+                    assertUnchanged.run();
+                    routerNode.setCapacityDown(0);
+                    routerNode.setCapacityUp(45);
+                    routerEntity.onLoad();
+                    helper.assertValueEqual(routerNode.getCapacityDown(), 0, "Model v1 zero download must be preserved");
+                    helper.assertValueEqual(routerNode.getCapacityUp(), 45, "Model v1 custom upload must be preserved");
+                    helper.assertTrue(!graph.isDirty(), "Custom capacities within hardware must not invalidate the graph");
                 })
                 .thenIdle(5)
                 .thenExecute(assertUnchanged)

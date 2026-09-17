@@ -397,17 +397,11 @@ public class TelecomHttpServer {
                 var session = graph.getLatestSessionByDeviceId(com.florentdubut.telecom.network.TrafficSession.routerDeviceId(node.getPosition()));
                 if (session != null) item.add("speedtest", speedtestSnapshot(session));
             }
-            int down = 1000, up = 1000;
-            switch (node.getType()) {
-                case SERVER, NRO -> { down = 1000000; up = 1000000; }
-                case NRA, PM -> { down = 100000; up = 100000; }
-                case SR -> { down = 10000; up = 10000; }
-                case ROUTER -> { down = node.getCapacityDown(); up = node.getCapacityUp(); }
-                default -> { }
-            }
+            int down = node.getCapacityDown(), up = node.getCapacityUp();
             item.addProperty("capacityDown", down);
             item.addProperty("capacityUp", up);
             item.addProperty("capacity", Math.max(down, up));
+            item.addProperty("capacityMode", "DIRECTIONAL");
             if (node.getType() == NetworkNode.NodeType.ANTENNA) {
                 JsonArray techs = new JsonArray();
                 JsonArray frequencies = new JsonArray();
@@ -439,7 +433,9 @@ public class TelecomHttpServer {
             item.addProperty("type", edge.getType().name());
             item.addProperty("usageDown", edge.getCurrentUsageDown());
             item.addProperty("usageUp", edge.getCurrentUsageUp());
-            item.addProperty("capacity", edge.getBandwidthMax());
+            item.addProperty("capacity", edge.getEffectiveBandwidthMbps());
+            item.addProperty("nominalCapacity", edge.getBandwidthMax());
+            item.addProperty("capacityMode", "SHARED");
             item.addProperty("length", edge.getLength());
             edges.add(item);
         }
@@ -591,11 +587,12 @@ public class TelecomHttpServer {
         String message = switch (code) {
             case "device_busy" -> "Speedtest already active on this router";
             case "session_limit" -> "Speedtest session limit reached";
+            case "network_limit" -> "Network computation budget exceeded; reduce physical paths or simultaneous tests";
             case "server_unavailable" -> "Selected server disappeared or is unreachable; no automatic fallback";
             case "no_server" -> "No reachable speedtest server";
             default -> "Invalid speedtest request";
         };
-        return new HttpFailure(code.equals("invalid_request") ? 400 : 409, message, code);
+        return new HttpFailure(code.equals("invalid_request") ? 400 : code.equals("network_limit") ? 503 : 409, message, code);
     }
 
     private void startSpeedtest(HttpExchange exchange) throws IOException {
@@ -713,7 +710,7 @@ public class TelecomHttpServer {
         value.addProperty("state", state);
         value.addProperty("active", !state.equals("FINISHED") && !state.equals("FAILED"));
         value.addProperty("pingMs", session.getPingMs());
-        value.addProperty("actualBandwidth", session.isTerminal() ? 0 : session.getActualBandwidth());
+        value.addProperty("actualBandwidth", session.getMeasuredBandwidth());
         value.addProperty("ticksElapsed", session.getTicksElapsed());
         value.addProperty("totalTicksPerPhase", session.getTotalTicksPerPhase());
         value.addProperty("downloadBandwidth", session.getFinalDownBw());

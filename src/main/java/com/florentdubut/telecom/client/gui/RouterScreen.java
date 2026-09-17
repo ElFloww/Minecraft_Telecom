@@ -53,8 +53,7 @@ public class RouterScreen extends Screen {
 
     public void updateSpeedtestProgress(com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload payload) {
         if (!speedtestKey.matches(payload)) return;
-        if (!payload.errorCode().isEmpty()) speedtestError = payload.errorCode();
-        else if (currentSpeedtestData == null || !currentSpeedtestData.sessionId().equals(payload.sessionId())) speedtestError = "";
+        speedtestError = ClientSpeedtestState.get(speedtestKey).errorCode();
         // Networking has already accepted or discarded this packet. Never bypass its session guard.
         restoreSpeedtest();
     }
@@ -64,12 +63,12 @@ public class RouterScreen extends Screen {
         speedtestActive = state.active();
         speedtestPending = state.pending();
         currentSpeedtestData = state.pending() ? null : state.payload();
-        if (currentSpeedtestData != null && !currentSpeedtestData.errorCode().isEmpty()) speedtestError = currentSpeedtestData.errorCode();
+        if (!state.errorCode().isEmpty()) speedtestError = state.errorCode();
         lastDownBw = currentSpeedtestData != null ? currentSpeedtestData.downloadBandwidth() : payload.lastDownBw();
         lastUpBw = currentSpeedtestData != null ? currentSpeedtestData.uploadBandwidth() : payload.lastUpBw();
         if (startButton != null) {
             startButton.active = !speedtestActive;
-            startButton.setMessage(Component.literal(speedtestPending ? "Waiting..." : "START SPEEDTEST"));
+            startButton.setMessage(SpeedtestPanel.text(speedtestPending ? "pending" : "start"));
         }
     }
 
@@ -94,17 +93,17 @@ public class RouterScreen extends Screen {
     protected void init() {
         super.init();
 
-        int centerX = this.width / 2;
-        int centerY = this.height / 2;
-        int startX = centerX - 360 / 2;
-        int startY = centerY - 240 / 2;
+        int boxWidth = Math.min(380, this.width - 12);
+        int startX = (this.width - boxWidth) / 2;
+        int startY = (this.height - Math.min(340, this.height - 12)) / 2;
+        int controlWidth = (boxWidth - 24) / 3;
 
-        this.addRenderableWidget(net.minecraft.client.gui.components.Button.builder(Component.literal("Durée: " + DURATION_LABELS[durationIndex]), button -> {
+        this.addRenderableWidget(Button.builder(SpeedtestPanel.text("duration", DURATION_LABELS[durationIndex]), button -> {
             durationIndex = (durationIndex + 1) % DURATION_TICKS.length;
-            button.setMessage(Component.literal("Durée: " + DURATION_LABELS[durationIndex]));
-        }).bounds(startX + 20, startY + 120, 100, 20).build());
+            button.setMessage(SpeedtestPanel.text("duration", DURATION_LABELS[durationIndex]));
+        }).bounds(startX + 8, startY + 47, controlWidth, 18).build());
 
-        this.startButton = this.addRenderableWidget(Button.builder(Component.literal("START SPEEDTEST"), b -> {
+        this.startButton = this.addRenderableWidget(Button.builder(SpeedtestPanel.text("start"), b -> {
             int confDown = payload.configuredMaxDown();
             int confUp = payload.configuredMaxUp();
             restoreSpeedtest();
@@ -121,12 +120,12 @@ public class RouterScreen extends Screen {
                     minecraft.player.displayClientMessage(Component.literal("Failed to start: " + reason), false);
                 }
             }
-        }).bounds(startX + 20, startY + 145, 100, 20).build());
-        this.addRenderableWidget(Button.builder(Component.translatable("gui.telecom.speedtest.servers"), button ->
+        }).bounds(startX + 12 + controlWidth, startY + 47, controlWidth, 18).build());
+        this.addRenderableWidget(Button.builder(SpeedtestPanel.text("server_button"), button ->
                 minecraft.setScreen(new SpeedtestServerSelectionScreen(this, false, payload.pos(), speedtestKey, selectedServerId, option -> {
                     selectedServerId = option.id();
                     selectedServerName = option.name();
-                }))).bounds(startX + 140, startY + 145, 200, 20).build());
+                }))).bounds(startX + 16 + 2 * controlWidth, startY + 47, controlWidth, 18).build());
         restoreSpeedtest();
     }
 
@@ -137,14 +136,15 @@ public class RouterScreen extends Screen {
 
     @Override
     public void render(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
+        restoreSpeedtest();
         // Dark background overlay
         guiGraphics.fillGradient(0, 0, this.width, this.height, 0x40101010, 0x60101010);
 
         int centerX = this.width / 2;
         int centerY = this.height / 2;
 
-        int boxWidth = 360;
-        int boxHeight = 240;
+        int boxWidth = Math.min(380, this.width - 12);
+        int boxHeight = Math.min(340, this.height - 12);
         int startX = centerX - boxWidth / 2;
         int startY = centerY - boxHeight / 2;
 
@@ -156,51 +156,26 @@ public class RouterScreen extends Screen {
         guiGraphics.nextStratum();
 
         // Title
-        guiGraphics.drawCenteredString(this.font, "ROUTER CONFIGURATION", centerX, startY + 10, 0xFFFFFFFF);
-
-        // Status
-        String statusText = payload.isConnected() ? "CONNECTED TO NETWORK" : "OFFLINE";
+        guiGraphics.drawCenteredString(this.font, SpeedtestPanel.text("router_title"), centerX, startY + 8, 0xFFFFFFFF);
         int statusColor = payload.isConnected() ? 0xFF00FF00 : 0xFFFF0000;
-        guiGraphics.drawString(this.font, "Status: " + statusText, startX + 20, startY + 30, statusColor);
-
-        // IP Address
-        guiGraphics.drawString(this.font, "IP Address: " + (!payload.ipAddress().isEmpty() ? payload.ipAddress() : "N/A"), startX + 20, startY + 45, 0xFFCCCCCC);
-
-        // Max Hardware Bandwidth
-        guiGraphics.drawString(this.font, "Hardware Max: " + (payload.isConnected() ? payload.bandwidthMbps() + " Mbps" : "---"), startX + 20, startY + 60, 0xFFCCCCCC);
-        
-        guiGraphics.drawString(this.font, "Plan Down: " + payload.configuredMaxDown() + " Mbps", startX + 20, startY + 90, 0xFF00FFFF);
-        guiGraphics.drawString(this.font, "Plan Up: " + payload.configuredMaxUp() + " Mbps", startX + 20, startY + 110, 0xFFFF8800);
+        SpeedtestPanel.clipped(guiGraphics, font, SpeedtestPanel.text(payload.isConnected() ? "connected" : "offline", payload.ipAddress()),
+                startX + 8, startY + 23, boxWidth - 16, statusColor);
+        SpeedtestPanel.clipped(guiGraphics, font, SpeedtestPanel.text("plan", SpeedtestPanel.rate(payload.configuredMaxDown()),
+                SpeedtestPanel.rate(payload.configuredMaxUp())), startX + 8, startY + 34, boxWidth - 16, 0xFFCCCCCC);
 
         guiGraphics.drawString(font, font.plainSubstrByWidth(Component.translatable("gui.telecom.speedtest.selected",
-                SpeedtestServerSelectionScreen.destination(selectedServerId, selectedServerName)).getString(), 320), startX + 20, startY + 180, 0xFFCCCCCC);
+                SpeedtestServerSelectionScreen.destination(selectedServerId, selectedServerName)).getString(), boxWidth - 16), startX + 8, startY + 69, 0xFFCCCCCC);
         if (currentSpeedtestData != null && !"REJECTED".equals(currentSpeedtestData.state()) && !currentSpeedtestData.serverId().isEmpty()) {
             guiGraphics.drawString(font, font.plainSubstrByWidth(Component.translatable("gui.telecom.speedtest.used",
-                    SpeedtestServerSelectionScreen.destination(currentSpeedtestData.serverId(), currentSpeedtestData.serverName())).getString(), 320),
-                    startX + 20, startY + 195, 0xFF99DD99);
+                    SpeedtestServerSelectionScreen.destination(currentSpeedtestData.serverId(), currentSpeedtestData.serverName())).getString(), boxWidth - 16),
+                    startX + 8, startY + 80, 0xFF99DD99);
         }
         if (!speedtestError.isEmpty()) guiGraphics.drawString(font, font.plainSubstrByWidth(
-                SpeedtestServerSelectionScreen.error(speedtestError).getString(), 320), startX + 20, startY + 215, 0xFFFF8888);
+                SpeedtestServerSelectionScreen.error(speedtestError).getString(), boxWidth - 16), startX + 8, startY + 91, 0xFFFF8888);
 
-        // Speedtest overlay logic (shifted right)
-        int stX = startX + 215;
-        int stY = startY + 75;
-        int stW = 120;
-        int stH = 65;
-        
-        if (currentSpeedtestData != null || speedtestPending || payload.lastPing() > 0) {
-            guiGraphics.fill(stX, stY, stX + stW, stY + stH, 0xFF111111);
-            guiGraphics.renderOutline(stX, stY, stW, stH, 0xFF555555);
-            
-            String state = speedtestPending ? "Waiting..." : currentSpeedtestData == null ? "FINISHED" : currentSpeedtestData.state();
-            guiGraphics.drawString(this.font, speedtestActive && !speedtestPending ? "TESTING: " + state : state, stX + 10, stY + 10, 0xFFFFFFFF);
-            if (!speedtestPending) {
-                int ping = currentSpeedtestData == null ? payload.lastPing() : currentSpeedtestData.pingMs();
-                guiGraphics.drawString(this.font, "Ping: " + ping + " ms", stX + 10, stY + 25, 0xFF00FF00);
-                guiGraphics.drawString(this.font, "Down: " + this.lastDownBw + " Mbps", stX + 10, stY + 40, 0xFF00FFFF);
-                guiGraphics.drawString(this.font, "Up: " + this.lastUpBw + " Mbps", stX + 10, stY + 53, 0xFFFF8800);
-            }
-        }
+        SpeedtestPanel.render(guiGraphics, font, startX + 8, startY + 104, boxWidth - 16, boxHeight - 112,
+                ClientSpeedtestState.get(speedtestKey), payload.lastDownBw(), payload.lastUpBw(), payload.lastPing(),
+                DURATION_TICKS[durationIndex], System.nanoTime());
 
         guiGraphics.nextStratum();
         super.render(guiGraphics, mouseX, mouseY, partialTick);

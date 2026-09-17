@@ -27,7 +27,7 @@ public enum TelecomFrequency {
     private final String frequencyLabel;
     private final String bandName;
     private final int frequencyMhz;
-    private final int maxSpeedMb; // Max potential speed in MB/s
+    private final int maxSpeedMb; // Max potential speed in Mbps
     private final float baseAttenuation; // Base signal loss per block in air
 
     TelecomFrequency(String technology, String frequencyLabel, String bandName, int frequencyMhz, int maxSpeedMb, float baseAttenuation) {

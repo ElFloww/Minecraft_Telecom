@@ -7,17 +7,27 @@ import net.minecraft.network.chat.Component;
 
 public class NetworkToolScreen extends Screen {
     private NetworkToolSyncPayload payload;
-    private final int imageWidth = 200;
-    private final int imageHeight = 120;
+    private final int imageWidth = 310;
+    private final int imageHeight = 190;
     private int tickCounter = 0;
 
     public NetworkToolScreen(NetworkToolSyncPayload payload) {
-        super(Component.literal("Network Diagnostic Tool"));
+        super(Component.translatable("gui.telecom.tool.title"));
         this.payload = payload;
     }
 
     public void updatePayload(NetworkToolSyncPayload payload) {
         this.payload = payload;
+    }
+
+    @Override
+    protected void init() {
+        addRenderableWidget(net.minecraft.client.gui.components.Button.builder(Component.translatable("gui.done"), button -> onClose())
+                .bounds((width - 100) / 2, (height + imageHeight) / 2 - 25, 100, 20).build());
+    }
+
+    static double utilization(long usage, int capacity) {
+        return capacity <= 0 ? 0 : Math.max(0, (double) usage / capacity);
     }
 
     @Override
@@ -54,29 +64,35 @@ public class NetworkToolScreen extends Screen {
 
         // Header
         guiGraphics.fill(startX + 2, startY + 2, startX + this.imageWidth - 2, startY + 20, 0xDD0055AA);
-        guiGraphics.drawString(this.font, "Network Diagnostics", startX + 10, startY + 6, 0xFFFFFFFF);
+        guiGraphics.drawString(this.font, title, startX + 10, startY + 6, 0xFFFFFFFF);
 
         // Content
-        guiGraphics.drawString(this.font, "Cable Type: " + payload.edgeType(), startX + 10, startY + 30, payload.edgeType().contains("Fiber") ? 0xFF00FFFF : 0xFFFFAA00);
-        guiGraphics.drawString(this.font, "Length: " + payload.length() + " blocks", startX + 10, startY + 45, 0xFFCCCCCC);
-        guiGraphics.drawString(this.font, "Max Bandwidth: " + payload.maxBandwidth() + " Mbps", startX + 10, startY + 60, 0xFFCCCCCC);
-        
-        float usageDownPct = (float) payload.usageDown() / payload.maxBandwidth() * 100f;
-        float usageUpPct = (float) payload.usageUp() / payload.maxBandwidth() * 100f;
-
-        guiGraphics.drawString(this.font, "Down: " + payload.usageDown() + " Mbps (" + String.format("%.1f", usageDownPct) + "%)", startX + 10, startY + 75, 0xFF00FFFF);
-        int barWidth = 180;
-        guiGraphics.fill(startX + 10, startY + 85, startX + 10 + barWidth, startY + 90, 0xFF444444);
-        int fillWidthDown = (int)(barWidth * Math.min(1.0f, (float)payload.usageDown() / payload.maxBandwidth()));
-        guiGraphics.fill(startX + 10, startY + 85, startX + 10 + fillWidthDown, startY + 90, 0xFF00FFFF);
-
-        guiGraphics.drawString(this.font, "Up: " + payload.usageUp() + " Mbps (" + String.format("%.1f", usageUpPct) + "%)", startX + 10, startY + 95, 0xFFFF8800);
-        guiGraphics.fill(startX + 10, startY + 105, startX + 10 + barWidth, startY + 110, 0xFF444444);
-        int fillWidthUp = (int)(barWidth * Math.min(1.0f, (float)payload.usageUp() / payload.maxBandwidth()));
-        guiGraphics.fill(startX + 10, startY + 105, startX + 10 + fillWidthUp, startY + 110, 0xFFFF8800);
+        guiGraphics.drawString(this.font, Component.translatable(payload.edgeType()), startX + 10, startY + 30, 0xFF00FFFF);
+        boolean shared = payload.mode() == NetworkToolSyncPayload.CapacityMode.SHARED;
+        guiGraphics.drawString(this.font, Component.translatable(shared ? "gui.telecom.capacity.shared" : "gui.telecom.capacity.directional"),
+                startX + 10, startY + 45, 0xFFCCCCCC);
+        if (shared) {
+            guiGraphics.drawString(this.font, Component.translatable("gui.telecom.tool.length", payload.length()), startX + 10, startY + 60, 0xFFCCCCCC);
+            renderUsage(guiGraphics, startX + 10, startY + 80, "gui.telecom.capacity.total",
+                    (long) payload.usageDown() + payload.usageUp(), payload.maxBandwidth(), 0xFF00FFFF);
+            guiGraphics.drawString(this.font, Component.translatable("gui.telecom.tool.traffic", payload.usageDown(), payload.usageUp()),
+                    startX + 10, startY + 115, 0xFFFFAA00);
+        } else {
+            renderUsage(guiGraphics, startX + 10, startY + 75, "gui.telecom.capacity.down", payload.usageDown(), payload.maxBandwidth(), 0xFF00FFFF);
+            renderUsage(guiGraphics, startX + 10, startY + 115, "gui.telecom.capacity.up", payload.usageUp(), payload.capacityUp(), 0xFFFF8800);
+        }
 
         guiGraphics.nextStratum();
         
         super.render(guiGraphics, mouseX, mouseY, partialTick);
+    }
+
+    private void renderUsage(GuiGraphics graphics, int x, int y, String label, long usage, int capacity, int color) {
+        double fraction = utilization(usage, capacity);
+        graphics.drawString(font, Component.translatable("gui.telecom.capacity.rate", Component.translatable(label), usage, capacity), x, y, color);
+        graphics.drawString(font, Component.translatable("gui.telecom.capacity.load", String.format(java.util.Locale.ROOT, "%.1f", fraction * 100)), x, y + 12, color);
+        int barWidth = imageWidth - 20;
+        graphics.fill(x, y + 24, x + barWidth, y + 29, 0xFF444444);
+        graphics.fill(x, y + 24, x + (int) (barWidth * Math.min(1, fraction)), y + 29, color);
     }
 }

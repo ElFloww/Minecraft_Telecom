@@ -829,6 +829,71 @@ class TelecomHttpServerTest {
     }
 
     @Test
+    void networkCapacitiesAndActualUsageAreDetachedAuthoritativeDirectionalAndShared() throws Exception {
+        MinecraftServer minecraft = mock(MinecraftServer.class);
+        ServerLevel level = mock(ServerLevel.class);
+        when(minecraft.overworld()).thenReturn(level);
+        var jobs = queueWorldServer(minecraft);
+        TelecomNetworkGraph graph = mock(TelecomNetworkGraph.class);
+        var nodes = new ArrayList<NetworkNode>();
+        for (var type : NetworkNode.NodeType.values()) {
+            NetworkNode node = new NetworkNode(new BlockPos(type.ordinal(), 64, 0), type);
+            node.setCapacityDown(1000);
+            node.setCapacityUp(100);
+            node.setCurrentUsageDown(0);
+            node.setCurrentUsageUp(100);
+            nodes.add(node);
+        }
+        NetworkEdge fiber = new NetworkEdge(BlockPos.ZERO, new BlockPos(1, 64, 0), 100, 250,
+                NetworkEdge.EdgeType.FIBER, java.util.List.of());
+        NetworkEdge copper = new NetworkEdge(BlockPos.ZERO, new BlockPos(2, 64, 0), 1000, 250,
+                NetworkEdge.EdgeType.COPPER, java.util.List.of());
+        fiber.setCurrentUsageDown(50);
+        fiber.setCurrentUsageUp(50);
+        copper.setCurrentUsageDown(200);
+        copper.setCurrentUsageUp(300);
+        when(graph.getNodes()).thenReturn(nodes);
+        when(graph.getEdges()).thenReturn(java.util.List.of(fiber, copper));
+        try (var graphs = mockStatic(TelecomNetworkGraph.class)) {
+            graphs.when(() -> TelecomNetworkGraph.get(level)).thenReturn(graph);
+            assertPending(request("GET", "/api/network", null));
+            verifyNoInteractions(graph);
+            runQueuedJob(jobs);
+            // Changes after capture cannot affect the queued HTTP snapshot.
+            nodes.forEach(node -> { node.setCapacityUp(1); node.setCurrentUsageUp(0); });
+            fiber.setCurrentUsageDown(0);
+            copper.setCurrentUsageUp(0);
+            var response = request("GET", "/api/network", null);
+            assertEquals(200, response.statusCode());
+            var json = JsonParser.parseString(response.body()).getAsJsonObject();
+            assertEquals(nodes.size(), json.getAsJsonArray("nodes").size());
+            for (var value : json.getAsJsonArray("nodes")) {
+                var node = value.getAsJsonObject();
+                assertEquals(1000, node.get("capacityDown").getAsInt());
+                assertEquals(100, node.get("capacityUp").getAsInt());
+                assertEquals(1000, node.get("capacity").getAsInt());
+                assertEquals("DIRECTIONAL", node.get("capacityMode").getAsString());
+                assertEquals(0, node.get("usageDown").getAsInt());
+                assertEquals(100, node.get("usageUp").getAsInt());
+            }
+            var fiberJson = json.getAsJsonArray("edges").get(0).getAsJsonObject();
+            assertEquals(100, fiberJson.get("capacity").getAsInt());
+            assertEquals(100, fiberJson.get("nominalCapacity").getAsInt());
+            assertEquals("SHARED", fiberJson.get("capacityMode").getAsString());
+            assertEquals(50, fiberJson.get("usageDown").getAsInt());
+            assertEquals(50, fiberJson.get("usageUp").getAsInt());
+            var copperJson = json.getAsJsonArray("edges").get(1).getAsJsonObject();
+            assertEquals(250, copperJson.get("length").getAsInt());
+            assertEquals(500, copperJson.get("capacity").getAsInt());
+            assertEquals(1000, copperJson.get("nominalCapacity").getAsInt());
+            assertEquals("SHARED", copperJson.get("capacityMode").getAsString());
+            assertEquals(200, copperJson.get("usageDown").getAsInt());
+            assertEquals(300, copperJson.get("usageUp").getAsInt());
+            verify(minecraft, times(1)).execute(any(Runnable.class));
+        }
+    }
+
+    @Test
     void snapshotIdentifiersPreserveAllLongBits() throws Exception {
         ServerLevel level = mock(ServerLevel.class);
         TelecomNetworkGraph graph = mock(TelecomNetworkGraph.class);
@@ -959,6 +1024,30 @@ class TelecomHttpServerTest {
             var response = request("GET", path, null);
             assertEquals(503, response.statusCode());
             assertEquals("catalogue_limit", JsonParser.parseString(response.body()).getAsJsonObject().get("errorCode").getAsString());
+        }
+    }
+
+    @Test
+    void networkBudgetRefusalIsReportedWithoutConfirmingOrRetryingAMutation() throws Exception {
+        MinecraftServer minecraft = mock(MinecraftServer.class);
+        ServerLevel level = mock(ServerLevel.class);
+        when(minecraft.overworld()).thenReturn(level);
+        var jobs = queueWorldServer(minecraft);
+        var graph = mock(TelecomNetworkGraph.class);
+        NetworkNode router = new NetworkNode(BlockPos.ZERO, NetworkNode.NodeType.ROUTER);
+        router.setIpAddress("10.0.0.1");
+        when(graph.getNode(BlockPos.ZERO)).thenReturn(router);
+        when(graph.startSpeedtest(BlockPos.ZERO, "10.0.0.1", 1000, 1000, 0, 0, 300, false, null, ""))
+                .thenReturn(new TelecomNetworkGraph.SpeedtestStartResult(null, "network_limit"));
+        try (var graphs = mockStatic(TelecomNetworkGraph.class)) {
+            graphs.when(() -> TelecomNetworkGraph.get(level)).thenReturn(graph);
+            var response = postSpeedtest(jobs, BlockPos.ZERO, "");
+            assertEquals(503, response.statusCode());
+            var body = JsonParser.parseString(response.body()).getAsJsonObject();
+            assertEquals("network_limit", body.get("errorCode").getAsString());
+            assertFalse(body.has("sessionId"));
+            assertTrue(body.get("error").getAsString().contains("budget"));
+            verify(graph, times(1)).startSpeedtest(BlockPos.ZERO, "10.0.0.1", 1000, 1000, 0, 0, 300, false, null, "");
         }
     }
 

@@ -348,6 +348,30 @@ canvas {
 #speedtest-refresh { cursor: pointer; }
 #speedtest-server:disabled, #speedtest-refresh:disabled { opacity: 0.65; }
 
+.speedtest-live { min-width: 0; font-variant-numeric: tabular-nums; }
+.speedtest-gauge { position: relative; width: 100%; }
+.speedtest-gauge svg { display: block; width: 100%; }
+.speedtest-gauge path { fill: none; stroke-width: 10; stroke-linecap: round; }
+.speedtest-track { stroke: rgba(255, 255, 255, 0.1); }
+.speedtest-down { color: #22d3ee; stroke: #22d3ee; }
+.speedtest-up { color: #fb923c; stroke: #fb923c; }
+.speedtest-number { position: absolute; inset: 40% 0 0; text-align: center; }
+.speedtest-number strong { display: block; font-size: clamp(1.5rem, 7vw, 2.4rem); line-height: 1.2; overflow-wrap: anywhere; }
+.speedtest-number span, .speedtest-caption, .speedtest-chart-axis { color: var(--text-secondary); font-size: 0.75rem; }
+.speedtest-caption { margin: 6px 0; overflow-wrap: anywhere; }
+.speedtest-live .info-row { gap: 8px; flex-wrap: wrap; }
+.speedtest-live progress { width: 100%; height: 6px; accent-color: #22d3ee; }
+.speedtest-chart { display: block; width: 100%; height: auto; margin-top: 8px; }
+.speedtest-chart polyline { fill: none; stroke-width: 1.5; }
+.speedtest-chart circle.speedtest-down { fill: #22d3ee; }
+.speedtest-chart circle.speedtest-up { fill: #fb923c; }
+.speedtest-grid { fill: none; stroke: rgba(255, 255, 255, 0.1); }
+.speedtest-chart-axis { display: flex; justify-content: space-between; gap: 8px; }
+.speedtest-activity { height: 2px; position: relative; margin: 10px 0; overflow: hidden; }
+.speedtest-activity span { position: absolute; width: 6%; height: 100%; background: #94a3b8; }
+#details-content { min-width: 0; overflow-wrap: anywhere; }
+#speedtest-server { min-width: 0; max-width: 100%; }
+
 .connection-controls { display: grid; gap: 8px; font-size: 0.85rem; }
 .access-warning { padding: 8px; color: #fbbf24; border: 1px solid currentColor; border-radius: 4px; }
 #connection-status, #terrain-status { color: var(--text-secondary); overflow-wrap: anywhere; }
@@ -374,7 +398,10 @@ body, #app { height: 100dvh; }
 .zone-controls progress { width: 100%; accent-color: #38bdf8; }
 #zone-bounds, #zone-status { overflow-wrap: anywhere; }
 .zone-controls [hidden] { display: none; }
-@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; }
+  .speedtest-activity { visibility: hidden; }
+}
 
 @media (max-width: 640px) {
   #app { flex-direction: column; }
@@ -383,5 +410,5 @@ body, #app { height: 100dvh; }
   .stat-card { padding: 8px; }
   .stat-card p { font-size: 1.25rem; }
   .map-container { min-height: 40vh; }
-  .details-panel { width: min(350px, 100vw); }
+  .details-panel { width: min(350px, 100vw); max-width: 100%; height: 100%; padding: 16px; }
 }

@@ -3,28 +3,38 @@ package com.florentdubut.telecom.network;
 import net.minecraft.core.BlockPos;
 
 public class NetworkEdge {
-    private BlockPos nodeA;
-    private BlockPos nodeB;
-    private int bandwidthMax; // In MB/s or some arbitrary unit
-    private int currentUsage; // To simulate saturation
-    private int length; // Total length of cables, used for attenuation/latency
-    private EdgeType type;
-    private java.util.List<BlockPos> pathBlocks;
+    private final BlockPos nodeA;
+    private final BlockPos nodeB;
+    private final int bandwidthMax; // Persisted nominal capacity in Mbps
+    private int currentUsage; // Actual shared DOWN + UP usage in Mbps
+    private final int length; // Total length of cables, used for attenuation/latency
+    private final EdgeType type;
+    private final java.util.List<BlockPos> pathBlocks;
 
     public enum EdgeType {
         COPPER,
         FIBER,
         MEDIUM_FIBER,
-        BIG_FIBER
+        BIG_FIBER;
+
+        public int nominalBandwidthMbps() {
+            return switch (this) {
+                case COPPER -> 1_000;
+                case FIBER -> 10_000;
+                case MEDIUM_FIBER -> 100_000;
+                case BIG_FIBER -> 1_000_000;
+            };
+        }
     }
 
     public NetworkEdge(BlockPos nodeA, BlockPos nodeB, int bandwidthMax, int length, EdgeType type, java.util.List<BlockPos> pathBlocks) {
-        this.nodeA = nodeA;
-        this.nodeB = nodeB;
-        this.bandwidthMax = bandwidthMax;
+        this.nodeA = nodeA.immutable();
+        this.nodeB = nodeB.immutable();
+        if (length < 0) throw new IllegalArgumentException("negative cable length");
+        this.bandwidthMax = Math.clamp(bandwidthMax, 0, 1_000_000);
         this.length = length;
         this.type = type;
-        this.pathBlocks = pathBlocks;
+        this.pathBlocks = pathBlocks == null ? java.util.List.of() : pathBlocks.stream().map(BlockPos::immutable).toList();
         this.currentUsage = 0;
     }
     
@@ -42,6 +52,12 @@ public class NetworkEdge {
 
     public int getBandwidthMax() {
         return bandwidthMax;
+    }
+
+    public int getEffectiveBandwidthMbps() {
+        return type == EdgeType.COPPER
+                ? (int) Math.min(bandwidthMax, Math.max(10L, 1000L - 2L * length))
+                : bandwidthMax;
     }
 
     public int getCurrentUsage() {

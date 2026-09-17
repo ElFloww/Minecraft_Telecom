@@ -53,11 +53,23 @@ Ces configurations utilisent `run/`. Le serveur normal reste soumis a l'acceptat
 5. Pour le mobile, relier une antenne au reseau, ouvrir sa configuration et activer au moins une bande.
 6. Utiliser un smartphone pour consulter la reception et lancer un test mobile.
 
-Le test doit disposer d'un chemin jusqu'a un serveur. Les debits et l'identite reseau utilises sont calcules cote serveur. Un meme joueur peut lancer plusieurs tests simultanes sur des appareils distincts : plusieurs routeurs et son mobile, par exemple. Un seul test actif est autorise par appareil, avec une limite globale de 256 sessions par dimension. Les choix de duree existants concernent chaque phase de debit, pas la duree totale du test.
+Le test doit disposer d'un chemin jusqu'a un serveur. Les debits et l'identite reseau utilises sont calcules cote serveur. Un meme joueur peut lancer plusieurs tests simultanes sur des appareils distincts : plusieurs routeurs et son mobile, par exemple. Un seul test actif est autorise par appareil, avec une limite globale de 256 sessions par dimension. Le choix de duree concerne chaque phase de debit ; les interfaces affichent aussi la duree totale nominale, par exemple 33 secondes pour 3 secondes de ping et deux phases de 15 secondes.
 
 Les routeurs sont identifies par position, et non par IP ; le terminal mobile reste lie a l'UUID du joueur (plusieurs items smartphone du meme joueur representent donc le meme terminal logique). Chaque test dispose de son identifiant de session. Fermer un ecran n'annule pas les autres tests et leur suivi est restaure a la reouverture. Les liens communs partagent leur capacite. Le dashboard affiche l'etat et les resultats par routeur et ne bloque pas le demarrage sur un autre appareil.
 
-Le protocole de synchronisation est passe en version **1.3**, avec les paquets de couverture en jeu et de selection du serveur de speedtest. Le client et le serveur doivent utiliser le JAR actualise.
+Le protocole de synchronisation est passe en version **1.4**, avec les capacites appliquees dans les outils et le suivi correle des ecrans serveur, en plus de la couverture et du choix du serveur de speedtest. Le client et le serveur doivent utiliser le JAR actualise.
+
+### Speedtests animes
+
+Le telephone, le routeur et le dashboard affichent un grand compteur anime, les courbes DOWN cyan et UP orange, le ping, les moyennes et la progression totale. Les panneaux Minecraft agrandissent leur courbe lorsque la fenetre le permet. La courbe est une fenetre glissante des 120 derniers points recus par phase, avec son echelle de maximum observe et sa duree indiquees ; ce n'est pas un historique permanent de tous les tests.
+
+Les fluctuations viennent de la simulation serveur, pas de nombres aleatoires ajoutes a l'affichage. Chaque phase manuelle monte en charge pendant environ une seconde depuis 35 % du plafond, puis sa demande varie progressivement entre 94 et 100 % du plafond effectif. Ce profil est applique **avant** le partage de la bande passante : la concurrence et les goulots restent prioritaires, les budgets ne sont jamais depasses et une forte congestion peut produire un plateau. Les faibles debits restent quantifies au Mbps. Le trafic passif ne recoit pas ce profil.
+
+Les resultats DOWN/UP des nouveaux tests sont les moyennes arrondies des allocations reellement obtenues dans chaque phase, montee en charge et vrais echantillons a zero inclus. Ils ne dependent plus du dernier tick. Un trafic passif ne remplace pas le resultat manuel sauvegarde du routeur. Les anciens resultats sauvegardes sont conserves et affiches comme tels, sans leur inventer une courbe ni les requalifier en moyennes.
+
+Le lissage de presentation ne depasse pas la derniere mesure recue ; une baisse est prise en compte sans maintenir un faux debit superieur. Les compteurs d'usage courant et la derniere mesure valide sont distincts : un recalcul suspendu ne cree pas un point nul artificiel. Les interfaces gelent leur animation en cas de donnees anciennes, n'inventent pas de fin de phase et attendent le serveur pour annoncer la fin. En cas d'echec, elles gardent le dernier avancement confirme ; sans observation prealable, l'avancement est indique comme inconnu.
+
+Le dashboard conserve sa cadence de lecture habituelle, environ deux secondes hors attente serveur, tandis que Minecraft recoit nominalement un echantillon tous les deux ticks. Leurs courbes peuvent donc etre differentes sans que les resultats moyens serveur divergent. La preference navigateur de reduction des animations est respectee. Les caches de presentation restent bornes a 256 appareils et isoles par connexion et par monde ou dimension ; l'annulation et l'historique durable des tests restent a implementer.
 
 ### Adresses stables
 
@@ -73,9 +85,34 @@ Le routeur et l'application speedtest du smartphone proposent un bouton **Serveu
 
 Le serveur Minecraft revalide la destination au demarrage. Un serveur choisi qui a disparu ou est inaccessible provoque un refus explicite, sans repli automatique. Si le serveur ou le chemin disparait pendant le test, celui-ci echoue avec sa destination et sa raison d'echec. Le mode Auto reste disponible et choisit le serveur accessible au ping de chemin le plus faible. Les resultats et le suivi restent independants par appareil.
 
-La decouverte est limitee a 128 serveurs affiches, avec indication de troncature. Elle effectue un seul parcours du graphe ; au-dela de 8192 noeuds ou 16384 liens, le catalogue est refuse avec une erreur explicite plutot que lancer une recherche sans borne. Les requetes Minecraft sont limitees en frequence et correlees a l'appareil, a la dimension et a l'ecran courant. Aucun chunk n'est force pour constituer le catalogue.
+La decouverte est limitee a 128 serveurs affiches, avec indication de troncature. Elle effectue un seul parcours du graphe ; au-dela de 8192 noeuds, 16384 liens ou 262144 references de positions physiques, le catalogue est refuse avec une erreur explicite plutot que lancer une recherche sans borne. Les requetes Minecraft sont limitees en frequence et correlees a l'appareil, a la dimension et a l'ecran courant. Aucun chunk n'est force pour constituer le catalogue.
 
 L'API expose `GET /api/speedtest/servers?pos=<position_du_routeur>`. `POST /api/speedtest` accepte un champ `serverId` optionnel, encode en chaine decimale ; absent ou vide, il conserve le mode Auto. Les instantanes et acquittements exposent la destination utilisee ; les erreurs portent un `errorCode` exploitable par l'interface.
+
+### Capacites et partage des debits
+
+Toutes les capacites et mesures du moteur sont en **Mbps**, avec conversion decimale en Gbps dans les interfaces. Le catalogue expose le plafond descendant du trajet, pas un debit garanti. Les budgets des equipements sont appliques separement aux trafics DOWN et UP ; les liens et positions de cable communes partagent un seul budget **DOWN + UP**. Ce modele ne suppose pas un lien physique full-duplex.
+
+| Cable | Capacite nominale par defaut | Capacite effective |
+| --- | --- | --- |
+| Cuivre | 1000 Mbps | `min(nominale, max(10, 1000 - 2 * longueur))` |
+| Fibre standard | 10000 Mbps | Capacite nominale du lien |
+| Fibre moyenne | 100000 Mbps | Capacite nominale du lien |
+| Grosse fibre | 1000000 Mbps | Capacite nominale du lien |
+
+L'attenuation cuivre est appliquee **par segment entre equipements**, et non sur la somme de tous les segments du trajet. Une capacite nominale personnalisee plus faible, y compris zero, reste un plafond. Les valeurs admises vont de 0 a 1000000 Mbps. Un retracage conserve la capacite configuree d'un lien dont les extremites et le type sont inchanges. Cette approximation ne remplace pas la future modelisation ADSL/VDSL.
+
+Un bloc physique commun a plusieurs liens n'est compte qu'une fois par session ; son budget est le minimum des capacites effectives des liens qui le contiennent. Les extremites des liens sont traitees comme des equipements, pas comme des cables partages. Deux cables arrivant au meme serveur ne partagent donc plus artificiellement la capacite du plus petit cable : ils restent toutefois soumis au budget du serveur.
+
+L'allocateur redistribue les capacites restantes entre les demandes. Il conserve des credits d'arrondi bornes pour repartir dans le temps les petits debits : deux utilisateurs sur 1 Mbps peuvent alterner, sans que l'arrondi condamne toujours le meme a zero. La variation aleatoire qui retirait systematiquement une partie du debit alloue a ete supprimee. Les compteurs des cables, equipements, outils et du dashboard utilisent ces allocations reelles ; le dashboard affiche par exemple 100 % pour 50 Mbps DOWN + 50 Mbps UP sur un lien partage de 100 Mbps.
+
+Les profils materiels par defaut sont 1000000 Mbps par categorie DOWN/UP pour serveur, NRO et collecte filaire d'antenne ; 100000 pour NRA/PM ; 10000 pour SR. Les routeurs utilisent les limites de leur modele, notamment 1000/700 pour Lite. **La collecte filaire d'une antenne ne represente pas sa capacite radio.** Le partage radio par bande et les interferences restent un lot distinct.
+
+La sauvegarde ajoute `CapacityModelVersion=1`, sans changer `SchemaVersion=1` ni les baux IP. Les anciennes capacites non appliquees des equipements non-routeurs sont remplacees par les profils standard. Les routeurs anciens gardent un drapeau `CapacityNeedsSync` jusqu'au chargement normal de leur bloc, puis sont synchronises avec son modele sans changer leur IP ni reconstruire leur topologie. Les plafonds personnalises sauvegardes avec le nouveau modele restent conserves, y compris zero ; au chargement d'un routeur, ils ne peuvent pas depasser les capacites physiques de sa variante. Sauvegarder le monde avant migration.
+
+Le modele physique est mis en cache par revision et n'est plus reconstruit pour chaque trajet ou tick inactif. Il est borne a 262144 references de positions, en plus des limites de noeuds/liens. L'ensemble des requetes d'allocation retenues est egalement borne a 262144 references de ressources apres deduplication par session. Un test excedentaire echoue avec `network_limit`, sans annuler les tests deja admis ; un refus HTTP de demarrage renvoie 503 avec ce code et n'est pas rejoue automatiquement. Ces limites ne remplacent pas les benchmarks sur de grands reseaux.
+
+L'ecran d'un serveur presente desormais les usages et capacites de cet equipement, et non les totaux de toute la dimension. Son actualisation est liee a la vue, au serveur, a la dimension et a la connexion : une ancienne reponse ne peut pas rouvrir l'ecran ferme ni modifier celui d'un autre serveur.
 
 ## Dashboard et securite
 

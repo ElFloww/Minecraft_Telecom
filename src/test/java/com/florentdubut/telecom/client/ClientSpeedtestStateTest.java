@@ -59,7 +59,7 @@ class ClientSpeedtestStateTest {
     }
 
     @Test
-    void reopeningReadsProgressAndThenCompleteResultsWithoutPhaseHistory() {
+    void reopeningReadsProgressAndThenCompleteResults() {
         assertTrue(cache.markPending(connection, ROUTER));
         assertTrue(cache.get(ROUTER).pending());
         var progress = packet(ROUTER, FIRST, "UPLOAD");
@@ -156,7 +156,9 @@ class ClientSpeedtestStateTest {
         now.incrementAndGet();
         assertFalse(cache.get(MOBILE).active());
         assertFalse(cache.get(MOBILE).pending());
+        assertEquals("timeout", cache.get(MOBILE).errorCode());
         assertTrue(cache.markPending(connection, MOBILE));
+        assertEquals("", cache.get(MOBILE).errorCode());
         assertTrue(cache.get(MOBILE).pending());
     }
 
@@ -272,6 +274,266 @@ class ClientSpeedtestStateTest {
         assertEquals(0, cache.size());
         assertEquals(0, cache.sessionCount());
         assertFalse(cache.get(ROUTER).active());
+    }
+
+    @Test
+    void receptionHistoryIsBoundedImmutableAndNeverAppendedByReadsOrDuplicateSnapshots() {
+        for (int tick = 0; tick < 150; tick++) {
+            now.addAndGet(250_000_000L);
+            assertTrue(cache.accept(connection, sample(FIRST, "DOWNLOAD", tick, tick * 10)));
+        }
+        var snapshot = cache.get(ROUTER);
+        assertEquals(120, snapshot.download().size());
+        assertEquals(new ClientSpeedtestState.Point(30, 300), snapshot.download().getFirst());
+        assertEquals(new ClientSpeedtestState.Point(149, 1490), snapshot.download().getLast());
+        assertEquals(1490, snapshot.maxObserved());
+        assertTrue(snapshot.upload().isEmpty());
+        assertThrows(UnsupportedOperationException.class, () -> snapshot.download().clear());
+        now.addAndGet(1_000_000_000L);
+        assertFalse(cache.accept(connection, sample(FIRST, "DOWNLOAD", 149, 1490)));
+        assertFalse(cache.accept(connection, sample(FIRST, "DOWNLOAD", 149, 9000)));
+        assertFalse(cache.accept(connection, sample(FIRST, "DOWNLOAD", 1, 9000)));
+        for (int frame = 0; frame < 1000; frame++) {
+            var reopened = cache.get(ROUTER);
+            assertSame(snapshot.download(), reopened.download());
+            assertEquals(snapshot.receivedAt(), reopened.receivedAt());
+        }
+    }
+
+    @Test
+    void phaseSamplesAreIndependentAndFinishedMeansAreExactNotCurveAverages() {
+        cache.accept(connection, sample(FIRST, "PING", 10, 0));
+        assertTrue(cache.get(ROUTER).download().isEmpty());
+        cache.accept(connection, sample(FIRST, "DOWNLOAD", 0, 950));
+        cache.accept(connection, sample(FIRST, "DOWNLOAD", 20, 1000));
+        var down = cache.get(ROUTER).download();
+        cache.accept(connection, sample(FIRST, "UPLOAD", 0, 300));
+        assertFalse(cache.accept(connection, sample(FIRST, "DOWNLOAD", 21, 1000)));
+        for (int tick = 1; tick <= 140; tick++) cache.accept(connection, sample(FIRST, "UPLOAD", tick, 350));
+        assertSame(down, cache.get(ROUTER).download());
+        assertEquals(120, cache.get(ROUTER).upload().size());
+        assertEquals(21, cache.get(ROUTER).upload().getFirst().ticksElapsed());
+        var up = cache.get(ROUTER).upload();
+        var finished = sample(FIRST, "FINISHED", 0, 999);
+        cache.accept(connection, finished);
+        var snapshot = cache.get(ROUTER);
+        assertSame(down, snapshot.download());
+        assertSame(up, snapshot.upload());
+        assertEquals(810, snapshot.payload().downloadBandwidth());
+        assertEquals(230, snapshot.payload().uploadBandwidth());
+        assertEquals(0, snapshot.instantaneous(now.get()));
+        assertEquals(100, snapshot.percent(now.get()));
+        assertFalse(snapshot.waiting(Long.MAX_VALUE));
+    }
+
+    @Test
+    void oldSessionsAndRefusedRequestsCannotCorruptPreviousHistory() {
+        cache.accept(connection, sample(FIRST, "DOWNLOAD", 10, 800));
+        var original = cache.get(ROUTER).download();
+        assertFalse(cache.accept(connection, sample(SECOND, "FAILED", 0, 0)));
+        cache.accept(connection, sample(new UUID(0, 0), "REJECTED", 0, 0));
+        assertSame(original, cache.get(ROUTER).download());
+        cache.accept(connection, sample(FIRST, "FINISHED", 0, 0));
+        cache.markPending(connection, ROUTER);
+        cache.accept(connection, sample(new UUID(0, 0), "REJECTED", 0, 0));
+        assertEquals(FIRST, cache.get(ROUTER).payload().sessionId());
+        assertSame(original, cache.get(ROUTER).download());
+        cache.markPending(connection, ROUTER);
+        cache.accept(connection, sample(SECOND, "PING", 0, 0));
+        assertTrue(cache.get(ROUTER).download().isEmpty());
+        assertFalse(cache.accept(connection, sample(FIRST, "UPLOAD", 20, 700)));
+        assertTrue(cache.get(ROUTER).upload().isEmpty());
+    }
+
+    @Test
+    void historyFollowsDeviceDimensionConnectionAndLruLifetime() {
+        cache.accept(connection, sample(FIRST, "DOWNLOAD", 10, 800));
+        var nether = ClientSpeedtestState.routerKey(NETHER, POS);
+        cache.accept(connection, packet(nether, SECOND, "UPLOAD"));
+        assertTrue(cache.get(nether).download().isEmpty());
+        assertTrue(cache.get(ROUTER).upload().isEmpty());
+        assertFalse(cache.accept(new Object(), sample(FIRST, "DOWNLOAD", 20, 900)));
+        assertEquals(1, cache.get(ROUTER).download().size());
+        for (int i = 0; i < ClientSpeedtestState.MAX_ENTRIES; i++) {
+            cache.get(ROUTER);
+            var key = ClientSpeedtestState.routerKey(OVERWORLD, new BlockPos(i, 0, 0));
+            cache.accept(connection, packet(key, new UUID(10, i), "DOWNLOAD"));
+        }
+        assertEquals(1, cache.get(ROUTER).download().size());
+        assertTrue(cache.get(nether).upload().isEmpty());
+        assertTrue(cache.get(ClientSpeedtestState.routerKey(OVERWORLD, BlockPos.ZERO)).download().isEmpty());
+        cache.connected(new Object());
+        assertTrue(cache.get(ROUTER).download().isEmpty());
+    }
+
+    @Test
+    void bandwidthRiseIsMonotonicTimeBasedBoundedAndDropsToZeroImmediately() {
+        cache.accept(connection, sample(FIRST, "DOWNLOAD", 0, 1000));
+        var snapshot = cache.get(ROUTER);
+        double previous = 0;
+        for (long nanos = 0; nanos <= 500_000_000L; nanos += 7_000_000L) {
+            double current = snapshot.instantaneous(nanos);
+            assertTrue(current >= previous);
+            assertTrue(current <= 1000);
+            previous = current;
+        }
+        assertEquals(500, snapshot.instantaneous(125_000_000L));
+        assertEquals(1000, snapshot.instantaneous(250_000_000L));
+        now.set(500_000_000L);
+        cache.accept(connection, sample(FIRST, "DOWNLOAD", 10, 400));
+        assertEquals(400, cache.get(ROUTER).instantaneous(now.get()));
+        now.addAndGet(100_000_000L);
+        cache.accept(connection, sample(FIRST, "DOWNLOAD", 12, 0));
+        assertEquals(0, cache.get(ROUTER).instantaneous(now.get()));
+        assertEquals(0, cache.get(ROUTER).instantaneous(now.get() + 500_000_000L));
+        cache.accept(connection, sample(FIRST, "UPLOAD", 0, 200));
+        assertEquals(0, cache.get(ROUTER).instantaneous(now.get()));
+        assertEquals(200, cache.get(ROUTER).instantaneous(now.get() + 250_000_000L));
+    }
+
+    @Test
+    void progressUsesThreeSecondPingAndThirtyThreeSecondTotalAndNeverFinishesLocally() {
+        cache.accept(connection, sample(FIRST, "PING", 0, 0));
+        var ping = cache.get(ROUTER);
+        assertEquals(60, ping.phaseTicks());
+        assertEquals(660, ping.totalTicks());
+        assertEquals(60, ping.elapsedTicks(10_000_000_000L));
+        assertEquals(9, ping.percent(10_000_000_000L));
+        cache.accept(connection, sample(FIRST, "DOWNLOAD", 0, 100));
+        assertEquals(60, cache.get(ROUTER).elapsedTicks(now.get()));
+        cache.accept(connection, sample(FIRST, "UPLOAD", 295, 100));
+        var upload = cache.get(ROUTER);
+        assertEquals(360 + 295, upload.elapsedTicks(now.get()));
+        assertEquals(99, upload.percent(100_000_000_000L));
+        assertTrue(upload.active());
+        assertEquals("UPLOAD", upload.payload().state());
+    }
+
+    @Test
+    void silenceFreezesTimeAtTwoCadencesOrThreeSecondsAndDuplicatesDoNotReviveIt() {
+        cache.accept(connection, sample(FIRST, "DOWNLOAD", 0, 100));
+        var first = cache.get(ROUTER);
+        assertFalse(first.waiting(2_999_999_999L));
+        assertTrue(first.waiting(3_000_000_000L));
+        assertEquals(first.elapsedTicks(3_000_000_000L), first.elapsedTicks(30_000_000_000L));
+        now.set(1_000_000_000L);
+        cache.accept(connection, sample(FIRST, "DOWNLOAD", 20, 200));
+        var second = cache.get(ROUTER);
+        assertEquals(2_000_000_000L, second.staleAfter());
+        assertFalse(second.waiting(2_999_999_999L));
+        now.set(3_000_000_000L);
+        assertTrue(second.waiting(now.get()));
+        assertFalse(cache.accept(connection, sample(FIRST, "DOWNLOAD", 20, 200)));
+        assertTrue(cache.get(ROUTER).waiting(now.get()));
+        assertEquals(second.elapsedTicks(now.get()), second.elapsedTicks(99_000_000_000L));
+        cache.accept(connection, sample(FIRST, "DOWNLOAD", 21, 0));
+        assertFalse(cache.get(ROUTER).waiting(now.get()));
+        assertEquals(0, cache.get(ROUTER).instantaneous(now.get()));
+    }
+
+    @Test
+    void pendingExpiryAndLegacyFinalNeverCreateSamples() {
+        cache.accept(connection, sample(FIRST, "FINISHED", 0, 999));
+        assertTrue(cache.get(ROUTER).download().isEmpty());
+        cache.markPending(connection, ROUTER);
+        now.set(ClientSpeedtestState.PENDING_TIMEOUT_NANOS);
+        assertFalse(cache.get(ROUTER).pending());
+        assertTrue(cache.get(ROUTER).download().isEmpty());
+        assertTrue(cache.get(ROUTER).upload().isEmpty());
+    }
+
+    @Test
+    void pingIsCappedByShortPhaseDurationToo() {
+        cache.accept(connection, new SpeedtestUpdatePayload("ip", "PING", 15, 0, 0, 20,
+                ROUTER.dimension(), ROUTER.deviceId(), FIRST, 0, 0));
+        var snapshot = cache.get(ROUTER);
+        assertEquals(20, snapshot.phaseTicks());
+        assertEquals(60, snapshot.totalTicks());
+        assertEquals(20, snapshot.elapsedTicks(10_000_000_000L));
+        assertEquals(33, snapshot.percent(10_000_000_000L));
+    }
+
+    @Test
+    void refusalErrorSurvivesReopeningWithoutReplacingConfirmedResultOrHistory() {
+        cache.accept(connection, sample(FIRST, "DOWNLOAD", 10, 800));
+        cache.accept(connection, sample(FIRST, "FINISHED", 0, 0));
+        var points = cache.get(ROUTER).download();
+        cache.markPending(connection, ROUTER);
+        cache.accept(connection, new SpeedtestUpdatePayload("ip", "REJECTED", 0, 0, 0, 300,
+                ROUTER.dimension(), ROUTER.deviceId(), new UUID(0, 0), 0, 0, "chosen", "Chosen", "server_unavailable"));
+        assertEquals("server_unavailable", cache.get(ROUTER).errorCode());
+        assertEquals(FIRST, cache.get(ROUTER).payload().sessionId());
+        assertSame(points, cache.get(ROUTER).download());
+        assertFalse(cache.get(ROUTER).active());
+    }
+
+    @Test
+    void failedUploadKeepsLastConfirmedTwentyEightSecondsWithoutAddingSamples() {
+        cache.accept(connection, sample(FIRST, "DOWNLOAD", 0, 0));
+        assertEquals(new ClientSpeedtestState.Point(0, 0), cache.get(ROUTER).download().getFirst());
+        cache.accept(connection, sample(FIRST, "UPLOAD", 200, 400));
+        var progress = cache.get(ROUTER);
+        assertEquals(560, progress.confirmedElapsedTicks());
+        assertEquals(28, progress.elapsedTicks(now.get()) / 20);
+        now.set(2_000_000_000L);
+        assertEquals(30, progress.elapsedTicks(now.get()) / 20);
+        assertFalse(cache.accept(connection, sample(SECOND, "FAILED", 220, 0)));
+        assertEquals(560, cache.get(ROUTER).confirmedElapsedTicks());
+        assertTrue(cache.accept(connection, sample(FIRST, "FAILED", 220, 0)));
+        var failed = cache.get(ROUTER);
+        assertEquals(28, failed.elapsedTicks(now.get()) / 20);
+        assertEquals(84, failed.percent(now.get()));
+        assertSame(progress.download(), failed.download());
+        assertSame(progress.upload(), failed.upload());
+        assertEquals(0, failed.instantaneous(now.get()));
+        now.set(100_000_000_000L);
+        assertEquals(560, cache.get(ROUTER).elapsedTicks(now.get()));
+        assertFalse(cache.get(ROUTER).active());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"FAILED", "REJECTED"})
+    void firstTerminalPacketHasUnknownProgressEvenWhenItsTickCounterIsNonzero(String state) {
+        assertTrue(cache.accept(connection, sample(FIRST, state, 200, 0)));
+        var terminal = cache.get(ROUTER);
+        assertEquals(-1, terminal.confirmedElapsedTicks());
+        assertEquals(-1, terminal.elapsedTicks(now.get()));
+        assertEquals(-1, terminal.percent(now.get()));
+        assertTrue(terminal.download().isEmpty());
+        assertTrue(terminal.upload().isEmpty());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"FAILED", "REJECTED"})
+    void terminalForNewSessionCannotReuseOldConfirmedProgress(String state) {
+        cache.accept(connection, sample(FIRST, "UPLOAD", 200, 400));
+        cache.accept(connection, sample(FIRST, "FINISHED", 0, 0));
+        assertEquals(100, cache.get(ROUTER).percent(now.get()));
+        cache.markPending(connection, ROUTER);
+        assertTrue(cache.accept(connection, sample(SECOND, state, 200, 0)));
+        var terminal = cache.get(ROUTER);
+        assertEquals(SECOND, terminal.payload().sessionId());
+        assertEquals(-1, terminal.confirmedElapsedTicks());
+        assertEquals(-1, terminal.percent(now.get()));
+        assertTrue(terminal.upload().isEmpty());
+        assertFalse(cache.accept(connection, sample(FIRST, "UPLOAD", 250, 500)));
+        assertEquals(-1, cache.get(ROUTER).percent(now.get()));
+    }
+
+    @Test
+    void refusalAndPendingTimeoutDoNotCreateConfirmedProgress() {
+        cache.markPending(connection, ROUTER);
+        now.set(ClientSpeedtestState.PENDING_TIMEOUT_NANOS);
+        assertEquals(-1, cache.get(ROUTER).confirmedElapsedTicks());
+        assertEquals("timeout", cache.get(ROUTER).errorCode());
+        cache.accept(connection, sample(new UUID(0, 0), "REJECTED", 200, 0));
+        assertEquals(-1, cache.get(ROUTER).percent(now.get()));
+        assertTrue(cache.get(ROUTER).download().isEmpty());
+    }
+
+    private static SpeedtestUpdatePayload sample(UUID session, String state, int ticks, int actual) {
+        return new SpeedtestUpdatePayload("192.168.0.2", state, 15, actual, ticks, 300,
+                ROUTER.dimension(), ROUTER.deviceId(), session, 810, 230);
     }
 
     private static SpeedtestUpdatePayload packet(ClientSpeedtestState.Key key, UUID session, String state) {

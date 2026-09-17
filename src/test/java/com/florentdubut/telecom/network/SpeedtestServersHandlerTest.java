@@ -58,6 +58,8 @@ class SpeedtestServersHandlerTest {
         when(router.getConfiguredMaxUp()).thenReturn(300);
         when(level.getBlockEntity(POS)).thenReturn(router);
         NetworkNode node = new NetworkNode(POS, NetworkNode.NodeType.ROUTER);
+        node.setCapacityDown(900);
+        node.setCapacityUp(300);
         node.setIpAddress("192.168.0.2");
         when(graph.getNode(POS)).thenReturn(node);
         doAnswer(call -> {
@@ -163,6 +165,23 @@ class SpeedtestServersHandlerTest {
             packets.verifyNoMoreInteractions();
         }
         verify(graph, never()).getSessionByDeviceId(anyString());
+    }
+
+    @Test
+    void startUsesCustomNodeCapsRatherThanHardwareOrClientValues() throws Exception {
+        NetworkNode node = graph.getNode(POS);
+        node.setCapacityDown(0);
+        node.setCapacityUp(45);
+        when(graph.startSpeedtest(POS, "192.168.0.2", 0, 45, 0, 0, 300, false, player, "42"))
+                .thenReturn(new TelecomNetworkGraph.SpeedtestStartResult(null, "network_limit"));
+        try (var packets = mockStatic(PacketDistributor.class)) {
+            handle("handleStartSpeedtest", new StartSpeedtestPayload(POS, "forged", 1000, 700, 0, 0, 300, "42", "minecraft:overworld"));
+            verify(graph).startSpeedtest(POS, "192.168.0.2", 0, 45, 0, 0, 300, false, player, "42");
+            packets.verify(() -> PacketDistributor.sendToPlayer(eq(player), argThat(value -> value instanceof SpeedtestUpdatePayload payload
+                    && payload.errorCode().equals("network_limit"))));
+        }
+        verify((RouterBlockEntity) level.getBlockEntity(POS), never()).getConfiguredMaxDown();
+        verify((RouterBlockEntity) level.getBlockEntity(POS), never()).getConfiguredMaxUp();
     }
 
     @Test

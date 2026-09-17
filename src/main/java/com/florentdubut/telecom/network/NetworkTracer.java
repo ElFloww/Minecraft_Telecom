@@ -67,6 +67,14 @@ public class NetworkTracer {
 
         // Trace cables without discarding the persisted addresses.
         Set<String> discoveredEdges = new HashSet<>();
+        Map<String, Integer> savedCapacities = new HashMap<>();
+        for (NetworkEdge edge : graph.getEdges()) {
+            String suffix = "-" + edge.getType().name();
+            savedCapacities.merge(edge.getNodeA().toShortString() + "-" + edge.getNodeB().toShortString() + suffix,
+                    edge.getBandwidthMax(), Math::min);
+            savedCapacities.merge(edge.getNodeB().toShortString() + "-" + edge.getNodeA().toShortString() + suffix,
+                    edge.getBandwidthMax(), Math::min);
+        }
 
         for (NetworkNode startNode : graph.getNodes()) {
             BlockPos startPos = startNode.getPosition();
@@ -109,15 +117,9 @@ public class NetworkTracer {
                             if (!discoveredEdges.contains(edgeKey1) && !discoveredEdges.contains(edgeKey2)) {
                                 discoveredEdges.add(edgeKey1);
 
-                                int bandwidth = switch (current.type) {
-                                    case BIG_FIBER -> 1_000_000;
-                                    case MEDIUM_FIBER -> 100_000;
-                                    case FIBER -> 10_000;
-                                    case COPPER -> 1_000;
-                                };
+                                int bandwidth = savedCapacities.getOrDefault(edgeKey1, current.type.nominalBandwidthMbps());
 
                                 List<BlockPos> finalPath = new ArrayList<>(current.pathBlocks);
-                                finalPath.add(neighbor);
                                 NetworkEdge edge = new NetworkEdge(startPos, neighbor, bandwidth, current.distance + 1, current.type, finalPath);
                                 newEdges.add(edge);
                             }

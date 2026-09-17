@@ -74,12 +74,23 @@ public class RouterBlockEntity extends BlockEntity {
     private void registerNodeIfMissing() {
         if (level instanceof ServerLevel serverLevel) {
             TelecomNetworkGraph graph = TelecomNetworkGraph.get(serverLevel);
-            if (graph.getNode(worldPosition) == null) {
-                NetworkNode node = new NetworkNode(worldPosition, NetworkNode.NodeType.ROUTER);
+            NetworkNode node = graph.getNode(worldPosition);
+            if (node == null) {
+                node = new NetworkNode(worldPosition, NetworkNode.NodeType.ROUTER);
                 node.setCapacityDown(getConfiguredMaxDown());
                 node.setCapacityUp(getConfiguredMaxUp());
                 graph.addNode(node);
                 com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel);
+            } else if (node.getType() == NetworkNode.NodeType.ROUTER) {
+                boolean requiresSync = node.requiresCapacitySync();
+                int down = requiresSync ? getConfiguredMaxDown() : Math.min(node.getCapacityDown(), getConfiguredMaxDown());
+                int up = requiresSync ? getConfiguredMaxUp() : Math.min(node.getCapacityUp(), getConfiguredMaxUp());
+                if (requiresSync || node.getCapacityDown() != down || node.getCapacityUp() != up) {
+                    node.setCapacityDown(down);
+                    node.setCapacityUp(up);
+                    node.setCapacitySyncRequired(false);
+                    graph.setDirty();
+                }
             }
         }
     }

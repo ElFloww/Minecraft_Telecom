@@ -37,8 +37,8 @@ class SpeedtestCatalogueTraversalTest {
         }
         graph.addNode(new NetworkNode(new BlockPos(100, 64, 0), NetworkNode.NodeType.SERVER));
 
-        assertEquals(new TelecomNetworkGraph.PathStats(48, 550), graph.calculatePathStats(SOURCE, positions.get(5)));
-        assertEquals(new TelecomNetworkGraph.PathStats(128, 10), graph.calculatePathStats(SOURCE, positions.getLast()));
+        assertEquals(new TelecomNetworkGraph.PathStats(48, 750), graph.calculatePathStats(SOURCE, positions.get(5)));
+        assertEquals(new TelecomNetworkGraph.PathStats(128, 200), graph.calculatePathStats(SOURCE, positions.getLast()));
         for (BlockPos source : positions) {
             List<SpeedtestServerOption> options = graph.getSpeedtestServers(source, 37);
             assertEquals(7, options.size());
@@ -63,6 +63,9 @@ class SpeedtestCatalogueTraversalTest {
         graph.addNode(new NetworkNode(copper, NetworkNode.NodeType.PM));
         graph.addNode(new NetworkNode(fiber, NetworkNode.NodeType.PM));
         graph.addNode(new NetworkNode(server, NetworkNode.NodeType.SERVER));
+        // This fixture isolates cable selection rather than router throughput.
+        graph.getNode(SOURCE).setCapacityDown(10_000);
+        graph.getNode(SOURCE).setCapacityUp(10_000);
         NetworkEdge copperEdge = edge(copper, SOURCE, 10, NetworkEdge.EdgeType.COPPER);
         NetworkEdge fiberEdge = edge(SOURCE, fiber, 1, NetworkEdge.EdgeType.FIBER);
         graph.addEdge(copperFirst ? copperEdge : fiberEdge);
@@ -74,7 +77,7 @@ class SpeedtestCatalogueTraversalTest {
         graph.addEdge(edge(copper, fiber, 1, NetworkEdge.EdgeType.BIG_FIBER));
         var expected = graph.calculatePathStats(SOURCE, server);
         assertEquals(copperFirst ? 5 : 1, expected.pingMs());
-        assertEquals(copperFirst ? 960 : 10000, expected.bandwidthMbps());
+        assertEquals(copperFirst ? 980 : 10000, expected.bandwidthMbps());
         var option = graph.getSpeedtestServers(SOURCE, 0).getFirst();
         assertEquals(expected.pingMs(), option.estimatedPingMs());
         assertEquals(expected.bandwidthMbps(), option.bandwidthMbps());
@@ -145,6 +148,6 @@ class SpeedtestCatalogueTraversalTest {
     }
 
     private static NetworkEdge edge(BlockPos a, BlockPos b, int length, NetworkEdge.EdgeType type) {
-        return new NetworkEdge(a, b, 1000, length, type, List.of());
+        return new NetworkEdge(a, b, type.nominalBandwidthMbps(), length, type, List.of());
     }
 }

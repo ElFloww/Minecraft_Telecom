@@ -6,7 +6,10 @@ import com.florentdubut.telecom.client.gui.SmartphoneSpeedtestScreen;
 import com.florentdubut.telecom.network.packet.RouterGuiSyncPayload;
 import com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.gui.Font;
+import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.client.player.LocalPlayer;
@@ -18,6 +21,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
+import org.joml.Matrix3x2fStack;
 
 import java.util.UUID;
 
@@ -230,6 +234,95 @@ class SpeedtestScreensTest {
         assertSame(mobileProgress, ClientSpeedtestState.get(MOBILE).payload());
         assertTrue(ClientSpeedtestState.get(ROUTER).active());
         assertTrue(ClientSpeedtestState.get(MOBILE).active());
+    }
+
+    @Test
+    void minimumResolutionControlsAndPanelsStayOnScreenAndNeverOverlap() throws Exception {
+        for (Screen screen : new Screen[]{new RouterScreen(routerInfo(POS, 999)), new SmartphoneSpeedtestScreen(null)}) {
+            screen.width = 320;
+            screen.height = 240;
+            init(screen);
+            var buttons = screen.children().stream().filter(child -> child instanceof Button).map(child -> (Button) child).toList();
+            int panelTop = screen instanceof RouterScreen ? 110 : 116;
+            for (Button button : buttons) {
+                assertTrue(button.getX() >= 0 && button.getY() >= 0);
+                assertTrue(button.getRight() <= screen.width);
+                assertTrue(button.getBottom() < panelTop);
+                for (Button other : buttons) {
+                    if (other == button) continue;
+                    assertTrue(button.getRight() <= other.getX() || other.getRight() <= button.getX()
+                            || button.getBottom() <= other.getY() || other.getBottom() <= button.getY());
+                }
+            }
+        }
+    }
+
+    @Test
+    void bothScreensRenderRealHistoryAtMinimumSizeWithoutRecordingFramesOrLegacyRefresh() throws Exception {
+        var optionsField = Minecraft.class.getDeclaredField("options");
+        optionsField.setAccessible(true);
+        optionsField.set(minecraft, mock(net.minecraft.client.Options.class));
+        var guiField = Minecraft.class.getDeclaredField("gui");
+        guiField.setAccessible(true);
+        guiField.set(minecraft, mock(net.minecraft.client.gui.Gui.class));
+        for (var key : new ClientSpeedtestState.Key[]{ROUTER, MOBILE}) {
+            for (int tick = 11875; tick < 12000; tick++) {
+                ClientSpeedtestState.accept(new SpeedtestUpdatePayload("ip", "DOWNLOAD", 15, (tick - 11875) * 8, tick, 12000,
+                        key.dimension(), key.deviceId(), FIRST, 400, 0));
+            }
+            var points = ClientSpeedtestState.get(key).download();
+            Screen screen = key.equals(ROUTER) ? new RouterScreen(routerInfo(POS, 999)) : new SmartphoneSpeedtestScreen(null);
+            screen.width = 320;
+            screen.height = 240;
+            var font = mock(Font.class);
+            when(font.plainSubstrByWidth(anyString(), anyInt())).thenAnswer(i -> i.getArgument(0));
+            var fontField = Screen.class.getDeclaredField("font");
+            fontField.setAccessible(true);
+            fontField.set(screen, font);
+            var graphics = mock(GuiGraphics.class);
+            when(graphics.pose()).thenReturn(new Matrix3x2fStack(8));
+            for (int frame = 0; frame < 3; frame++) {
+                if (screen instanceof RouterScreen router) {
+                    router.updatePayload(routerInfo(POS, 888));
+                    router.render(graphics, 0, 0, 0);
+                } else {
+                    screen.renderBackground(graphics, 0, 0, 0);
+                }
+            }
+            assertSame(points, ClientSpeedtestState.get(key).download());
+            assertEquals(120, points.size());
+            int graphLeft = key.equals(ROUTER) ? 22 : 68;
+            int graphRight = key.equals(ROUTER) ? 297 : 251;
+            int graphTop = key.equals(ROUTER) ? 184 : 190;
+            verify(graphics, atLeastOnce()).fill(graphLeft, 207, graphLeft + 1, 208, 0xFF00FFFF);
+            verify(graphics, atLeastOnce()).fill(graphRight, graphTop, graphRight + 1, graphTop + 1, 0xFF00FFFF);
+            assertEquals(new Matrix3x2fStack(8), graphics.pose());
+            for (var invocation : mockingDetails(graphics).getInvocations()) {
+                if (!invocation.getMethod().getName().equals("fill")) continue;
+                Object[] coordinates = invocation.getArguments();
+                assertTrue((int) coordinates[0] >= 0 && (int) coordinates[2] <= 320);
+                assertTrue((int) coordinates[1] >= 0 && (int) coordinates[3] <= 240);
+            }
+            clearInvocations(graphics);
+            screen.width = 640;
+            screen.height = 480;
+            if (screen instanceof RouterScreen router) router.render(graphics, 0, 0, 0);
+            else screen.renderBackground(graphics, 0, 0, 0);
+            int expandedRight = key.equals(ROUTER) ? 493 : 411;
+            int expandedTop = key.equals(ROUTER) ? 248 : 254;
+            verify(graphics, atLeastOnce()).fill(expandedRight, expandedTop, expandedRight + 1, expandedTop + 1, 0xFF00FFFF);
+            assertTrue(383 - expandedTop > 100, "Larger windows should give small rate fluctuations more vertical space");
+            assertSame(points, ClientSpeedtestState.get(key).download());
+            for (var invocation : mockingDetails(graphics).getInvocations()) {
+                if (!invocation.getMethod().getName().equals("fill")) continue;
+                Object[] coordinates = invocation.getArguments();
+                assertTrue((int) coordinates[0] >= 0 && (int) coordinates[2] <= 640);
+                assertTrue((int) coordinates[1] >= 0 && (int) coordinates[3] <= 480);
+            }
+            Screen reopened = key.equals(ROUTER) ? new RouterScreen(routerInfo(POS, 999)) : new SmartphoneSpeedtestScreen(null);
+            assertEquals(true, field(reopened, "speedtestActive"));
+            assertSame(points, ClientSpeedtestState.get(key).download());
+        }
     }
 
     private static void init(Object screen) throws ReflectiveOperationException {

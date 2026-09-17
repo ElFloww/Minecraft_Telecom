@@ -44,6 +44,10 @@ public class TelecomNetworkGraph extends SavedData {
         if (version < 0 || version > 1) {
             throw new IllegalArgumentException("unsupported schema version " + version);
         }
+        int capacityVersion = readInt(tag, "CapacityModelVersion", 0);
+        if (capacityVersion < 0 || capacityVersion > 1) {
+            throw new IllegalArgumentException("unsupported capacity model version " + capacityVersion);
+        }
         TelecomNetworkGraph graph = new TelecomNetworkGraph();
         
         ListTag nodesTag = tag.getListOrEmpty("Nodes");
@@ -61,12 +65,12 @@ public class TelecomNetworkGraph extends SavedData {
             if (nodeTag.contains("FreqMask")) {
                 node.setFrequenciesMask(nodeTag.getIntOr("FreqMask", 0));
             }
-            if (nodeTag.contains("CapDown")) {
-                node.setCapacityDown(nodeTag.getIntOr("CapDown", 1000));
+            if (capacityVersion == 1 || type == NetworkNode.NodeType.ROUTER) {
+                node.setCapacityDown(readInt(nodeTag, "CapDown", type.defaultCapacityMbps()));
+                node.setCapacityUp(readInt(nodeTag, "CapUp", type.defaultCapacityMbps()));
             }
-            if (nodeTag.contains("CapUp")) {
-                node.setCapacityUp(nodeTag.getIntOr("CapUp", 1000));
-            }
+            node.setCapacitySyncRequired(type == NetworkNode.NodeType.ROUTER &&
+                    (capacityVersion == 0 || nodeTag.getBooleanOr("CapacityNeedsSync", false)));
             graph.nodes.put(pos, node);
         }
 
@@ -75,8 +79,8 @@ public class TelecomNetworkGraph extends SavedData {
             CompoundTag edgeTag = edgesTag.getCompound(i).orElseThrow(() -> new IllegalArgumentException("invalid edge"));
             BlockPos nodeA = edgeTag.read("NodeA", BlockPos.CODEC).orElseThrow(() -> new IllegalArgumentException("invalid edge source"));
             BlockPos nodeB = edgeTag.read("NodeB", BlockPos.CODEC).orElseThrow(() -> new IllegalArgumentException("invalid edge target"));
-            int bandwidthMax = edgeTag.getIntOr("BandwidthMax", 0);
-            int length = edgeTag.getIntOr("Length", 0);
+            int bandwidthMax = readInt(edgeTag, "BandwidthMax", 0);
+            int length = readInt(edgeTag, "Length", Integer.MAX_VALUE);
             NetworkEdge.EdgeType type = NetworkEdge.EdgeType.valueOf(edgeTag.getStringOr("Type", ""));
             java.util.List<BlockPos> pathBlocks = new java.util.ArrayList<>();
             if (edgeTag.contains("PathBlocks")) {
@@ -112,12 +116,22 @@ public class TelecomNetworkGraph extends SavedData {
             graph.nextMobileAddress = Math.max(graph.nextMobileAddress, host + 1);
         }
         graph.ensureFixedAddresses();
+        if (capacityVersion == 0) graph.setDirty();
         return graph;
+    }
+
+    private static int readInt(CompoundTag tag, String key, int fallback) {
+        if (!tag.contains(key)) return fallback;
+        if (!(tag.get(key) instanceof net.minecraft.nbt.IntTag)) {
+            throw new IllegalArgumentException("invalid integer " + key);
+        }
+        return tag.getIntOr(key, fallback);
     }
 
     private CompoundTag save() {
         CompoundTag tag = new CompoundTag();
         tag.putInt("SchemaVersion", 1);
+        tag.putInt("CapacityModelVersion", 1);
         ListTag nodesTag = new ListTag();
         for (NetworkNode node : nodes.values()) {
             CompoundTag nodeTag = new CompoundTag();
@@ -132,6 +146,7 @@ public class TelecomNetworkGraph extends SavedData {
             nodeTag.putInt("FreqMask", node.getFrequenciesMask());
             nodeTag.putInt("CapDown", node.getCapacityDown());
             nodeTag.putInt("CapUp", node.getCapacityUp());
+            nodeTag.putBoolean("CapacityNeedsSync", node.requiresCapacitySync());
             nodesTag.add(nodeTag);
         }
         tag.put("Nodes", nodesTag);
@@ -297,6 +312,11 @@ public class TelecomNetworkGraph extends SavedData {
             node.setIpAddress(previous.getIpAddress());
             node.setNetworkCidr(previous.getNetworkCidr());
         }
+        if (previous != null && previous.getType() == node.getType()) {
+            node.setCapacityDown(previous.getCapacityDown());
+            node.setCapacityUp(previous.getCapacityUp());
+            node.setCapacitySyncRequired(previous.requiresCapacitySync());
+        }
         nodes.put(node.getPosition(), node);
         topologyRevision++;
         pathCache.clear();
@@ -327,22 +347,82 @@ public class TelecomNetworkGraph extends SavedData {
     }
 
     public int getActualBlockUsageDown(BlockPos pos) {
-        int sum = 0;
-        for (NetworkEdge edge : edges) {
-            if (edge.getPathBlocks() != null && edge.getPathBlocks().contains(pos)) {
-                sum += edge.getCurrentUsageDown();
-            }
-        }
-        return sum;
+        return actualBlockUsageDown.getOrDefault(pos, 0);
     }
     public int getActualBlockUsageUp(BlockPos pos) {
-        int sum = 0;
-        for (NetworkEdge edge : edges) {
-            if (edge.getPathBlocks() != null && edge.getPathBlocks().contains(pos)) {
-                sum += edge.getCurrentUsageUp();
-            }
+        return actualBlockUsageUp.getOrDefault(pos, 0);
+    }
+
+    public int getActualBlockCapacityMbps(BlockPos pos) {
+        PhysicalNetwork physical = physicalNetwork();
+        return physical == null ? 0 : physical.capacities.getOrDefault(pos, 0);
+    }
+
+    private final Map<BlockPos, Integer> actualBlockUsageDown = new HashMap<>();
+    private final Map<BlockPos, Integer> actualBlockUsageUp = new HashMap<>();
+    private final BandwidthAllocator bandwidthAllocator = new BandwidthAllocator();
+    public static final int MAX_PHYSICAL_PATH_REFERENCES = 262_144;
+    public static final int MAX_ALLOCATION_RESOURCE_REFERENCES = 262_144;
+    private long physicalRevision = -1;
+    private PhysicalNetwork physicalCache;
+
+    private record NodeBudget(BlockPos pos, boolean upload) {}
+    private record PhysicalNetwork(Map<BlockPos, Integer> capacities,
+                                   Map<NetworkEdge, java.util.Set<BlockPos>> blocks,
+                                   Map<NetworkEdge, Integer> edgeCapacities) {
+        int capacity(NetworkEdge edge) {
+            return edgeCapacities.get(edge);
         }
-        return sum;
+    }
+
+    private PhysicalNetwork physicalNetwork() {
+        if (physicalRevision == topologyRevision) return physicalCache;
+        physicalRevision = topologyRevision;
+        physicalCache = null; // Also cache quota failures, until topology changes.
+        if (nodes.size() > MAX_SPEEDTEST_CATALOGUE_NODES || edges.size() > MAX_SPEEDTEST_CATALOGUE_EDGES) return null;
+        long references = 0;
+        for (NetworkEdge edge : edges) {
+            references += edge.getPathBlocks().size();
+            if (references > MAX_PHYSICAL_PATH_REFERENCES) return null;
+        }
+        java.util.Set<BlockPos> endpoints = new java.util.HashSet<>(nodes.keySet());
+        for (NetworkEdge edge : edges) {
+            endpoints.add(edge.getNodeA());
+            endpoints.add(edge.getNodeB());
+        }
+        Map<BlockPos, Integer> capacities = new HashMap<>();
+        Map<NetworkEdge, java.util.Set<BlockPos>> blocks = new HashMap<>();
+        for (NetworkEdge edge : edges) {
+            java.util.Set<BlockPos> physical = new java.util.LinkedHashSet<>(edge.getPathBlocks());
+            physical.removeAll(endpoints);
+            blocks.put(edge, physical);
+            for (BlockPos pos : physical) capacities.merge(pos, edge.getEffectiveBandwidthMbps(), Math::min);
+        }
+        Map<NetworkEdge, Integer> edgeCapacities = new HashMap<>();
+        blocks.forEach((edge, physical) -> {
+            int capacity = edge.getEffectiveBandwidthMbps();
+            for (BlockPos pos : physical) capacity = Math.min(capacity, capacities.get(pos));
+            edgeCapacities.put(edge, capacity);
+        });
+        physicalCache = new PhysicalNetwork(capacities, blocks, edgeCapacities);
+        return physicalCache;
+    }
+
+    private void resetUsage() {
+        for (TrafficSession session : activeSessions) session.clearCurrentBandwidth();
+        actualBlockUsageDown.clear();
+        actualBlockUsageUp.clear();
+        totalBandwidthDown = 0;
+        totalBandwidthUp = 0;
+        for (NetworkEdge edge : edges) {
+            edge.setCurrentUsage(0);
+            edge.setCurrentUsageDown(0);
+            edge.setCurrentUsageUp(0);
+        }
+        for (NetworkNode node : nodes.values()) {
+            node.setCurrentUsageDown(0);
+            node.setCurrentUsageUp(0);
+        }
     }
 
     private final List<TrafficSession> activeSessions = new ArrayList<>();
@@ -376,6 +456,8 @@ public class TelecomNetworkGraph extends SavedData {
             throw new SpeedtestCatalogueLimitException();
         }
         if (sourcePos == null || !nodes.containsKey(sourcePos) || extraPing < 0 || extraPing > 60_000) return List.of();
+        PhysicalNetwork physical = physicalNetwork();
+        if (physical == null) throw new SpeedtestCatalogueLimitException();
         // Preserve edge insertion order, matching findShortestPath's first-discovered BFS paths.
         Map<BlockPos, List<NetworkEdge>> adjacency = new HashMap<>();
         for (NetworkEdge edge : edges) {
@@ -386,7 +468,7 @@ public class TelecomNetworkGraph extends SavedData {
         }
         Map<BlockPos, PathMetrics> visited = new HashMap<>();
         java.util.ArrayDeque<BlockPos> queue = new java.util.ArrayDeque<>();
-        visited.put(sourcePos, new PathMetrics(0, Integer.MAX_VALUE, 0));
+        visited.put(sourcePos, initialMetrics(sourcePos));
         queue.add(sourcePos);
         while (!queue.isEmpty()) {
             BlockPos current = queue.removeFirst();
@@ -394,7 +476,7 @@ public class TelecomNetworkGraph extends SavedData {
             for (NetworkEdge edge : adjacency.getOrDefault(current, List.of())) {
                 BlockPos neighbor = edge.getNodeA().equals(current) ? edge.getNodeB() : edge.getNodeA();
                 if (visited.containsKey(neighbor)) continue;
-                visited.put(neighbor, metrics.append(edge));
+                visited.put(neighbor, metrics.append(edge, nodes.get(neighbor), physical.capacity(edge)));
                 queue.addLast(neighbor);
             }
         }
@@ -425,6 +507,7 @@ public class TelecomNetworkGraph extends SavedData {
         String message = switch (result.error()) {
             case "device_busy" -> "A speedtest is already running on this device.";
             case "session_limit" -> "Speedtest rejected: session limit reached.";
+            case "network_limit" -> "Speedtest rejected: network resource limit reached.";
             case "no_server", "server_unavailable" -> "Failed to start Speedtest: No complete path to a Server was found.";
             default -> "Speedtest rejected: invalid request.";
         };
@@ -450,6 +533,8 @@ public class TelecomNetworkGraph extends SavedData {
         if (existing == null && activeSessions.size() >= 256) {
             return new SpeedtestStartResult(null, "session_limit");
         }
+        PhysicalNetwork physical = physicalNetwork();
+        if (physical == null) return new SpeedtestStartResult(null, "network_limit");
         
         // Resolve the destination before replacing any passive traffic on this device.
         NetworkNode bestServer = null;
@@ -466,11 +551,11 @@ public class TelecomNetworkGraph extends SavedData {
             if (bestServer == null || bestServer.getType() != NetworkNode.NodeType.SERVER) {
                 return new SpeedtestStartResult(null, "server_unavailable");
             }
-            bestStats = calculatePathStats(sourcePos, bestServer.getPosition());
+            bestStats = calculatePathStats(sourcePos, bestServer.getPosition(), physical);
         } else {
             for (NetworkNode node : nodes.values()) {
                 if (node.getType() != NetworkNode.NodeType.SERVER) continue;
-                PathStats stats = calculatePathStats(sourcePos, node.getPosition());
+                PathStats stats = calculatePathStats(sourcePos, node.getPosition(), physical);
                 if (stats != null && (bestStats == null || stats.pingMs() < bestStats.pingMs()
                         || (stats.pingMs() == bestStats.pingMs() && node.getPosition().asLong() < bestServer.getPosition().asLong()))) {
                     bestStats = stats;
@@ -480,7 +565,11 @@ public class TelecomNetworkGraph extends SavedData {
         }
         
         if (bestServer != null && bestStats != null) {
-            if (existing != null) activeSessions.remove(existing);
+            if (existing != null) {
+                activeSessions.remove(existing);
+                existing.clearCurrentBandwidth();
+                bandwidthAllocator.forget(existing.getSessionId());
+            }
             TrafficSession session = new TrafficSession(sourcePos, bestServer.getPosition(), clientIp, targetDownBw, targetUpBw, durationTicks, isPassive, deviceId);
             if (player != null) session.setOwnerId(player.getUUID());
             session.setExtraPing(extraPing);
@@ -506,7 +595,7 @@ public class TelecomNetworkGraph extends SavedData {
     private void sendSessionUpdate(ServerLevel level, TrafficSession session) {
         SpeedtestUpdatePayload update = new SpeedtestUpdatePayload(
                 session.getClientIp(), session.getState().name(), session.getPingMs(),
-                session.isTerminal() ? 0 : session.getActualBandwidth(), session.getTicksElapsed(), session.getTotalTicksPerPhase(),
+                session.getMeasuredBandwidth(), session.getTicksElapsed(), session.getTotalTicksPerPhase(),
                 level.dimension().identifier().toString(), session.getDeviceId(), session.getSessionId(),
                 session.getFinalDownBw(), session.getFinalUpBw(), session.getServerId(), session.getServerName(), session.getFailureReason());
         if (!session.isPassive() && session.isTerminal()) {
@@ -600,6 +689,7 @@ public class TelecomNetworkGraph extends SavedData {
 
     public void tickTraffic(ServerLevel level) {
         tickPassiveTraffic(level);
+        resetUsage();
 
         if (delayedRecalculationTimer > 0) {
             delayedRecalculationTimer--;
@@ -613,24 +703,21 @@ public class TelecomNetworkGraph extends SavedData {
             NetworkTracer.recalculateNetwork(level);
             return; // Skip this tick, it will resume next tick
         }
+        if (activeSessions.isEmpty()) return;
 
-        // Reset current usage
-        for (NetworkEdge edge : edges) {
-            edge.setCurrentUsage(0);
-            edge.setCurrentUsageDown(0);
-            edge.setCurrentUsageUp(0);
-        }
-        
-        totalBandwidthUp = 0;
-        totalBandwidthDown = 0;
-        
         List<TrafficSession> toRemove = new ArrayList<>();
-        Map<TrafficSession, List<NetworkEdge>> sessionPaths = new HashMap<>();
-        Map<TrafficSession, Integer> sessionRequested = new HashMap<>();
-        Map<BlockPos, Integer> blockUsage = new HashMap<>();
-        Map<BlockPos, Integer> blockCapacity = new HashMap<>();
+        Map<TrafficSession, BandwidthAllocator.Request> requests = new java.util.LinkedHashMap<>();
+        PhysicalNetwork physical = physicalNetwork();
+        Map<Object, Integer> capacities = new HashMap<>();
+        int retainedResourceReferences = 0;
 
         for (TrafficSession session : activeSessions) {
+            if (physical == null) {
+                session.fail("network_limit");
+                sendSessionUpdate(level, session);
+                toRemove.add(session);
+                continue;
+            }
             if (!session.isRouter() && session.getOwnerId() != null
                     && level.getServer().getPlayerList().getPlayer(session.getOwnerId()) == null) {
                 session.fail("device_unavailable");
@@ -640,7 +727,7 @@ public class TelecomNetworkGraph extends SavedData {
             }
             NetworkNode server = nodes.get(session.getDestPos());
             PathStats stats = server != null && server.getType() == NetworkNode.NodeType.SERVER && nodes.containsKey(session.getSourcePos())
-                    ? calculatePathStats(session.getSourcePos(), session.getDestPos()) : null;
+                    ? calculatePathStats(session.getSourcePos(), session.getDestPos(), physical) : null;
             if (stats == null) {
                 session.fail("route_lost");
                 sendSessionUpdate(level, session);
@@ -656,7 +743,7 @@ public class TelecomNetworkGraph extends SavedData {
                 
                 // Save results to RouterBlockEntity if applicable
                 NetworkNode node = nodes.get(session.getSourcePos());
-                if (session.isRouter() && node != null && node.getType() == NetworkNode.NodeType.ROUTER
+                if (!session.isPassive() && session.isRouter() && node != null && node.getType() == NetworkNode.NodeType.ROUTER
                         && level.hasChunkAt(session.getSourcePos())) {
                     net.minecraft.world.level.block.entity.BlockEntity be = level.getBlockEntity(session.getSourcePos());
                     if (be instanceof com.florentdubut.telecom.block.entity.RouterBlockEntity router) {
@@ -667,104 +754,82 @@ public class TelecomNetworkGraph extends SavedData {
             }
             
             if (session.getState() == TrafficSession.SessionState.DOWNLOAD || session.getState() == TrafficSession.SessionState.UPLOAD) {
-                int hardwareMax = stats.bandwidthMbps();
-                int requested = Math.min(session.getState() == TrafficSession.SessionState.DOWNLOAD ? session.getTargetDownBw() : session.getTargetUpBw(), hardwareMax);
+                boolean upload = session.getState() == TrafficSession.SessionState.UPLOAD;
+                int hardwareMax = upload ? stats.uploadBandwidthMbps() : stats.bandwidthMbps();
+                int requested = session.getRequestedBandwidth(hardwareMax);
+                if (requested == 0) {
+                    session.setActualBandwidth(0);
+                    continue;
+                }
                 List<NetworkEdge> path = findShortestPath(session.getSourcePos(), session.getDestPos());
                 if (path != null) {
-                    sessionPaths.put(session, path);
-                    sessionRequested.put(session, requested);
-                    // Accumulate requested usage to compute congestion per physical block
+                    java.util.Set<Object> resources = new java.util.LinkedHashSet<>();
+                    java.util.Set<BlockPos> sessionNodes = new java.util.LinkedHashSet<>();
+                    sessionNodes.add(session.getSourcePos());
+                    sessionNodes.add(session.getDestPos());
                     for (NetworkEdge edge : path) {
-                        edge.setCurrentUsage(edge.getCurrentUsage() + requested);
-                        for (BlockPos pos : edge.getPathBlocks()) {
-                            blockUsage.put(pos, blockUsage.getOrDefault(pos, 0) + requested);
-                            blockCapacity.merge(pos, edge.getBandwidthMax(), Math::min);
+                        resources.add(edge);
+                        resources.addAll(physical.blocks.get(edge));
+                        sessionNodes.add(edge.getNodeA());
+                        sessionNodes.add(edge.getNodeB());
+                    }
+                    for (BlockPos pos : sessionNodes) {
+                        resources.add(new NodeBudget(pos, upload));
+                    }
+                    // Count after per-flow deduplication, before retaining any resources or capacities.
+                    if (resources.size() > MAX_ALLOCATION_RESOURCE_REFERENCES - retainedResourceReferences) {
+                        session.fail("network_limit");
+                        sendSessionUpdate(level, session);
+                        toRemove.add(session);
+                        continue;
+                    }
+                    retainedResourceReferences += resources.size();
+                    for (Object resource : resources) {
+                        if (resource instanceof NetworkEdge edge) {
+                            capacities.put(edge, edge.getEffectiveBandwidthMbps());
+                        } else if (resource instanceof BlockPos pos) {
+                            capacities.put(pos, physical.capacities.get(pos));
+                        } else if (resource instanceof NodeBudget budget) {
+                            NetworkNode node = nodes.get(budget.pos);
+                            capacities.put(budget, node == null ? 0 : upload ? node.getCapacityUp() : node.getCapacityDown());
                         }
                     }
+                    requests.put(session, new BandwidthAllocator.Request(session.getSessionId(), requested, resources));
                 }
             }
             
         }
         
-        // Phase 2: Compute actual bandwidth considering congestion per physical block
-        for (Map.Entry<TrafficSession, Integer> entry : sessionRequested.entrySet()) {
+        int[] allocations = bandwidthAllocator.allocate(new ArrayList<>(requests.values()), capacities);
+        int allocationIndex = 0;
+        for (Map.Entry<TrafficSession, BandwidthAllocator.Request> entry : requests.entrySet()) {
             TrafficSession session = entry.getKey();
-            int requested = entry.getValue();
-            List<NetworkEdge> path = sessionPaths.get(session);
-            
-            float minRatio = 1.0f;
-            for (NetworkEdge edge : path) {
-                // Logical links still share capacity when no physical path blocks were recorded.
-                if (edge.getCurrentUsage() > edge.getBandwidthMax()) {
-                    minRatio = Math.min(minRatio, (float) edge.getBandwidthMax() / edge.getCurrentUsage());
-                }
-                for (BlockPos pos : edge.getPathBlocks()) {
-                    int usage = blockUsage.getOrDefault(pos, 0);
-                    int cap = blockCapacity.getOrDefault(pos, edge.getBandwidthMax());
-                    if (usage > cap) {
-                        float ratio = (float) cap / usage;
-                        if (ratio < minRatio) {
-                            minRatio = ratio;
-                        }
-                    }
-                }
-            }
-            
-            int actual = (int)(requested * minRatio);
-            // Realistic oscillation (92% to 100%)
-            actual = (int)(actual * (0.92f + Math.random() * 0.08f));
-            
+            int actual = allocations[allocationIndex++];
+            boolean upload = session.getState() == TrafficSession.SessionState.UPLOAD;
             session.setActualBandwidth(actual);
-            
-            if (session.getState() == TrafficSession.SessionState.DOWNLOAD) {
-                totalBandwidthDown += actual;
-            } else if (session.getState() == TrafficSession.SessionState.UPLOAD) {
-                totalBandwidthUp += actual;
-            }
-        }
-        
-        // Reset node usage
-        for (NetworkNode node : nodes.values()) {
-            node.setCurrentUsageDown(0);
-            node.setCurrentUsageUp(0);
-        }
+            if (upload) totalBandwidthUp += actual;
+            else totalBandwidthDown += actual;
 
-        for (Map.Entry<TrafficSession, Integer> entry : sessionRequested.entrySet()) {
-            TrafficSession session = entry.getKey();
-            int actual = session.getActualBandwidth();
-            List<NetworkEdge> path = sessionPaths.get(session);
-            
-            // Apply to nodes
-            java.util.Set<BlockPos> sessionNodes = new java.util.HashSet<>();
-            sessionNodes.add(session.getSourcePos());
-            sessionNodes.add(session.getDestPos());
-            for (NetworkEdge edge : path) {
-                sessionNodes.add(edge.getNodeA());
-                sessionNodes.add(edge.getNodeB());
-            }
-
-            for (BlockPos pos : sessionNodes) {
-                NetworkNode node = nodes.get(pos);
-                if (node != null) {
-                    if (session.getState() == TrafficSession.SessionState.DOWNLOAD) {
-                        node.setCurrentUsageDown(node.getCurrentUsageDown() + actual);
-                    } else if (session.getState() == TrafficSession.SessionState.UPLOAD) {
-                        node.setCurrentUsageUp(node.getCurrentUsageUp() + actual);
+            // The exact same deduplicated resources drive both allocation and telemetry.
+            for (Object resource : entry.getValue().resources()) {
+                if (resource instanceof NetworkEdge edge) {
+                    edge.setCurrentUsage(edge.getCurrentUsage() + actual);
+                    if (upload) edge.setCurrentUsageUp(edge.getCurrentUsageUp() + actual);
+                    else edge.setCurrentUsageDown(edge.getCurrentUsageDown() + actual);
+                } else if (resource instanceof BlockPos pos) {
+                    (upload ? actualBlockUsageUp : actualBlockUsageDown).merge(pos, actual, Integer::sum);
+                } else if (resource instanceof NodeBudget budget) {
+                    NetworkNode node = nodes.get(budget.pos);
+                    if (node != null) {
+                        if (upload) node.setCurrentUsageUp(node.getCurrentUsageUp() + actual);
+                        else node.setCurrentUsageDown(node.getCurrentUsageDown() + actual);
                     }
-                }
-            }
-            
-            // Apply to edges
-            for(NetworkEdge edge : path) {
-                if (session.getState() == TrafficSession.SessionState.DOWNLOAD) {
-                    edge.setCurrentUsageDown(edge.getCurrentUsageDown() + actual);
-                } else {
-                    edge.setCurrentUsageUp(edge.getCurrentUsageUp() + actual);
                 }
             }
         }
         
         activeSessions.removeAll(toRemove);
+        for (TrafficSession session : toRemove) bandwidthAllocator.forget(session.getSessionId());
         for (TrafficSession session : activeSessions) {
             if (!session.isPassive() && session.getTicksElapsed() % 2 == 0) {
                 sendSessionUpdate(level, session);
@@ -847,7 +912,7 @@ public class TelecomNetworkGraph extends SavedData {
     }
 
     public java.util.Collection<NetworkNode> getNodes() {
-        return nodes.values();
+        return java.util.Collections.unmodifiableCollection(nodes.values());
     }
 
     public NetworkNode getNodeByIp(String ip) {
@@ -879,7 +944,7 @@ public class TelecomNetworkGraph extends SavedData {
     }
 
     public List<NetworkEdge> getEdges() {
-        return edges;
+        return java.util.Collections.unmodifiableList(edges);
     }
 
     public int routePacket(Packet packet) {
@@ -887,19 +952,22 @@ public class TelecomNetworkGraph extends SavedData {
         NetworkNode dest = getNodeByIp(packet.getDestIp());
         
         if (source == null || dest == null) return -1; // Unreachable
+        if (physicalNetwork() == null) return -1;
         
         List<NetworkEdge> path = findShortestPath(source.getPosition(), dest.getPosition());
         if (path == null) return -1; // No path found
         
-        int latency = 0;
+        long latency = 0;
         for (NetworkEdge edge : path) {
             // Simulated latency calculation
-            int edgeLatency = edge.getLength() / 10; // e.g. 1 tick per 10 blocks
+            long edgeLatency = edge.getLength() / 10; // e.g. 1 tick per 10 blocks
             
             // Saturation penalty
-            float saturation = (float)(edge.getCurrentUsage() + packet.getSize()) / edge.getBandwidthMax();
+            int capacity = edge.getEffectiveBandwidthMbps();
+            if (capacity == 0) return -1;
+            double saturation = ((long) edge.getCurrentUsage() + Math.max(0, packet.getSize())) / (double) capacity;
             if (saturation > 1.0f) {
-                edgeLatency += (int)((saturation - 1.0f) * 100); // Massive delay if saturated
+                edgeLatency += (long)((saturation - 1.0) * 100); // Massive delay if saturated
             }
             
             latency += edgeLatency;
@@ -908,7 +976,7 @@ public class TelecomNetworkGraph extends SavedData {
             // For now, just a basic simulation concept.
         }
         
-        return latency; // Returns ticks to wait for packet arrival
+        return (int) Math.min(Integer.MAX_VALUE, latency); // Returns ticks to wait for packet arrival
     }
 
     private transient final Map<String, List<NetworkEdge>> pathCache = new java.util.LinkedHashMap<>(128, 0.75f, true) {
@@ -968,46 +1036,50 @@ public class TelecomNetworkGraph extends SavedData {
         return path;
     }
 
-    public record PathStats(int pingMs, int bandwidthMbps) {}
+    public record PathStats(int pingMs, int bandwidthMbps, int uploadBandwidthMbps) {
+        public PathStats(int pingMs, int bandwidthMbps) {
+            this(pingMs, bandwidthMbps, bandwidthMbps);
+        }
+    }
 
     public PathStats calculatePathStats(BlockPos sourcePos, BlockPos destPos) {
+        return calculatePathStats(sourcePos, destPos, physicalNetwork());
+    }
+
+    private PathStats calculatePathStats(BlockPos sourcePos, BlockPos destPos, PhysicalNetwork physical) {
+        if (physical == null || !nodes.containsKey(sourcePos) || !nodes.containsKey(destPos)) return null;
         List<NetworkEdge> path = findShortestPath(sourcePos, destPos);
         if (path == null) return null;
 
-        PathMetrics metrics = new PathMetrics(0, Integer.MAX_VALUE, 0);
+        PathMetrics metrics = initialMetrics(sourcePos);
+        BlockPos current = sourcePos;
         for (NetworkEdge edge : path) {
-            metrics = metrics.append(edge);
+            current = edge.getNodeA().equals(current) ? edge.getNodeB() : edge.getNodeA();
+            metrics = metrics.append(edge, nodes.get(current), physical.capacity(edge));
         }
         return metrics.stats();
     }
 
-    private record PathMetrics(float totalPing, int minBandwidth, int distanceCu) {
-        PathMetrics append(NetworkEdge edge) {
-            float totalPing = this.totalPing;
-            int minBandwidth = this.minBandwidth;
-            int distanceCu = this.distanceCu;
-            int length = edge.getLength();
-            if (edge.getType() == NetworkEdge.EdgeType.FIBER) {
-                totalPing += length * 0.05f;
-                minBandwidth = Math.min(minBandwidth, 10000); // 10 Gbps stable
-            } else if (edge.getType() == NetworkEdge.EdgeType.MEDIUM_FIBER) {
-                totalPing += length * 0.02f;
-                minBandwidth = Math.min(minBandwidth, 100000); // 100 Gbps
-            } else if (edge.getType() == NetworkEdge.EdgeType.BIG_FIBER) {
-                totalPing += length * 0.01f;
-                minBandwidth = Math.min(minBandwidth, 1000000); // 1000 Gbps
-            } else if (edge.getType() == NetworkEdge.EdgeType.COPPER) {
-                totalPing += length * 0.2f;
-                distanceCu += length;
-                // Copper max is 1000 Mbps, but drops by 2 Mbps per block of copper in the path
-                int currentCuBw = Math.max(10, 1000 - (distanceCu * 2));
-                minBandwidth = Math.min(minBandwidth, currentCuBw);
-            }
-            return new PathMetrics(totalPing, minBandwidth, distanceCu);
+    private PathMetrics initialMetrics(BlockPos sourcePos) {
+        NetworkNode source = nodes.get(sourcePos);
+        return new PathMetrics(0, source.getCapacityDown(), source.getCapacityUp());
+    }
+
+    private record PathMetrics(float totalPing, int minBandwidth, int minUploadBandwidth) {
+        PathMetrics append(NetworkEdge edge, NetworkNode node, int effectiveCapacity) {
+            float delayPerBlock = switch (edge.getType()) {
+                case FIBER -> 0.05f;
+                case MEDIUM_FIBER -> 0.02f;
+                case BIG_FIBER -> 0.01f;
+                case COPPER -> 0.2f;
+            };
+            return new PathMetrics(totalPing + edge.getLength() * delayPerBlock,
+                    Math.min(Math.min(minBandwidth, effectiveCapacity), node == null ? 0 : node.getCapacityDown()),
+                    Math.min(Math.min(minUploadBandwidth, effectiveCapacity), node == null ? 0 : node.getCapacityUp()));
         }
 
         PathStats stats() {
-            return new PathStats(Math.max(1, (int)(totalPing + 1.0f)), minBandwidth == Integer.MAX_VALUE ? 0 : minBandwidth);
+            return new PathStats(Math.max(1, (int)(totalPing + 1.0f)), minBandwidth, minUploadBandwidth);
         }
     }
 }

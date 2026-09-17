@@ -3,21 +3,25 @@ package com.florentdubut.telecom.network;
 import net.minecraft.core.BlockPos;
 
 public class NetworkNode {
-    private BlockPos position;
+    private final BlockPos position;
     private String ipAddress;
-    private NodeType type;
+    private final NodeType type;
     private String networkCidr; // e.g. "10.1.0.0/16" for NRO, "10.1.2.0/24" for PM
     private int currentUsageDown = 0;
     private int currentUsageUp = 0;
     private int frequenciesMask = 0;
-    private int capacityDown = 1000;
-    private int capacityUp = 1000;
+    private int capacityDown;
+    private int capacityUp;
+    private boolean capacitySyncRequired;
+
+    public boolean requiresCapacitySync() { return capacitySyncRequired; }
+    public void setCapacitySyncRequired(boolean required) { capacitySyncRequired = required; }
 
     public int getCapacityDown() { return capacityDown; }
-    public void setCapacityDown(int capacityDown) { this.capacityDown = capacityDown; }
+    public void setCapacityDown(int capacityDown) { this.capacityDown = Math.clamp(capacityDown, 0, 1_000_000); }
 
     public int getCapacityUp() { return capacityUp; }
-    public void setCapacityUp(int capacityUp) { this.capacityUp = capacityUp; }
+    public void setCapacityUp(int capacityUp) { this.capacityUp = Math.clamp(capacityUp, 0, 1_000_000); }
 
     public int getFrequenciesMask() {
         return frequenciesMask;
@@ -36,6 +40,15 @@ public class NetworkNode {
         NRA,
         PM,
         SR;
+
+        public int defaultCapacityMbps() {
+            return switch (this) {
+                case SERVER, NRO, ANTENNA -> 1_000_000;
+                case NRA, PM -> 100_000;
+                case SR -> 10_000;
+                case ROUTER, PHONE -> 1_000;
+            };
+        }
 
         /** Returns the allowed cable type(s) going TOWARD this node from a child */
         public NetworkEdge.EdgeType allowedCableFromChild() {
@@ -60,8 +73,10 @@ public class NetworkNode {
     }
 
     public NetworkNode(BlockPos position, NodeType type) {
-        this.position = position;
+        this.position = position.immutable();
         this.type = type;
+        this.capacityDown = type.defaultCapacityMbps();
+        this.capacityUp = type.defaultCapacityMbps();
         this.ipAddress = null;
     }
 

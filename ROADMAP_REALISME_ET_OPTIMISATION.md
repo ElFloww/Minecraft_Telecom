@@ -117,12 +117,15 @@ Reseau filaire -> Site A [radio FH] ~~~ liaison sans fil ~~~ [radio FH] Site B -
 
 ## 6. Utilisation du reseau
 
-- [ ] Unifier les debits montants/descendants et le partage des liens : cables, ports, antennes et interfaces doivent annoncer les memes capacites que le moteur.
-- [ ] Refaire le speedtest sur telephone et routeur : interface plus lisible, courbes de debit, progression claire des phases et bilan final avec debits moyens, pics, ping, gigue et pertes mesures par le moteur.
+- [x] Unifier les debits montants/descendants du modele filaire existant : cables, equipements, collecte des antennes, outils et dashboard utilisent les capacites appliquees par le moteur et les memes compteurs.
+- [ ] Etendre cette coherence aux futurs ports independants et au partage radio par bande, avec les lots de construction et de reseau mobile.
+- [x] Refaire l'interface du speedtest sur telephone, routeur et dashboard : compteur anime, courbes de mesures, progression des phases et bilan avec debits moyens calcules par le moteur.
+- [ ] Completer les statistiques du speedtest : pics globaux, echantillonnage du ping, gigue et pertes mesures par le moteur, au-dela du ping actuel et du maximum observe par chaque interface.
 - [x] Permettre de choisir le serveur de speedtest depuis le telephone, le routeur et le dashboard : liste des serveurs avec nom, identifiant, latence estimee et disponibilite, plus un mode automatique.
 - [x] Tester reellement vers le serveur choisi : verifier le chemin cote serveur, afficher la destination utilisee et signaler une indisponibilite sans basculer silencieusement sur un autre serveur.
 - [ ] Identifier et expliquer visuellement le maillon limitant du trajet, au-dela de sa capacite estimee et des erreurs de connexion.
-- [ ] Clarifier la duree totale du test, permettre son annulation et conserver un historique recent par appareil, sans perturber les tests simultanes sur les autres appareils.
+- [x] Clarifier la duree totale du test et conserver une courbe recente en memoire par appareil, sans perturber les tests simultanes des autres appareils.
+- [ ] Permettre l'annulation d'un test et conserver un historique de plusieurs resultats par appareil, distinct de la courbe glissante du test observe.
 - [x] Autoriser plusieurs speedtests simultanes sur des appareils distincts, avec un test par appareil, un suivi independant et le partage des liens communs.
 - [ ] Implementer SMS, contacts et numeros entre joueurs, puis appels si une integration vocale adaptee est disponible.
 - [ ] Ajouter des services internes au monde : petites pages hebergees, messagerie et transferts de fichiers virtuels, sans acces arbitraire au vrai Internet.
@@ -131,6 +134,12 @@ Reseau filaire -> Site A [radio FH] ~~~ liaison sans fil ~~~ [radio FH] Site B -
 - [ ] Ameliorer la carte : recherche d'equipements, noms, liens physiques, debits et filtres lisibles.
 
 **Lot choix du serveur :** catalogue borne a 128 entrees, parcours unique et limites de 8192 noeuds / 16384 liens. La selection reste explicite en cas d'indisponibilite, la destination est reprise dans le suivi et les resultats, et les erreurs de perte de trajet sont traduites. Protocole Minecraft 1.3 avec validation de la dimension au demarrage ; API web avec serverId optionnel. Tests moteur, codecs, handlers, interfaces et HTTP ajoutes. Les noms du catalogue sont generes a partir des coordonnees ; le renommage et la recette visuelle multijoueur restent a realiser.
+
+**Lot coherence des debits filaires :** capacites nominales/effectives centralisees, attenuation cuivre par segment, budgets DOWN/UP des equipements et budget DOWN+UP partage des liens. Allocation max-min avec redistribution, credits d'arrondi bornes et absence de famine dans les scenarios testes. Deduplication des positions physiques et separation des extremites ; outils, ecran serveur et dashboard affichent les valeurs appliquees. Cache physique par revision, plafonds de 262144 references pour la geometrie et pour les ressources des requetes d'allocation. Les refus de quota sont explicites et un test excedentaire ne supprime pas ceux deja admis.
+
+**Migration et validation du lot :** `CapacityModelVersion=1`, conservation des IP et des plafonds personnalises du nouveau modele, synchronisation differee des anciens routeurs avec leur bloc. Protocole Minecraft 1.4 ; fermeture et changement de vue proteges contre les refresh tardifs. Validation automatisee : 452 tests Java, 139 tests JavaScript et 8 GameTests reussis. La recette visuelle et les benchmarks de charge restent ouverts. La duree totale, l'annulation, l'historique et les statistiques avancees des speedtests ne sont pas inclus dans ce lot.
+
+**Lot presentation et fluctuations des speedtests :** montee en charge d'une seconde puis variations lentes de demande entre 94 et 100 % du plafond, avant allocation et uniquement pour les tests manuels. Courbes des mesures recues, moyennes des allocations par phase incluant les zeros, maintien des budgets et du partage existant. Les pauses de recalcul ne deviennent pas des mesures nulles ; les resultats manuels ne sont plus remplaces par le trafic passif. Courbes glissantes bornees a 120 points par phase et 256 appareils, duree totale explicite, gel sur donnees anciennes et progression d'echec inconnue si aucune phase n'a ete observee. Le protocole reste en 1.4. Validation : 497 tests Java, 157 tests JavaScript et 8 GameTests reussis ; recette visuelle en jeu et navigateur non effectuee.
 
 ## 7. Qualite et optimisation a maintenir
 

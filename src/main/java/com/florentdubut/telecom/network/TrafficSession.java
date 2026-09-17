@@ -25,6 +25,8 @@ public class TrafficSession {
     private int targetDownBw; // requested download bandwidth
     private int targetUpBw;   // requested upload bandwidth
     private int actualBandwidth; // actual bandwidth achieved in the last tick
+    private int measuredBandwidth;
+    private SessionState measuredPhase;
     private final String clientIp; // IP of the client (Router or Phone)
     private int pingMs;
     private int extraPing;
@@ -35,7 +37,11 @@ public class TrafficSession {
     private String failureReason = "";
 
     public TrafficSession(BlockPos sourcePos, BlockPos destPos, String clientIp, int targetDownBw, int targetUpBw, int totalTicksPerPhase, boolean isPassive, String deviceId) {
-        this.sessionId = UUID.randomUUID();
+        this(UUID.randomUUID(), sourcePos, destPos, clientIp, targetDownBw, targetUpBw, totalTicksPerPhase, isPassive, deviceId);
+    }
+
+    TrafficSession(UUID sessionId, BlockPos sourcePos, BlockPos destPos, String clientIp, int targetDownBw, int targetUpBw, int totalTicksPerPhase, boolean isPassive, String deviceId) {
+        this.sessionId = sessionId;
         this.deviceId = deviceId;
         this.sourcePos = sourcePos.immutable();
         this.destPos = destPos.immutable();
@@ -70,6 +76,7 @@ public class TrafficSession {
     public void fail() { fail(""); }
 
     public void fail(String reason) {
+        clearCurrentBandwidth();
         failureReason = reason;
         state = SessionState.FAILED;
     }
@@ -122,13 +129,58 @@ public class TrafficSession {
         return actualBandwidth;
     }
 
+    /** Last allocation sample, not the live counters cleared during a topology recalculation. */
+    public int getMeasuredBandwidth() {
+        return !isTerminal() && state == measuredPhase ? measuredBandwidth : 0;
+    }
+
+    int getRequestedBandwidth(int hardwareMax) {
+        if (state != SessionState.DOWNLOAD && state != SessionState.UPLOAD) return 0;
+        int ceiling = Math.max(0, Math.min(state == SessionState.UPLOAD ? targetUpBw : targetDownBw, hardwareMax));
+        if (isPassive || ceiling == 0) return ceiling;
+
+        // Mix both UUID halves and the phase; sampling never advances a random generator.
+        long seed = sessionId.getMostSignificantBits() ^ Long.rotateLeft(sessionId.getLeastSignificantBits(), 32)
+                ^ (state == SessionState.UPLOAD ? 0x9e3779b97f4a7c15L : 0x632be59bd9b4e019L);
+        seed = (seed ^ (seed >>> 30)) * 0xbf58476d1ce4e5b9L;
+        seed = (seed ^ (seed >>> 27)) * 0x94d049bb133111ebL;
+        seed ^= seed >>> 31;
+        double phase37 = (seed & 0xffffffffL) * 0x1.0p-32;
+        double phase83 = (seed >>> 32) * 0x1.0p-32;
+        double plateau = 0.97
+                + 0.018 * StrictMath.sin(2 * Math.PI * (ticksElapsed / 37.0 + phase37))
+                + 0.012 * StrictMath.sin(2 * Math.PI * (ticksElapsed / 83.0 + phase83));
+        double load = 0.35 + (plateau - 0.35) * Math.min(1.0, ticksElapsed / 20.0);
+        // Round up so a real 1 Mbps demand survives, but never exceed the path/target ceiling.
+        return Math.min(ceiling, (int) Math.ceil(ceiling * load));
+    }
+
+    public void clearCurrentBandwidth() {
+        actualBandwidth = 0;
+    }
+
     private int finalDownBw;
     private int finalUpBw;
+    private long downBandwidthSum;
+    private long upBandwidthSum;
+    private int downSamples;
+    private int upSamples;
 
     public void setActualBandwidth(int actualBandwidth) {
+        if (state != SessionState.DOWNLOAD && state != SessionState.UPLOAD) return;
         this.actualBandwidth = actualBandwidth;
-        if (state == SessionState.DOWNLOAD) finalDownBw = actualBandwidth;
-        else if (state == SessionState.UPLOAD) finalUpBw = actualBandwidth;
+        measuredBandwidth = actualBandwidth;
+        measuredPhase = state;
+        // Sum allocations, including zero ticks, rather than averaging rounded running means.
+        if (state == SessionState.DOWNLOAD) {
+            downBandwidthSum += actualBandwidth;
+            downSamples++;
+            finalDownBw = (int) ((downBandwidthSum + downSamples / 2) / downSamples);
+        } else {
+            upBandwidthSum += actualBandwidth;
+            upSamples++;
+            finalUpBw = (int) ((upBandwidthSum + upSamples / 2) / upSamples);
+        }
     }
 
     public int getFinalDownBw() { return finalDownBw; }
@@ -163,7 +215,10 @@ public class TrafficSession {
             switch (state) {
                 case PING -> state = SessionState.DOWNLOAD;
                 case DOWNLOAD -> state = SessionState.UPLOAD;
-                case UPLOAD -> state = SessionState.FINISHED;
+                case UPLOAD -> {
+                    state = SessionState.FINISHED;
+                    clearCurrentBandwidth();
+                }
                 default -> {}
             }
         }

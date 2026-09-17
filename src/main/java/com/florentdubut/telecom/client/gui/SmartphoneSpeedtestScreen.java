@@ -37,8 +37,7 @@ public class SmartphoneSpeedtestScreen extends Screen {
     
     public void updateSpeedtestProgress(com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload payload) {
         if (speedtestKey == null || !speedtestKey.matches(payload)) return;
-        if (!payload.errorCode().isEmpty()) speedtestError = payload.errorCode();
-        else if (currentSpeedtestData == null || !currentSpeedtestData.sessionId().equals(payload.sessionId())) speedtestError = "";
+        speedtestError = ClientSpeedtestState.get(speedtestKey).errorCode();
         restoreSpeedtest();
     }
 
@@ -47,12 +46,12 @@ public class SmartphoneSpeedtestScreen extends Screen {
         speedtestActive = state.active();
         speedtestPending = state.pending();
         currentSpeedtestData = state.pending() ? null : state.payload();
-        if (currentSpeedtestData != null && !currentSpeedtestData.errorCode().isEmpty()) speedtestError = currentSpeedtestData.errorCode();
+        if (!state.errorCode().isEmpty()) speedtestError = state.errorCode();
         lastDownBw = currentSpeedtestData == null ? 0 : currentSpeedtestData.downloadBandwidth();
         lastUpBw = currentSpeedtestData == null ? 0 : currentSpeedtestData.uploadBandwidth();
         if (startButton != null) {
             startButton.active = speedtestKey != null && !speedtestActive;
-            startButton.setMessage(Component.literal(speedtestPending ? "Waiting..." : "Start Test"));
+            startButton.setMessage(SpeedtestPanel.text(speedtestPending ? "pending" : "start"));
         }
     }
 
@@ -71,16 +70,16 @@ public class SmartphoneSpeedtestScreen extends Screen {
     protected void init() {
         super.init();
         int screenW = 220;
-        int screenH = 260;
+        int screenH = Math.min(340, this.height - 12);
         int startX = (this.width - screenW) / 2;
         int startY = (this.height - screenH) / 2;
 
-        this.addRenderableWidget(Button.builder(Component.literal("Durée: " + DURATION_LABELS[durationIndex]), b -> {
+        this.addRenderableWidget(Button.builder(SpeedtestPanel.text("duration", DURATION_LABELS[durationIndex]), b -> {
             durationIndex = (durationIndex + 1) % DURATION_TICKS.length;
-            b.setMessage(Component.literal("Durée: " + DURATION_LABELS[durationIndex]));
-        }).bounds(startX + 30, startY + 195, 100, 20).build());
+            b.setMessage(SpeedtestPanel.text("duration", DURATION_LABELS[durationIndex]));
+        }).bounds(startX + 10, startY + 55, 98, 18).build());
 
-        this.startButton = this.addRenderableWidget(Button.builder(Component.literal("Start Test"), b -> {
+        this.startButton = this.addRenderableWidget(Button.builder(SpeedtestPanel.text("start"), b -> {
             restoreSpeedtest();
             if (speedtestKey == null || this.speedtestActive) return;
             com.florentdubut.telecom.network.packet.NetworkScanResponsePayload scan = SmartphoneHUD.latestScan;
@@ -103,26 +102,27 @@ public class SmartphoneSpeedtestScreen extends Screen {
                     minecraft.player.displayClientMessage(Component.literal("No Network Signal!"), false);
                 }
             }
-        }).bounds(startX + 30, startY + 220, 100, 20).build());
+        }).bounds(startX + 112, startY + 55, 98, 18).build());
         this.addRenderableWidget(Button.builder(Component.translatable("gui.telecom.speedtest.servers"), button ->
                 minecraft.setScreen(new SpeedtestServerSelectionScreen(this, true, net.minecraft.core.BlockPos.ZERO,
                         speedtestKey, selectedServerId, option -> {
                     selectedServerId = option.id();
                     selectedServerName = option.name();
-                }))).bounds(startX + 10, startY + 177, 200, 16).build());
+                }))).bounds(startX + 10, startY + 37, 200, 16).build());
         restoreSpeedtest();
         
-        this.addRenderableWidget(Button.builder(Component.literal("< Back"), b -> {
+        this.addRenderableWidget(Button.builder(SpeedtestPanel.text("back"), b -> {
             net.minecraft.client.Minecraft.getInstance().setScreen(parentScreen);
-        }).bounds(startX + 5, startY + 20, 50, 15).build());
+        }).bounds(startX + 5, startY + 18, 50, 15).build());
     }
 
     @Override
     public void renderBackground(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
+        restoreSpeedtest();
         super.renderBackground(guiGraphics, mouseX, mouseY, partialTick);
 
         int screenW = 220;
-        int screenH = 260;
+        int screenH = Math.min(340, this.height - 12);
         int startX = (this.width - screenW) / 2;
         int startY = (this.height - screenH) / 2;
 
@@ -137,32 +137,22 @@ public class SmartphoneSpeedtestScreen extends Screen {
         if (scan != null && scan.found()) {
             guiGraphics.drawString(this.font, scan.tech(), startX + 5, startY + 4, 0xFFFFFFFF);
         } else {
-            guiGraphics.drawString(this.font, "No Service", startX + 5, startY + 4, 0xFFFF5555);
+            guiGraphics.drawString(this.font, SpeedtestPanel.text("no_signal"), startX + 5, startY + 4, 0xFFFF5555);
         }
 
-        guiGraphics.drawCenteredString(this.font, "SPEEDTEST", startX + screenW / 2, startY + 45, 0xFFFFFFFF);
+        guiGraphics.drawCenteredString(this.font, "SPEEDTEST", startX + 135, startY + 21, 0xFFFFFFFF);
         guiGraphics.drawString(font, font.plainSubstrByWidth(Component.translatable("gui.telecom.speedtest.selected",
-                SpeedtestServerSelectionScreen.destination(selectedServerId, selectedServerName)).getString(), 200), startX + 10, startY + 144, 0xFFCCCCCC);
+                SpeedtestServerSelectionScreen.destination(selectedServerId, selectedServerName)).getString(), 200), startX + 10, startY + 77, 0xFFCCCCCC);
         if (currentSpeedtestData != null && !"REJECTED".equals(currentSpeedtestData.state()) && !currentSpeedtestData.serverId().isEmpty()) {
             guiGraphics.drawString(font, font.plainSubstrByWidth(Component.translatable("gui.telecom.speedtest.used",
                     SpeedtestServerSelectionScreen.destination(currentSpeedtestData.serverId(), currentSpeedtestData.serverName())).getString(), 200),
-                    startX + 10, startY + 155, 0xFF99DD99);
+                    startX + 10, startY + 88, 0xFF99DD99);
         }
         if (!speedtestError.isEmpty()) guiGraphics.drawString(font, font.plainSubstrByWidth(
-                SpeedtestServerSelectionScreen.error(speedtestError).getString(), 200), startX + 10, startY + 166, 0xFFFF8888);
-        
-        if (speedtestPending) {
-            guiGraphics.drawCenteredString(this.font, "Waiting...", startX + screenW / 2, startY + 70, 0xFFAAAAAA);
-        } else if (currentSpeedtestData != null) {
-            String state = currentSpeedtestData.state();
-            int color = speedtestActive ? 0xFFAAAAAA : "FINISHED".equals(state) ? 0xFF00FF00 : 0xFFFF5555;
-            guiGraphics.drawCenteredString(this.font, speedtestActive ? "Testing: " + state : state, startX + screenW / 2, startY + 70, color);
-            
-            guiGraphics.drawString(this.font, "Ping: " + currentSpeedtestData.pingMs() + " ms", startX + 20, startY + 90, 0xFF00FF00);
-            
-            guiGraphics.drawString(this.font, "Down: " + this.lastDownBw + " Mbps", startX + 20, startY + 110, 0xFF00FFFF);
-            guiGraphics.drawString(this.font, "Up: " + this.lastUpBw + " Mbps", startX + 20, startY + 130, 0xFFFF8800);
-        }
+                SpeedtestServerSelectionScreen.error(speedtestError).getString(), 200), startX + 10, startY + 99, 0xFFFF8888);
+
+        SpeedtestPanel.render(guiGraphics, font, startX + 10, startY + 110, 200, screenH - 118,
+                ClientSpeedtestState.get(speedtestKey), 0, 0, 0, DURATION_TICKS[durationIndex], System.nanoTime());
     }
 
     @Override

@@ -9,6 +9,8 @@ import com.florentdubut.telecom.network.packet.RequestCoverageTilePayload;
 import com.florentdubut.telecom.network.packet.CoverageTilePayload;
 import com.florentdubut.telecom.network.packet.RequestSpeedtestServersPayload;
 import com.florentdubut.telecom.network.packet.SpeedtestServersPayload;
+import com.florentdubut.telecom.network.packet.RequestServerRefreshPayload;
+import com.florentdubut.telecom.network.packet.ServerGuiSyncPayload;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -24,7 +26,7 @@ import net.neoforged.neoforge.network.PacketDistributor;
 public class ModNetworking {
 
     private enum RequestCategory {
-        ANTENNA_CONFIG, GUI_REFRESH, ANTENNA_REFRESH, TOOL_REFRESH, MAP, COVERAGE, SPEEDTEST, SPEEDTEST_SERVERS, NPERF, SCAN
+        ANTENNA_CONFIG, GUI_REFRESH, SERVER_REFRESH, ANTENNA_REFRESH, TOOL_REFRESH, MAP, COVERAGE, SPEEDTEST, SPEEDTEST_SERVERS, NPERF, SCAN
     }
 
     // Server-thread only. Values never retain players; each player has a fixed-size table.
@@ -54,7 +56,10 @@ public class ModNetworking {
 
     @SubscribeEvent
     public static void register(final RegisterPayloadHandlersEvent event) {
-        final PayloadRegistrar registrar = event.registrar("1.3");
+        final PayloadRegistrar registrar = event.registrar("1.4");
+
+        registrar.playToServer(RequestServerRefreshPayload.TYPE, RequestServerRefreshPayload.STREAM_CODEC,
+                ModNetworking::handleServerRefreshRequest);
 
         registrar.playToServer(RequestSpeedtestServersPayload.TYPE, RequestSpeedtestServersPayload.STREAM_CODEC,
                 ModNetworking::handleRequestSpeedtestServers);
@@ -316,13 +321,81 @@ public class ModNetworking {
     }
 
     private static void handleServerGuiSync(final com.florentdubut.telecom.network.packet.ServerGuiSyncPayload payload, final IPayloadContext context) {
+        net.minecraft.network.Connection connection = context.connection();
+        var receivedLevel = net.minecraft.client.Minecraft.getInstance().level;
         context.enqueueWork(() -> {
-            net.minecraft.client.gui.screens.Screen current = net.minecraft.client.Minecraft.getInstance().screen;
-            if (current instanceof com.florentdubut.telecom.client.gui.ServerScreen ss) {
-                ss.updatePayload(payload);
-            } else {
-                net.minecraft.client.Minecraft.getInstance().setScreen(new com.florentdubut.telecom.client.gui.ServerScreen(payload));
+            var minecraft = net.minecraft.client.Minecraft.getInstance();
+            if (minecraft.getConnection() == null || minecraft.getConnection().getConnection() != connection
+                    || minecraft.level == null || minecraft.level != receivedLevel
+                    || !minecraft.level.dimension().identifier().toString().equals(payload.dimension())) return;
+            if (payload.open()) {
+                if (payload.valid()) minecraft.setScreen(new com.florentdubut.telecom.client.gui.ServerScreen(payload));
+            } else if (minecraft.screen instanceof com.florentdubut.telecom.client.gui.ServerScreen screen
+                    && screen.matchesView(connection, payload)) {
+                if (payload.valid()) screen.updatePayload(payload);
+                else minecraft.setScreen(null);
             }
+        });
+    }
+
+    public static ServerGuiSyncPayload createServerSnapshot(ServerPlayer player, BlockPos pos, java.util.UUID viewId, boolean open) {
+        ServerLevel level = player.level();
+        String dimension = level.dimension().identifier().toString();
+        if (!isLoaded(level, pos) || !(level.getBlockEntity(pos) instanceof com.florentdubut.telecom.block.entity.ServerBlockEntity)) {
+            return ServerGuiSyncPayload.unavailable(viewId, dimension, pos, open);
+        }
+        int phones = 0;
+        for (ServerPlayer online : level.getServer().getPlayerList().getPlayers()) {
+            if (hasSmartphone(online)) phones++;
+        }
+        return createServerSnapshot(TelecomNetworkGraph.get(level), pos, viewId, dimension, open, phones);
+    }
+
+    public static ServerGuiSyncPayload createServerSnapshot(
+            TelecomNetworkGraph graph, BlockPos pos, java.util.UUID viewId, String dimension, boolean open, int phones) {
+        NetworkNode node = graph.getNode(pos);
+        if (node == null || node.getType() != NetworkNode.NodeType.SERVER) return ServerGuiSyncPayload.unavailable(viewId, dimension, pos, open);
+        var nodes = new java.util.HashMap<BlockPos, NetworkNode>();
+        for (NetworkNode candidate : graph.getNodes()) nodes.put(candidate.getPosition(), candidate);
+        var adjacency = new java.util.HashMap<BlockPos, java.util.List<BlockPos>>();
+        for (NetworkEdge edge : graph.getEdges()) {
+            if (!nodes.containsKey(edge.getNodeA()) || !nodes.containsKey(edge.getNodeB())) continue;
+            adjacency.computeIfAbsent(edge.getNodeA(), ignored -> new java.util.ArrayList<>()).add(edge.getNodeB());
+            adjacency.computeIfAbsent(edge.getNodeB(), ignored -> new java.util.ArrayList<>()).add(edge.getNodeA());
+        }
+        // One topological traversal, not one physical path calculation per device.
+        var visited = new java.util.HashSet<BlockPos>();
+        var queue = new java.util.ArrayDeque<BlockPos>();
+        visited.add(pos);
+        queue.add(pos);
+        int routers = 0;
+        int antennas = 0;
+        while (!queue.isEmpty()) {
+            BlockPos current = queue.removeFirst();
+            NetworkNode candidate = nodes.get(current);
+            if (candidate != null) {
+                if (candidate.getType() == NetworkNode.NodeType.ROUTER) routers++;
+                if (candidate.getType() == NetworkNode.NodeType.ANTENNA) antennas++;
+            }
+            for (BlockPos neighbor : adjacency.getOrDefault(current, java.util.List.of())) {
+                if (visited.add(neighbor)) queue.addLast(neighbor);
+            }
+        }
+        return new ServerGuiSyncPayload(viewId, dimension, open, true, pos, routers, antennas, phones,
+                node.getCurrentUsageDown(), node.getCurrentUsageUp(), node.getCapacityDown(), node.getCapacityUp());
+    }
+
+    private static void handleServerRefreshRequest(RequestServerRefreshPayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> {
+            if (!(context.player() instanceof ServerPlayer player)
+                    || !acceptRequest(player, RequestCategory.SERVER_REFRESH, 250)) return;
+            ServerLevel level = player.level();
+            if (!level.dimension().identifier().toString().equals(payload.dimension())
+                    || !player.isWithinBlockInteractionRange(payload.pos(), 0)) {
+                context.reply(ServerGuiSyncPayload.unavailable(payload.viewId(), payload.dimension(), payload.pos(), false));
+                return;
+            }
+            context.reply(createServerSnapshot(player, payload.pos(), payload.viewId(), false));
         });
     }
 
@@ -333,6 +406,7 @@ public class ModNetworking {
                     && isLoaded(player.level(), payload.pos())
                     && player.isWithinBlockInteractionRange(payload.pos(), 0)) {
                 net.minecraft.world.level.block.state.BlockState state = player.level().getBlockState(payload.pos());
+                if (state.getBlock() instanceof com.florentdubut.telecom.block.ServerBlock) return;
                 net.minecraft.world.phys.BlockHitResult hitResult = new net.minecraft.world.phys.BlockHitResult(
                     net.minecraft.world.phys.Vec3.atCenterOf(payload.pos()), 
                     net.minecraft.core.Direction.UP, 
@@ -356,49 +430,33 @@ public class ModNetworking {
             if (context.player() instanceof ServerPlayer player
                     && acceptRequest(player, RequestCategory.TOOL_REFRESH, 250)
                     && isLoaded(player.level(), payload.clickedPos())) {
-                com.florentdubut.telecom.network.TelecomNetworkGraph graph = com.florentdubut.telecom.network.TelecomNetworkGraph.get(player.level());
-                net.minecraft.core.BlockPos clickedPos = payload.clickedPos();
-                
-                // First check if it's a node
-                com.florentdubut.telecom.network.NetworkNode clickedNode = graph.getNode(clickedPos);
-                if (clickedNode != null) {
-                    int usageDown = clickedNode.getCurrentUsageDown();
-                    int usageUp = clickedNode.getCurrentUsageUp();
-                    int maxBandwidth = 0;
-                    for (com.florentdubut.telecom.network.NetworkEdge edge : graph.getEdges()) {
-                        if (edge.getNodeA().equals(clickedPos) || edge.getNodeB().equals(clickedPos)) {
-                            maxBandwidth = Math.max(maxBandwidth, edge.getBandwidthMax());
-                        }
-                    }
-                    String typeStr = "Network Node (" + clickedNode.getType().name() + ")";
-                    net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(
-                        player,
-                        new com.florentdubut.telecom.network.packet.NetworkToolSyncPayload(clickedPos, typeStr, 0, maxBandwidth == 0 ? 1000 : maxBandwidth, usageDown, usageUp)
-                    );
-                    return;
-                }
-                
-                // Find the edge containing this block
-                for (com.florentdubut.telecom.network.NetworkEdge edge : graph.getEdges()) {
-                    if (edge.getPathBlocks() != null && edge.getPathBlocks().contains(clickedPos)) {
-                        String typeStr = "Unknown";
-                        if (edge.getType() == com.florentdubut.telecom.network.NetworkEdge.EdgeType.BIG_FIBER) typeStr = "Big Fiber Optic";
-                        else if (edge.getType() == com.florentdubut.telecom.network.NetworkEdge.EdgeType.MEDIUM_FIBER) typeStr = "Medium Fiber Optic";
-                        else if (edge.getType() == com.florentdubut.telecom.network.NetworkEdge.EdgeType.FIBER) typeStr = "Fiber Optic";
-                        else if (edge.getType() == com.florentdubut.telecom.network.NetworkEdge.EdgeType.COPPER) typeStr = "Copper ADSL";
-                        
-                        int usageDown = graph.getActualBlockUsageDown(clickedPos);
-                        int usageUp = graph.getActualBlockUsageUp(clickedPos);
-                        
-                        net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(
-                            player,
-                            new com.florentdubut.telecom.network.packet.NetworkToolSyncPayload(clickedPos, typeStr, edge.getLength(), edge.getBandwidthMax(), usageDown, usageUp)
-                        );
-                        return;
-                    }
-                }
+                var snapshot = createNetworkToolSnapshot(TelecomNetworkGraph.get(player.level()), payload.clickedPos());
+                if (snapshot != null) PacketDistributor.sendToPlayer(player, snapshot);
             }
         });
+    }
+
+    public static com.florentdubut.telecom.network.packet.NetworkToolSyncPayload createNetworkToolSnapshot(
+            TelecomNetworkGraph graph, BlockPos pos) {
+        NetworkNode node = graph.getNode(pos);
+        if (node != null) {
+            return new com.florentdubut.telecom.network.packet.NetworkToolSyncPayload(pos,
+                    "gui.telecom.tool.node." + node.getType().name().toLowerCase(java.util.Locale.ROOT), 0,
+                    node.getCapacityDown(), node.getCapacityUp(), node.getCurrentUsageDown(), node.getCurrentUsageUp(),
+                    com.florentdubut.telecom.network.packet.NetworkToolSyncPayload.CapacityMode.DIRECTIONAL);
+        }
+        // Metadata describes the limiting link; capacity and usage belong to the physical cable block.
+        NetworkEdge edge = graph.getEdges().stream()
+                .filter(candidate -> candidate.getPathBlocks() != null && candidate.getPathBlocks().contains(pos))
+                .min(java.util.Comparator.comparingInt(NetworkEdge::getEffectiveBandwidthMbps)
+                        .thenComparingInt(NetworkEdge::getLength).thenComparing(candidate -> candidate.getType().name()))
+                .orElse(null);
+        if (edge == null) return null;
+        int capacity = graph.getActualBlockCapacityMbps(pos);
+        return new com.florentdubut.telecom.network.packet.NetworkToolSyncPayload(pos,
+                "gui.telecom.tool.edge." + edge.getType().name().toLowerCase(java.util.Locale.ROOT), edge.getLength(),
+                capacity, capacity, graph.getActualBlockUsageDown(pos), graph.getActualBlockUsageUp(pos),
+                com.florentdubut.telecom.network.packet.NetworkToolSyncPayload.CapacityMode.SHARED);
     }
 
     private static void handleNetworkToolSync(com.florentdubut.telecom.network.packet.NetworkToolSyncPayload payload, IPayloadContext context) {
@@ -588,8 +646,8 @@ public class ModNetworking {
                     sendSpeedtestState(player, null, deviceId, "", payload.serverId(), "invalid_request");
                     return;
                 }
-                int maxDown = router.getConfiguredMaxDown();
-                int maxUp = router.getConfiguredMaxUp();
+                int maxDown = source.getCapacityDown();
+                int maxUp = source.getCapacityUp();
                 var result = graph.startSpeedtest(source.getPosition(), source.getIpAddress(), maxDown, maxUp, 0, 0,
                     payload.durationTicks(), false, player, payload.serverId());
                 sendSpeedtestState(player, result.session(), deviceId, source.getIpAddress(), payload.serverId(), result.error());
@@ -623,7 +681,7 @@ public class ModNetworking {
         boolean rejected = session == null || session.isPassive();
         PacketDistributor.sendToPlayer(player, new com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload(
                 ip == null ? "" : ip, rejected ? "REJECTED" : session.getState().name(),
-                rejected ? 0 : session.getPingMs(), rejected || session.isTerminal() ? 0 : session.getActualBandwidth(),
+                rejected ? 0 : session.getPingMs(), rejected ? 0 : session.getMeasuredBandwidth(),
                 rejected ? 0 : session.getTicksElapsed(), rejected ? 0 : session.getTotalTicksPerPhase(),
                 player.level().dimension().identifier().toString(), deviceId,
                 rejected ? new java.util.UUID(0, 0) : session.getSessionId(),
@@ -648,12 +706,8 @@ public class ModNetworking {
     }
 
     private static void handleServerBandwidthUpdate(final com.florentdubut.telecom.network.packet.ServerBandwidthUpdatePayload payload, final IPayloadContext context) {
-        context.enqueueWork(() -> {
-            net.minecraft.client.gui.screens.Screen screen = net.minecraft.client.Minecraft.getInstance().screen;
-            if (screen instanceof com.florentdubut.telecom.client.gui.ServerScreen serverScreen) {
-                serverScreen.updateBandwidth(payload.totalBandwidthDown(), payload.totalBandwidthUp());
-            }
-        });
+        // Global traffic is not the utilization of the server being inspected.
+        // ServerScreen refreshes its own node snapshot instead.
     }
 
     private static void handleRequestCoverageTile(RequestCoverageTilePayload payload, IPayloadContext context) {

@@ -28,6 +28,9 @@ class SpeedtestServerSelectionTest {
     void setup() {
         graph = new TelecomNetworkGraph();
         graph.addNode(new NetworkNode(SOURCE, NetworkNode.NodeType.ROUTER));
+        // Keep server selection independent of the default router bottleneck.
+        graph.getNode(SOURCE).setCapacityDown(10_000);
+        graph.getNode(SOURCE).setCapacityUp(10_000);
         server(SLOW, 200);
         server(FAST, 20);
         graph.addNode(new NetworkNode(UNREACHABLE, NetworkNode.NodeType.SERVER));
@@ -185,7 +188,7 @@ class SpeedtestServerSelectionTest {
 
     private void server(BlockPos pos, int length) {
         graph.addNode(new NetworkNode(pos, NetworkNode.NodeType.SERVER));
-        graph.addEdge(new NetworkEdge(SOURCE, pos, 1000, length, NetworkEdge.EdgeType.FIBER, List.of()));
+        graph.addEdge(new NetworkEdge(SOURCE, pos, 10_000, length, NetworkEdge.EdgeType.FIBER, List.of()));
     }
 
     private TelecomNetworkGraph.SpeedtestStartResult start(BlockPos source, String selection, boolean passive) {
