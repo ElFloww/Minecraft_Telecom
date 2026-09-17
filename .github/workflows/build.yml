@@ -36,11 +36,6 @@ jobs:
 
       - name: Build with Gradle
         run: ./gradlew build
-        env:
-          TELECOM_HTTP_TOKEN: ci-telecom-test-token
-
-      - name: Test HTTP without credentials
-        run: ./gradlew test --rerun --tests '*TelecomHttpServerTest'
 
       - name: Run world integration tests
         run: ./gradlew runGameTestServer

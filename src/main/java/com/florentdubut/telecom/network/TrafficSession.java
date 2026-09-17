@@ -9,10 +9,13 @@ public class TrafficSession {
         PING,
         DOWNLOAD,
         UPLOAD,
-        FINISHED
+        FINISHED,
+        FAILED,
+        REJECTED
     }
 
     private final UUID sessionId;
+    private final String deviceId;
     private UUID ownerId;
     private final BlockPos sourcePos;
     private final BlockPos destPos;
@@ -30,10 +33,11 @@ public class TrafficSession {
     private BlockPos antennaPos = null;
     private int frequenciesMask = 0;
 
-    public TrafficSession(BlockPos sourcePos, BlockPos destPos, String clientIp, int targetDownBw, int targetUpBw, int totalTicksPerPhase, boolean isPassive) {
+    public TrafficSession(BlockPos sourcePos, BlockPos destPos, String clientIp, int targetDownBw, int targetUpBw, int totalTicksPerPhase, boolean isPassive, String deviceId) {
         this.sessionId = UUID.randomUUID();
-        this.sourcePos = sourcePos;
-        this.destPos = destPos;
+        this.deviceId = deviceId;
+        this.sourcePos = sourcePos.immutable();
+        this.destPos = destPos.immutable();
         this.state = SessionState.PING;
         this.ticksElapsed = 0;
         this.targetDownBw = targetDownBw;
@@ -52,6 +56,20 @@ public class TrafficSession {
 
     public UUID getSessionId() {
         return sessionId;
+    }
+
+    public static String routerDeviceId(BlockPos pos) { return "router:" + pos.asLong(); }
+
+    public static String mobileDeviceId(UUID owner) { return "mobile:" + owner; }
+
+    public String getDeviceId() { return deviceId; }
+
+    public boolean isRouter() { return deviceId.startsWith("router:"); }
+
+    public void fail() { state = SessionState.FAILED; }
+
+    public boolean isTerminal() {
+        return state == SessionState.FINISHED || state == SessionState.FAILED || state == SessionState.REJECTED;
     }
 
     public UUID getOwnerId() { return ownerId; }
@@ -123,6 +141,7 @@ public class TrafficSession {
     }
 
     public void tick() {
+        if (isTerminal()) return;
         ticksElapsed++;
         int maxTicks = state == SessionState.PING ? Math.min(totalTicksPerPhase, 60) : totalTicksPerPhase;
         if (ticksElapsed >= maxTicks) {

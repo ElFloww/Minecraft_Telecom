@@ -6,10 +6,25 @@ import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.client.event.RegisterGuiLayersEvent;
+import net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent;
 import net.minecraft.resources.Identifier;
 
 @EventBusSubscriber(modid = TelecomMod.MODID, value = Dist.CLIENT)
 public class ClientEvents {
+
+    @SubscribeEvent
+    public static void onLogin(ClientPlayerNetworkEvent.LoggingIn event) {
+        ClientSpeedtestState.connected(event.getConnection());
+        SmartphoneHUD.latestScan = null;
+        SmartphoneHUD.lastScanTime = 0;
+    }
+
+    @SubscribeEvent
+    public static void onLogout(ClientPlayerNetworkEvent.LoggingOut event) {
+        ClientSpeedtestState.clear();
+        SmartphoneHUD.latestScan = null;
+        SmartphoneHUD.lastScanTime = 0;
+    }
 
     @SubscribeEvent
     public static void onRegisterGuiLayers(RegisterGuiLayersEvent event) {

@@ -8,6 +8,7 @@ import net.minecraft.nbt.ListTag;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.saveddata.SavedData;
 import net.minecraft.world.level.saveddata.SavedDataType;
+import com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.ArrayList;
@@ -288,32 +289,37 @@ public class TelecomNetworkGraph extends SavedData {
     }
 
     private final List<TrafficSession> activeSessions = new ArrayList<>();
+    private record CompletedSpeedtest(TrafficSession session, SpeedtestUpdatePayload update) {}
+
+    private final Map<String, CompletedSpeedtest> lastResults = new java.util.LinkedHashMap<>() {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, CompletedSpeedtest> eldest) {
+            return size() > 256;
+        }
+    };
     private int totalBandwidthUp = 0;
     private int totalBandwidthDown = 0;
 
     public void startSpeedtest(BlockPos sourcePos, String clientIp, int targetDownBw, int targetUpBw, int extraPing, int frequenciesMask, int durationTicks, boolean isPassive, @org.jetbrains.annotations.Nullable net.minecraft.server.level.ServerPlayer player) {
+        NetworkNode source = nodes.get(sourcePos);
+        String deviceId = source != null && source.getType() == NetworkNode.NodeType.ROUTER
+                ? TrafficSession.routerDeviceId(sourcePos)
+                : player != null ? TrafficSession.mobileDeviceId(player.getUUID()) : "mobile-ip:" + clientIp;
         if (!nodes.containsKey(sourcePos) || clientIp == null || clientIp.isBlank() || clientIp.length() > 45
                 || targetDownBw < 1 || targetDownBw > 1_000_000 || targetUpBw < 1 || targetUpBw > 1_000_000
                 || extraPing < 0 || extraPing > 60_000 || durationTicks < 1 || durationTicks > 12_000
-                || (frequenciesMask & ~((1 << TelecomFrequency.values().length) - 1)) != 0
-                || activeSessions.size() >= 256) {
-            if (player != null) player.sendSystemMessage(net.minecraft.network.chat.Component.literal("Speedtest rejected: invalid request or session limit reached."));
+                || (frequenciesMask & ~((1 << TelecomFrequency.values().length) - 1)) != 0) {
+            rejectSpeedtest(player, isPassive, clientIp, deviceId, "Speedtest rejected: invalid request.");
             return;
         }
-        if (player != null && activeSessions.stream().anyMatch(s -> player.getUUID().equals(s.getOwnerId()))) {
-            player.sendSystemMessage(net.minecraft.network.chat.Component.literal("You already have an active speedtest."));
+        TrafficSession existing = getSessionByDeviceId(deviceId);
+        if (existing != null && (isPassive || !existing.isPassive())) {
+            rejectSpeedtest(player, isPassive, clientIp, deviceId, "A speedtest is already running on this device.");
             return;
         }
-        TrafficSession existing = getSessionByIp(clientIp);
-        if (existing != null) {
-            if (!isPassive && existing.isPassive()) {
-                activeSessions.remove(existing); // Kill passive session to prioritize manual test
-            } else if (!isPassive) {
-                if (player != null) player.sendSystemMessage(net.minecraft.network.chat.Component.literal("A speedtest is already running on this IP."));
-                return;
-            } else {
-                return; // Prevent multiple speedtests
-            }
+        if (existing == null && activeSessions.size() >= 256) {
+            rejectSpeedtest(player, isPassive, clientIp, deviceId, "Speedtest rejected: session limit reached.");
+            return;
         }
         
         // Find the best server to connect to
@@ -333,16 +339,55 @@ public class TelecomNetworkGraph extends SavedData {
         }
         
         if (bestServer != null && bestStats != null) {
-            TrafficSession session = new TrafficSession(sourcePos, bestServer.getPosition(), clientIp, targetDownBw, targetUpBw, durationTicks, isPassive);
+            if (existing != null) activeSessions.remove(existing);
+            TrafficSession session = new TrafficSession(sourcePos, bestServer.getPosition(), clientIp, targetDownBw, targetUpBw, durationTicks, isPassive, deviceId);
             if (player != null) session.setOwnerId(player.getUUID());
             session.setExtraPing(extraPing);
-            session.setPingMs(bestStats.pingMs());
+            session.setPingMs(bestStats.pingMs() + extraPing);
             session.setAntennaPos(sourcePos); // Used by mobile sessions to map back to antenna
             session.setFrequenciesMask(frequenciesMask);
             activeSessions.add(session);
-        } else if (!isPassive && player != null) {
-            player.sendSystemMessage(net.minecraft.network.chat.Component.literal("Failed to start Speedtest: No complete path to a Server or NRO was found."));
+        } else {
+            rejectSpeedtest(player, isPassive, clientIp, deviceId, "Failed to start Speedtest: No complete path to a Server or NRO was found.");
         }
+    }
+
+    private void rejectSpeedtest(net.minecraft.server.level.ServerPlayer player, boolean passive, String ip, String deviceId, String message) {
+        if (player == null || passive) return;
+        player.sendSystemMessage(net.minecraft.network.chat.Component.literal(message));
+        net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(player, new SpeedtestUpdatePayload(
+                ip == null ? "" : ip.substring(0, Math.min(ip.length(), 45)), "REJECTED", 0, 0, 0, 0,
+                player.level().dimension().identifier().toString(), deviceId.substring(0, Math.min(deviceId.length(), 128)),
+                new java.util.UUID(0, 0), 0, 0));
+    }
+
+    private void sendSessionUpdate(ServerLevel level, TrafficSession session) {
+        SpeedtestUpdatePayload update = new SpeedtestUpdatePayload(
+                session.getClientIp(), session.getState().name(), session.getPingMs(),
+                session.isTerminal() ? 0 : session.getActualBandwidth(), session.getTicksElapsed(), session.getTotalTicksPerPhase(),
+                level.dimension().identifier().toString(), session.getDeviceId(), session.getSessionId(),
+                session.getFinalDownBw(), session.getFinalUpBw());
+        if (!session.isPassive() && session.isTerminal()) {
+            lastResults.remove(session.getDeviceId());
+            lastResults.put(session.getDeviceId(), new CompletedSpeedtest(session, update));
+        }
+        if (!session.isPassive() && session.getOwnerId() != null) {
+            var owner = level.getServer().getPlayerList().getPlayer(session.getOwnerId());
+            if (owner != null) net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(owner, update);
+        }
+    }
+
+    public SpeedtestUpdatePayload getLastResultByDeviceId(String deviceId) {
+        CompletedSpeedtest result = lastResults.get(deviceId);
+        return result == null ? null : result.update();
+    }
+
+    /** Display only manual speedtests, preferring active over completed or failed sessions. */
+    public TrafficSession getLatestSessionByDeviceId(String deviceId) {
+        TrafficSession active = getSessionByDeviceId(deviceId);
+        if (active != null && !active.isPassive()) return active;
+        CompletedSpeedtest result = lastResults.get(deviceId);
+        return result == null ? null : result.session();
     }
 
     private void tickPassiveTraffic(ServerLevel level) {
@@ -352,13 +397,7 @@ public class TelecomNetworkGraph extends SavedData {
                 if (node.getType() == NetworkNode.NodeType.ROUTER) {
                     // Reduced probability to 0.5% (was 1%)
                     if (Math.random() < 0.005) {
-                        boolean hasSession = false;
-                        for (TrafficSession s : activeSessions) {
-                            if (s.getSourcePos().equals(node.getPosition())) {
-                                hasSession = true;
-                                break;
-                            }
-                        }
+                        boolean hasSession = getSessionByDeviceId(TrafficSession.routerDeviceId(node.getPosition())) != null;
                         if (!hasSession) {
                             // Reduced bandwidth consumption significantly
                             int randDown = 1 + (int)(Math.random() * 200); // 1 to 200 Mbps (was 10-2000)
@@ -405,18 +444,12 @@ public class TelecomNetworkGraph extends SavedData {
                 
                 if (bestAntenna != null && bestFreq != null) {
                     final String finalBestIp = bestIp;
-                    boolean hasSession = activeSessions.stream().anyMatch(s -> finalBestIp.equals(s.getClientIp()));
+                    boolean hasSession = getSessionByDeviceId(TrafficSession.mobileDeviceId(player.getUUID())) != null;
                     if (!hasSession) {
                         int randDown = 1 + (int)(Math.random() * 20);
                         int randUp = 1 + (int)(Math.random() * 5);
                         int extraPing = 20 + (int)(Math.random() * 50);
-                        startSpeedtest(bestAntenna.getBlockPos(), finalBestIp, randDown, randUp, extraPing, (1 << bestFreq.ordinal()), 100, true, null);
-                        // Tag the newly created session with antenna and frequency
-                        TrafficSession newSession = getSessionByIp(finalBestIp);
-                        if (newSession != null) {
-                            newSession.setAntennaPos(bestAntenna.getBlockPos());
-                            newSession.setFrequenciesMask(1 << bestFreq.ordinal());
-                        }
+                        startSpeedtest(bestAntenna.getBlockPos(), finalBestIp, randDown, randUp, extraPing, (1 << bestFreq.ordinal()), 100, true, player);
                     }
                 }
             }
@@ -456,41 +489,38 @@ public class TelecomNetworkGraph extends SavedData {
         Map<BlockPos, Integer> blockCapacity = new HashMap<>();
 
         for (TrafficSession session : activeSessions) {
-            if (session.getOwnerId() != null && level.getPlayerByUUID(session.getOwnerId()) == null) {
+            if (!session.isRouter() && session.getOwnerId() != null
+                    && level.getServer().getPlayerList().getPlayer(session.getOwnerId()) == null) {
+                session.fail();
+                sendSessionUpdate(level, session);
                 toRemove.add(session);
                 continue;
             }
+            PathStats stats = calculatePathStats(session.getSourcePos(), session.getDestPos());
+            if (stats == null) {
+                session.fail();
+                sendSessionUpdate(level, session);
+                toRemove.add(session);
+                continue;
+            }
+            session.setPingMs(stats.pingMs() + session.getExtraPing());
             session.tick();
             
             if (session.getState() == TrafficSession.SessionState.FINISHED) {
                 toRemove.add(session);
-                // Broadcast finished state
-                if (!session.isPassive()) {
-                    com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload update = new com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload(
-                        session.getClientIp(), "FINISHED", session.getPingMs(), 0, session.getTicksElapsed(), session.getTotalTicksPerPhase());
-                    if (session.getOwnerId() != null && level.getPlayerByUUID(session.getOwnerId()) instanceof net.minecraft.server.level.ServerPlayer owner) {
-                        net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(owner, update);
-                    }
-                }
+                sendSessionUpdate(level, session);
                 
                 // Save results to RouterBlockEntity if applicable
-                NetworkNode node = getNodeByIp(session.getClientIp());
-                if (node != null && node.getType() == NetworkNode.NodeType.ROUTER) {
-                    net.minecraft.world.level.block.entity.BlockEntity be = level.getBlockEntity(node.getPosition());
+                NetworkNode node = nodes.get(session.getSourcePos());
+                if (session.isRouter() && node != null && node.getType() == NetworkNode.NodeType.ROUTER
+                        && level.hasChunkAt(session.getSourcePos())) {
+                    net.minecraft.world.level.block.entity.BlockEntity be = level.getBlockEntity(session.getSourcePos());
                     if (be instanceof com.florentdubut.telecom.block.entity.RouterBlockEntity router) {
                         router.setLastSpeedtestResults(session.getFinalDownBw(), session.getFinalUpBw(), session.getPingMs());
                     }
                 }
                 continue;
             }
-            
-            PathStats stats = calculatePathStats(session.getSourcePos(), session.getDestPos());
-            if (stats == null) {
-                toRemove.add(session); // Path broken
-                continue;
-            }
-            
-            session.setPingMs(stats.pingMs() + session.getExtraPing());
             
             if (session.getState() == TrafficSession.SessionState.DOWNLOAD || session.getState() == TrafficSession.SessionState.UPLOAD) {
                 int hardwareMax = stats.bandwidthMbps();
@@ -504,26 +534,12 @@ public class TelecomNetworkGraph extends SavedData {
                         edge.setCurrentUsage(edge.getCurrentUsage() + requested);
                         for (BlockPos pos : edge.getPathBlocks()) {
                             blockUsage.put(pos, blockUsage.getOrDefault(pos, 0) + requested);
-                            blockCapacity.put(pos, edge.getBandwidthMax());
+                            blockCapacity.merge(pos, edge.getBandwidthMax(), Math::min);
                         }
                     }
                 }
             }
             
-            // Broadcast state
-            if (!session.isPassive() && session.getTicksElapsed() % 2 == 0) { // Every 2 ticks to reduce spam
-                int displayPing = session.getPingMs();
-                if (session.getState() != TrafficSession.SessionState.FINISHED) {
-                    displayPing += (int)(Math.random() * 5) - 2; // -2 to +2 ms fluctuation
-                    if (displayPing < 1) displayPing = 1;
-                }
-                
-                com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload update = new com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload(
-                    session.getClientIp(), session.getState().name(), displayPing, session.getActualBandwidth(), session.getTicksElapsed(), session.getTotalTicksPerPhase());
-                if (session.getOwnerId() != null && level.getPlayerByUUID(session.getOwnerId()) instanceof net.minecraft.server.level.ServerPlayer owner) {
-                    net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(owner, update);
-                }
-            }
         }
         
         // Phase 2: Compute actual bandwidth considering congestion per physical block
@@ -534,6 +550,10 @@ public class TelecomNetworkGraph extends SavedData {
             
             float minRatio = 1.0f;
             for (NetworkEdge edge : path) {
+                // Logical links still share capacity when no physical path blocks were recorded.
+                if (edge.getCurrentUsage() > edge.getBandwidthMax()) {
+                    minRatio = Math.min(minRatio, (float) edge.getBandwidthMax() / edge.getCurrentUsage());
+                }
                 for (BlockPos pos : edge.getPathBlocks()) {
                     int usage = blockUsage.getOrDefault(pos, 0);
                     int cap = blockCapacity.getOrDefault(pos, edge.getBandwidthMax());
@@ -601,6 +621,11 @@ public class TelecomNetworkGraph extends SavedData {
         }
         
         activeSessions.removeAll(toRemove);
+        for (TrafficSession session : activeSessions) {
+            if (!session.isPassive() && session.getTicksElapsed() % 2 == 0) {
+                sendSessionUpdate(level, session);
+            }
+        }
         
     }
     
@@ -612,6 +637,14 @@ public class TelecomNetworkGraph extends SavedData {
         return totalBandwidthDown;
     }
     
+    public TrafficSession getSessionByDeviceId(String deviceId) {
+        for (TrafficSession session : activeSessions) {
+            if (session.getDeviceId().equals(deviceId)) return session;
+        }
+        return null;
+    }
+
+    /** Legacy lookup only: multiple devices can have the same IP. */
     public TrafficSession getSessionByIp(String ip) {
         for (TrafficSession s : activeSessions) {
             if (s.getClientIp() != null && s.getClientIp().equals(ip)) {

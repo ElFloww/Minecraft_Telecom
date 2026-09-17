@@ -50,7 +50,7 @@ public class ModNetworking {
 
     @SubscribeEvent
     public static void register(final RegisterPayloadHandlersEvent event) {
-        final PayloadRegistrar registrar = event.registrar("1.0");
+        final PayloadRegistrar registrar = event.registrar("1.1");
 
         registrar.playToServer(
             com.florentdubut.telecom.network.packet.GuiRefreshRequestPayload.TYPE,
@@ -325,6 +325,10 @@ public class ModNetworking {
                 // Trigger the block's useWithoutItem which sends the GUI sync packet back
                 if (state.getBlock() instanceof com.florentdubut.telecom.block.TelecomBlock) {
                     state.useWithoutItem(player.level(), player, hitResult);
+                    if (state.getBlock() instanceof com.florentdubut.telecom.block.RouterBlock) {
+                        TrafficSession latest = TelecomNetworkGraph.get(player.level()).getLatestSessionByDeviceId(TrafficSession.routerDeviceId(payload.pos()));
+                        if (latest != null) sendSpeedtestState(player, latest, latest.getDeviceId(), latest.getClientIp());
+                    }
                 }
             }
         });
@@ -478,7 +482,7 @@ public class ModNetworking {
     private static void handleStartSpeedtest(final com.florentdubut.telecom.network.packet.StartSpeedtestPayload payload, final IPayloadContext context) {
         context.enqueueWork(() -> {
             if (!(context.player() instanceof ServerPlayer player)
-                    || !acceptRequest(player, RequestCategory.SPEEDTEST, 1000)
+                    || !acceptRequest(player, RequestCategory.SPEEDTEST, 100)
                     || player.isSpectator()) return;
             if (payload.durationTicks() != 300 && payload.durationTicks() != 600 && payload.durationTicks() != 1200
                     && payload.durationTicks() != 6000 && payload.durationTicks() != 12000) return;
@@ -495,23 +499,43 @@ public class ModNetworking {
                 if (maxDown <= 0 || maxUp <= 0) return;
                 graph.startSpeedtest(source.getPosition(), source.getIpAddress(), maxDown, maxUp, 0, 0,
                     payload.durationTicks(), false, player);
+                String deviceId = TrafficSession.routerDeviceId(source.getPosition());
+                sendSpeedtestState(player, graph.getSessionByDeviceId(deviceId), deviceId, source.getIpAddress());
                 return;
             }
 
             if (!hasSmartphone(player)) return;
             NetworkScanResponsePayload scan = scanNetworkForPlayer(player);
-            if (!scan.found() || scan.maxDown() <= 0 || scan.maxUp() <= 0) return;
+            if (!scan.found() || scan.maxDown() <= 0 || scan.maxUp() <= 0) {
+                sendSpeedtestState(player, null, TrafficSession.mobileDeviceId(player.getUUID()), "");
+                return;
+            }
             int extraPing = scan.tech().startsWith("5G") ? 10 + level.random.nextInt(10)
                 : scan.tech().startsWith("4G") ? 30 + level.random.nextInt(20)
                 : scan.tech().startsWith("3G") ? 70 + level.random.nextInt(50)
                 : 200 + level.random.nextInt(200);
             graph.startSpeedtest(scan.antennaPos(), scan.ipAddress(), scan.maxDown(), scan.maxUp(), extraPing,
                 scan.frequenciesMask(), payload.durationTicks(), false, player);
+            String deviceId = TrafficSession.mobileDeviceId(player.getUUID());
+            sendSpeedtestState(player, graph.getSessionByDeviceId(deviceId), deviceId, scan.ipAddress());
         });
     }
 
+    private static void sendSpeedtestState(ServerPlayer player, TrafficSession session, String deviceId, String ip) {
+        boolean rejected = session == null || session.isPassive();
+        PacketDistributor.sendToPlayer(player, new com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload(
+                ip == null ? "" : ip, rejected ? "REJECTED" : session.getState().name(),
+                rejected ? 0 : session.getPingMs(), rejected || session.isTerminal() ? 0 : session.getActualBandwidth(),
+                rejected ? 0 : session.getTicksElapsed(), rejected ? 0 : session.getTotalTicksPerPhase(),
+                player.level().dimension().identifier().toString(), deviceId,
+                rejected ? new java.util.UUID(0, 0) : session.getSessionId(),
+                rejected ? 0 : session.getFinalDownBw(), rejected ? 0 : session.getFinalUpBw()));
+    }
+
     private static void handleSpeedtestUpdate(final com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload payload, final IPayloadContext context) {
+        net.minecraft.network.Connection sourceConnection = context.connection();
         context.enqueueWork(() -> {
+            if (!com.florentdubut.telecom.client.ClientSpeedtestState.accept(sourceConnection, payload)) return;
             net.minecraft.client.gui.screens.Screen screen = net.minecraft.client.Minecraft.getInstance().screen;
             if (screen instanceof com.florentdubut.telecom.client.gui.RouterScreen routerScreen) {
                 routerScreen.updateSpeedtestProgress(payload);

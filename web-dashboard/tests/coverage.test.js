@@ -19,6 +19,24 @@ const data = (overrides = {}) => ({ status: 'ready', revision: 'r1', level: 0, t
     generatedAt: 10000, validForMs: 30000, maxRange: 4096, cells: [cell], ...overrides });
 const response = value => ({ ok: true, status: 200, json: async () => value });
 
+test('exact zone panning bounds even offscreen pending radio entries to 128', async () => {
+    for (const status of [202, 200]) {
+        const store = new CoverageStore(async path => {
+            const tx = Number(new URL(path, 'http://localhost').searchParams.get('tx'));
+            return status === 202 ? { status, headers: new Headers() }
+                : response(data({ status: 'pending', tileX: tx, originX: tx * 128, step: 8, cells: [] }));
+        }, () => 10000);
+        store.options = options;
+        store.nextOptionsAt = Infinity;
+        for (let tx = 0; tx < 200; tx++) {
+            await store.tick([{ ...tile, tx }], { ...filters, exact: true, step: 8 });
+            assert.ok(store.cache.size <= 128);
+        }
+        assert.equal(store.cache.size, 128);
+        assert.ok([...store.cache.values()].some(entry => entry.tile.tx === 199));
+    }
+});
+
 test('radio states use strict thresholds independently from service availability', () => {
     for (const [powerDbm, state] of [[-79, 'strong'], [-80, 'medium'], [-99, 'medium'],
         [-100, 'weak'], [-119, 'weak'], [-120, 'below'], [null, 'unknown']]) {

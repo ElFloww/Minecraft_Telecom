@@ -156,7 +156,7 @@ test('new metadata during HTTP or decode never starts a second request or decode
 });
 
 for (const stage of ['fetch', 'decode']) {
-    test(`world/token invalidation at ${stage} keeps the pending slot and closes stale bitmaps`, async () => {
+    test(`world/read invalidation at ${stage} keeps the pending slot and closes stale bitmaps`, async () => {
         let release, closed = 0;
         const { store, requests } = fixture({
             fetcher: stage === 'fetch' ? () => new Promise(resolve => { release = resolve; }) : async () => pngResponse(),

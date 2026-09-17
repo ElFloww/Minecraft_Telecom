@@ -306,7 +306,10 @@ class RadioTerrainCacheTest {
     @Test
     void persistedFilesStayBoundedAndEvictedTerrainRemainsUnknownAfterRestart() throws Exception {
         RadioTerrainCache cache = cache();
-        var snapshot = RadioTerrainCache.Snapshot.copy(observedChunk(0, 0));
+        var raw = RadioTerrainCache.Snapshot.copy(observedChunk(0, 0));
+        var compact = RadioTerrainCache.Snapshot.class.getDeclaredMethod("compact");
+        compact.setAccessible(true);
+        var snapshot = (RadioTerrainCache.Snapshot) compact.invoke(raw);
         for (int key = 0; key <= RadioTerrainCache.DISK_CAPACITY; key++) {
             cache.put(key, snapshot);
             if (key % 32 == 0) drain();

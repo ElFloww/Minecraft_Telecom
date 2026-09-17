@@ -14,7 +14,7 @@ Cette version remplace l'ancienne roadmap detaillee. Les cases ouvertes sont des
 
 - [x] Migration du code et des ressources d'items vers Minecraft 1.21.11 / NeoForge 21.11.42.
 - [x] Sauvegarde du graphe adaptee et protection contre le remplacement d'un fichier reseau illisible.
-- [x] Premier durcissement des paquets et du dashboard : controles serveur, authentification des actions web et limites de requetes.
+- [x] Premier durcissement des paquets et du dashboard : controles serveur, validation des hotes/origines et limites de requetes. Le dashboard fonctionne sans authentification ; son acces reseau doit etre restreint.
 - [x] IP mobiles persistantes par joueur ; agregation limitee a l'antenne de service.
 - [x] Premiers caches bornes et suppression des recalculs inutiles lors de la restauration des blocs connus.
 - [x] Build du dashboard reproductible, documentation de lancement et suites de tests ajoutees.
@@ -38,6 +38,8 @@ La securite, les tests et l'optimisation accompagnent chaque priorite ; ils ne s
 ## 4. Priorite : couverture calculee sur la carte
 
 ### Fond de carte
+
+- [x] Selectionner une zone dans le dashboard et lancer explicitement sa preparation terrain ou son calcul radio, avec progression, annulation et limites de taille.
 
 - [x] Conserver chaque tuile de terrain sur disque dans le monde apres sa premiere creation, sans expiration ni recalcul, meme apres redemarrage.
 - [x] Garder les caches RAM limites et separer les images des differents mondes. Le fond reste fige ; seule la couche de couverture radio suit les modifications des antennes et des obstacles.
@@ -112,7 +114,11 @@ Reseau filaire -> Site A [radio FH] ~~~ liaison sans fil ~~~ [radio FH] Site B -
 ## 6. Utilisation du reseau
 
 - [ ] Unifier les debits montants/descendants et le partage des liens : cables, ports, antennes et interfaces doivent annoncer les memes capacites que le moteur.
-- [ ] Ameliorer les speedtests : resultats moyens, duree claire, latence et explication du goulot d'etranglement.
+- [ ] Refaire le speedtest sur telephone et routeur : interface plus lisible, courbes de debit, progression claire des phases et bilan final avec debits moyens, pics, ping, gigue et pertes mesures par le moteur.
+- [ ] Permettre de choisir le serveur de speedtest depuis le telephone, le routeur et le dashboard : liste des serveurs avec nom, identifiant, latence estimee et disponibilite, plus un mode automatique.
+- [ ] Tester reellement vers le serveur choisi : verifier le chemin cote serveur, afficher la destination utilisee, expliquer les limites du trajet et signaler une indisponibilite sans basculer silencieusement sur un autre serveur.
+- [ ] Clarifier la duree totale du test, permettre son annulation et conserver un historique recent par appareil, sans perturber les tests simultanes sur les autres appareils.
+- [x] Autoriser plusieurs speedtests simultanes sur des appareils distincts, avec un test par appareil, un suivi independant et le partage des liens communs.
 - [ ] Implementer SMS, contacts et numeros entre joueurs, puis appels si une integration vocale adaptee est disponible.
 - [ ] Ajouter des services internes au monde : petites pages hebergees, messagerie et transferts de fichiers virtuels, sans acces arbitraire au vrai Internet.
 - [ ] Ajouter capteurs, affichages et commandes redstone a distance dont le fonctionnement depend du reseau.

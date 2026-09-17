@@ -26,7 +26,6 @@ import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -44,7 +43,7 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
-/** HTTP configuration uses telecom.http.{enabled,bind,port,origins}; secrets only use TELECOM_HTTP_TOKEN. */
+/** HTTP is unauthenticated; bind to loopback unless access is restricted externally. */
 public class TelecomHttpServer {
     private static final int MAX_BODY = 4096;
     private static final long WAIT_MS = 750;
@@ -58,8 +57,6 @@ public class TelecomHttpServer {
     // Held until the queued wrapper actually runs, NOT until the HTTP request times out.
     private volatile Semaphore jobSlot = new Semaphore(1);
     private volatile long nextJobAt;
-    private boolean publicBind;
-    private byte[] token = new byte[0];
     private Set<String> origins = Set.of();
     private Set<String> hosts = Set.of();
     private final Map<Long, byte[]> tiles = new LinkedHashMap<>(256, 0.75f, true);
@@ -69,6 +66,7 @@ public class TelecomHttpServer {
     private volatile TerrainTileStore tileStore;
     private volatile WorldMapImageStore worldMap;
     private volatile TerrainCaptureQueue terrainCapture;
+    private volatile ZoneJobManager zoneJobs;
 
     public TelecomHttpServer() {
         java.util.Arrays.setAll(tileLocks, ignored -> new Object());
@@ -81,15 +79,6 @@ public class TelecomHttpServer {
             int port = Integer.parseInt(System.getProperty("telecom.http.port", "8080"));
             if (port < 1 || port > 65535) throw new IllegalArgumentException("Invalid HTTP port");
             InetAddress address = InetAddress.getByName(bind);
-            publicBind = !address.isLoopbackAddress();
-            String secret = System.getenv("TELECOM_HTTP_TOKEN");
-            if (secret != null && !secret.isBlank()) {
-                if (secret.length() > 1024 || !secret.matches("[\\x21-\\x7e]+")) {
-                    throw new IllegalArgumentException("HTTP token must be 1-1024 printable ASCII characters without spaces");
-                }
-                token = secret.getBytes(StandardCharsets.UTF_8);
-            }
-            if (publicBind && token.length == 0) throw new IllegalArgumentException("Non-loopback HTTP requires TELECOM_HTTP_TOKEN");
             Set<String> allowedOrigins = new HashSet<>();
             Set<String> allowedHosts = new HashSet<>();
             String authority = new URI("http", null, address.getHostAddress(), port, null, null, null).getRawAuthority();
@@ -135,6 +124,7 @@ public class TelecomHttpServer {
                     WorldMapImageStore image = new WorldMapImageStore(tileStore);
                     worldMap = image;
                     terrainCapture = new TerrainCaptureQueue(ms, tileStore, image::invalidate);
+                    zoneJobs = new ZoneJobManager(ms, terrainCapture);
                     if (ms.isSameThread()) terrainCapture.seedLoadedChunks();
                 } catch (IOException e) {
                     System.err.println("Telecom terrain tiles disabled: " + e.getMessage());
@@ -159,6 +149,7 @@ public class TelecomHttpServer {
             running = true;
             server.start();
             System.out.println("Telecom HTTP listening on " + authority);
+            if (!address.isLoopbackAddress()) System.err.println("Telecom HTTP has no authentication: reachable clients can modify the world. Restrict network access.");
         } catch (Exception e) {
             stop();
             System.err.println("Telecom HTTP disabled: " + e.getMessage());
@@ -175,6 +166,9 @@ public class TelecomHttpServer {
         FutureTask<?> job = pendingJob;
         if (job != null) job.cancel(false);
         reads.clear();
+        ZoneJobManager zones = zoneJobs;
+        zoneJobs = null;
+        if (zones != null) zones.close();
         TerrainCaptureQueue capture = terrainCapture;
         terrainCapture = null;
         if (capture != null) capture.close();
@@ -187,7 +181,6 @@ public class TelecomHttpServer {
         workers = null;
         synchronized (tiles) { tiles.clear(); unavailableTiles.clear(); }
         tileStore = null;
-        token = new byte[0];
     }
 
     private void handle(HttpExchange exchange) throws IOException {
@@ -206,8 +199,11 @@ public class TelecomHttpServer {
             }
             String path = exchange.getRequestURI().getPath();
             boolean api = path.startsWith("/api/");
-            boolean mutation = path.equals("/api/speedtest");
-            if (api && !Set.of("/api/network", "/api/player", "/api/tile", "/api/terrain", "/api/map-image", "/api/nperf_map", "/api/speedtest", "/api/coverage", "/api/coverage/options").contains(path)) {
+            String intendedMethod = "OPTIONS".equals(exchange.getRequestMethod())
+                    ? singleHeader(exchange, "Access-Control-Request-Method") : exchange.getRequestMethod();
+            boolean mutation = path.equals("/api/speedtest") || path.equals("/api/zone-jobs/cancel")
+                    || path.equals("/api/zone-jobs") && "POST".equals(intendedMethod);
+            if (api && !Set.of("/api/network", "/api/player", "/api/tile", "/api/terrain", "/api/map-image", "/api/nperf_map", "/api/speedtest", "/api/coverage", "/api/coverage/options", "/api/zone-jobs", "/api/zone-jobs/cancel").contains(path)) {
                 throw new HttpFailure(404, "Unknown endpoint");
             }
             String allowedMethod = mutation ? "POST" : "GET";
@@ -218,13 +214,13 @@ public class TelecomHttpServer {
                 String headers = singleHeader(exchange, "Access-Control-Request-Headers");
                 if (headers != null) {
                     for (String header : headers.split(",")) {
-                        if (!Set.of("authorization", "content-type", "if-none-match").contains(header.trim().toLowerCase(java.util.Locale.ROOT))) {
+                        if (!Set.of("content-type", "if-none-match").contains(header.trim().toLowerCase(java.util.Locale.ROOT))) {
                             throw new HttpFailure(403, "Preflight header not allowed");
                         }
                     }
                 }
                 exchange.getResponseHeaders().set("Access-Control-Allow-Methods", allowedMethod);
-                exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Authorization, Content-Type, If-None-Match");
+                exchange.getResponseHeaders().set("Access-Control-Allow-Headers", "Content-Type, If-None-Match");
                 exchange.sendResponseHeaders(204, -1);
                 return;
             }
@@ -232,7 +228,6 @@ public class TelecomHttpServer {
                 exchange.getResponseHeaders().set("Allow", allowedMethod + ", OPTIONS");
                 throw new HttpFailure(405, "Method not allowed");
             }
-            if (api && (publicBind || mutation)) authenticate(exchange);
             // Reject framed bodies even on GET; POST reads at most MAX_BODY + 1 bytes.
             String length = singleHeader(exchange, "Content-Length");
             if (length != null) {
@@ -256,6 +251,11 @@ public class TelecomHttpServer {
                 case "/api/coverage/options" -> sendJson(exchange, readOnServer("coverage-options", this::coverageOptions).value());
                 case "/api/coverage" -> sendCalculatedCoverage(exchange);
                 case "/api/speedtest" -> startSpeedtest(exchange);
+                case "/api/zone-jobs" -> {
+                    if (mutation) startZoneJob(exchange);
+                    else sendJson(exchange, readOnServer("zone-jobs", (level, deadline) -> zoneManager().status()).value());
+                }
+                case "/api/zone-jobs/cancel" -> cancelZoneJob(exchange);
                 case "/favicon.ico" -> exchange.sendResponseHeaders(204, -1);
                 default -> sendStatic(exchange, path);
             }
@@ -288,15 +288,6 @@ public class TelecomHttpServer {
         if (values == null) return null;
         if (values.size() != 1) throw new HttpFailure(400, "Duplicate header");
         return values.getFirst();
-    }
-
-    private void authenticate(HttpExchange exchange) {
-        String auth = singleHeader(exchange, "Authorization");
-        if (token.length == 0 || auth == null || !auth.startsWith("Bearer ") || auth.length() > 1031
-                || !MessageDigest.isEqual(token, auth.substring(7).getBytes(StandardCharsets.UTF_8))) {
-            exchange.getResponseHeaders().set("WWW-Authenticate", "Bearer realm=\"telecom\"");
-            throw new HttpFailure(401, "A valid session token is required");
-        }
     }
 
     @FunctionalInterface
@@ -398,6 +389,10 @@ public class TelecomHttpServer {
             item.addProperty("cidr", node.getNetworkCidr() == null ? "" : node.getNetworkCidr());
             item.addProperty("usageDown", node.getCurrentUsageDown());
             item.addProperty("usageUp", node.getCurrentUsageUp());
+            if (node.getType() == NetworkNode.NodeType.ROUTER) {
+                var session = graph.getLatestSessionByDeviceId(com.florentdubut.telecom.network.TrafficSession.routerDeviceId(node.getPosition()));
+                if (session != null) item.add("speedtest", speedtestSnapshot(session));
+            }
             int down = 1000, up = 1000;
             switch (node.getType()) {
                 case SERVER, NRO -> { down = 1000000; up = 1000000; }
@@ -554,14 +549,96 @@ public class TelecomHttpServer {
             if (node == null || node.getType() != NetworkNode.NodeType.ROUTER) throw new HttpFailure(404, "Router not found");
             String ip = node.getIpAddress();
             if (ip == null || ip.isBlank()) throw new HttpFailure(409, "Router has no IP");
-            var before = graph.getSessionByIp(ip);
+            String deviceId = com.florentdubut.telecom.network.TrafficSession.routerDeviceId(position);
+            var before = graph.getSessionByDeviceId(deviceId);
             if (before != null && !before.isPassive()) throw new HttpFailure(409, "Speedtest already active");
             checkBudget(deadline);
             graph.startSpeedtest(position, ip, node.getCapacityDown(), node.getCapacityUp(), 0, 0, duration, false, null);
-            var after = graph.getSessionByIp(ip);
+            var after = graph.getSessionByDeviceId(deviceId);
             if (after == null || after == before || after.isPassive()) throw new HttpFailure(409, "Speedtest rejected: capacity, session limit or route unavailable");
-            return "{\"status\":\"started\"}";
+            JsonObject result = new JsonObject();
+            result.addProperty("status", "started");
+            result.addProperty("deviceId", after.getDeviceId());
+            result.addProperty("sessionId", after.getSessionId().toString());
+            return result.toString();
         }));
+    }
+
+    private ZoneJobManager zoneManager() {
+        ZoneJobManager jobs = zoneJobs;
+        if (jobs == null) throw new HttpFailure(503, "Zone processing unavailable");
+        return jobs;
+    }
+
+    public void tickZoneJobs(MinecraftServer server) {
+        ZoneJobManager jobs = zoneJobs;
+        if (running && server == minecraftServer && jobs != null) jobs.tick();
+    }
+
+    private JsonObject zoneBody(HttpExchange exchange) throws IOException {
+        String contentType = singleHeader(exchange, "Content-Type");
+        if (contentType == null || !contentType.split(";", 2)[0].trim().equalsIgnoreCase("application/json")) throw new HttpFailure(415, "Expected application/json");
+        byte[] bytes = exchange.getRequestBody().readNBytes(MAX_BODY + 1);
+        if (bytes.length > MAX_BODY) throw new HttpFailure(413, "Body too large");
+        try { return JsonParser.parseString(new String(bytes, StandardCharsets.UTF_8)).getAsJsonObject(); }
+        catch (RuntimeException invalid) { throw new HttpFailure(400, "Expected a JSON object"); }
+    }
+
+    private void startZoneJob(HttpExchange exchange) throws IOException {
+        JsonObject body = zoneBody(exchange);
+        final ZoneJobManager.Request request;
+        final String mapId;
+        try {
+            String kind = body.get("kind").getAsString();
+            if (kind.equals("terrain") && (!body.has("allowGeneration") || !body.get("allowGeneration").isJsonPrimitive()
+                    || !body.get("allowGeneration").getAsJsonPrimitive().isBoolean() || !body.get("allowGeneration").getAsBoolean())) {
+                throw new IllegalArgumentException("Explicit generation confirmation required");
+            }
+            mapId = body.get("mapId").getAsString();
+            request = new ZoneJobManager.Request(kind, Integer.parseInt(body.get("minX").getAsString()),
+                    Integer.parseInt(body.get("minZ").getAsString()), Integer.parseInt(body.get("maxX").getAsString()),
+                    Integer.parseInt(body.get("maxZ").getAsString()), body.has("step") ? Integer.parseInt(body.get("step").getAsString()) : 16,
+                    body.has("height") ? body.get("height").getAsString() : "surface", body.has("antenna") ? body.get("antenna").getAsString() : "all",
+                    body.has("technology") ? body.get("technology").getAsString() : "all", body.has("band") ? body.get("band").getAsString() : "all");
+        } catch (RuntimeException invalid) { throw new HttpFailure(400, "Invalid zone, limits or generation confirmation"); }
+        sendJson(exchange, onServer((level, deadline) -> {
+            TerrainTileStore store = tileStore;
+            if (store == null || !store.id().equals(mapId)) throw new HttpFailure(409, "Map changed; reload before generating terrain");
+            try {
+                JsonObject result = new JsonObject();
+                result.addProperty("id", zoneManager().start(request));
+                result.addProperty("status", "queued");
+                return result.toString();
+            } catch (IllegalArgumentException invalid) { throw new HttpFailure(400, invalid.getMessage()); }
+            catch (IllegalStateException conflict) { throw new HttpFailure(409, conflict.getMessage()); }
+        }));
+    }
+
+    private void cancelZoneJob(HttpExchange exchange) throws IOException {
+        JsonObject body = zoneBody(exchange);
+        final String id;
+        try { id = java.util.UUID.fromString(body.get("id").getAsString()).toString(); }
+        catch (RuntimeException invalid) { throw new HttpFailure(400, "Expected a zone job ID"); }
+        sendJson(exchange, onServer((level, deadline) -> {
+            if (!zoneManager().cancel(id)) throw new HttpFailure(404, "No active job with that ID");
+            return "{\"status\":\"cancelled\"}";
+        }));
+    }
+
+    private static JsonObject speedtestSnapshot(com.florentdubut.telecom.network.TrafficSession session) {
+        JsonObject value = new JsonObject();
+        value.addProperty("deviceId", session.getDeviceId());
+        value.addProperty("sessionId", session.getSessionId().toString());
+        String state = session.getState().name();
+        value.addProperty("state", state);
+        value.addProperty("active", !state.equals("FINISHED") && !state.equals("FAILED"));
+        value.addProperty("pingMs", session.getPingMs());
+        value.addProperty("actualBandwidth", session.isTerminal() ? 0 : session.getActualBandwidth());
+        value.addProperty("ticksElapsed", session.getTicksElapsed());
+        value.addProperty("totalTicksPerPhase", session.getTotalTicksPerPhase());
+        value.addProperty("downloadBandwidth", session.getFinalDownBw());
+        value.addProperty("uploadBandwidth", session.getFinalUpBw());
+        return value;
     }
 
     private void sendTile(HttpExchange exchange) throws IOException {

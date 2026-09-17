@@ -36,7 +36,6 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.mockito.Mockito.*;
 
 class TelecomHttpServerTest {
@@ -76,6 +75,18 @@ class TelecomHttpServerTest {
         var field = TelecomHttpServer.class.getDeclaredField(name);
         field.setAccessible(true);
         return field.get(server);
+    }
+
+    @Test
+    void removedSessionEndpointReturnsNotFoundWithoutSchedulingMinecraft() throws Exception {
+        MinecraftServer minecraft = mock(MinecraftServer.class);
+        var jobs = queueWorldServer(minecraft);
+        for (String method : new String[]{"GET", "POST", "OPTIONS"}) {
+            assertEquals(404, request(method, "/api/session", null, "Origin", base).statusCode());
+        }
+        assertTrue(jobs.isEmpty());
+        verify(minecraft, never()).execute(any(Runnable.class));
+        verify(minecraft, never()).overworld();
     }
 
     private void startWorldServer(MinecraftServer minecraft) {
@@ -121,21 +132,15 @@ class TelecomHttpServerTest {
         return offset;
     }
 
-    private String bearer() {
-        String token = System.getenv("TELECOM_HTTP_TOKEN");
-        assumeTrue(token != null && !token.isBlank(), "Run also with TELECOM_HTTP_TOKEN to test authenticated paths");
-        return "Bearer " + token;
-    }
-
     @Test
-    void defaultsToLoopbackAndRequiresMutationToken() throws Exception {
-        assertTrue(((HttpServer) field("server")).getAddress().getAddress().isLoopbackAddress());
+    void defaultsToIpv4LoopbackAndValidatesMutationsWithoutCredentials() throws Exception {
+        assertEquals("127.0.0.1", ((HttpServer) field("server")).getAddress().getAddress().getHostAddress());
         assertEquals(503, request("GET", "/api/network", null).statusCode());
-        assertEquals(401, request("POST", "/api/speedtest", "{}").statusCode());
-        assertEquals(401, request("POST", "/api/speedtest", "{}", "Authorization", "Bearer wrong").statusCode());
+        assertEquals(415, request("POST", "/api/speedtest", "{}").statusCode());
+        assertEquals(400, request("POST", "/api/speedtest", "{}", "Content-Type", "application/json").statusCode());
         var page = request("GET", "/", null);
         assertEquals(200, page.statusCode());
-        assertTrue(page.body().contains("session-token"));
+        assertTrue(page.headers().firstValue("Content-Type").orElseThrow().startsWith("text/html"));
         assertEquals("no-store", page.headers().firstValue("Cache-Control").orElseThrow());
     }
 
@@ -146,6 +151,8 @@ class TelecomHttpServerTest {
         assertEquals(403, request("GET", "/api/network", null, "Host", "evil.example").statusCode());
         assertEquals(405, request("DELETE", "/api/network", null).statusCode());
         assertEquals(405, request("GET", "/api/speedtest", null).statusCode());
+        assertEquals(405, request("DELETE", "/api/zone-jobs", null).statusCode());
+        assertEquals(405, request("GET", "/api/zone-jobs/cancel", null).statusCode());
         assertEquals(404, request("GET", "/api/network/extra", null).statusCode());
         assertEquals(404, request("GET", "/%2e%2e/build.gradle", null).statusCode());
     }
@@ -153,33 +160,39 @@ class TelecomHttpServerTest {
     @Test
     void preflightChecksExactOriginMethodAndHeaders() throws Exception {
         var response = request("OPTIONS", "/api/speedtest", null, "Origin", base,
-                "Access-Control-Request-Method", "POST", "Access-Control-Request-Headers", "authorization,content-type");
+                "Access-Control-Request-Method", "POST", "Access-Control-Request-Headers", "content-type");
         assertEquals(204, response.statusCode());
         assertEquals(base, response.headers().firstValue("Access-Control-Allow-Origin").orElseThrow());
+        assertEquals("POST", response.headers().firstValue("Access-Control-Allow-Methods").orElseThrow());
+        for (String path : new String[]{"/api/zone-jobs", "/api/zone-jobs/cancel"}) {
+            assertEquals(204, request("OPTIONS", path, null, "Origin", base,
+                    "Access-Control-Request-Method", "POST", "Access-Control-Request-Headers", "content-type").statusCode());
+        }
         assertEquals(403, request("OPTIONS", "/api/speedtest", null, "Origin", base,
                 "Access-Control-Request-Method", "DELETE").statusCode());
         assertEquals(403, request("OPTIONS", "/api/network", null, "Origin", base,
                 "Access-Control-Request-Method", "GET", "Access-Control-Request-Headers", "x-untrusted").statusCode());
+        assertEquals(403, request("OPTIONS", "/api/speedtest", null, "Origin", "https://evil.example",
+                "Access-Control-Request-Method", "POST", "Access-Control-Request-Headers", "content-type").statusCode());
     }
 
     @Test
-    void authenticatedBodiesAndDurationsAreBounded() throws Exception {
-        String auth = bearer();
-        assertEquals(415, request("POST", "/api/speedtest", "{}", "Authorization", auth).statusCode());
-        assertEquals(413, request("POST", "/api/speedtest", "x".repeat(4097), "Authorization", auth,
+    void bodiesAndDurationsAreBoundedWithoutCredentials() throws Exception {
+        assertEquals(415, request("POST", "/api/speedtest", "{}").statusCode());
+        assertEquals(413, request("POST", "/api/speedtest", "x".repeat(4097),
                 "Content-Type", "application/json").statusCode());
         var chunked = HttpRequest.newBuilder(URI.create(base + "/api/speedtest"))
-                .header("Authorization", auth).header("Content-Type", "application/json")
+                .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofInputStream(() -> new ByteArrayInputStream(new byte[4097]))).build();
         assertEquals(413, client.send(chunked, HttpResponse.BodyHandlers.ofString()).statusCode());
         for (String body : new String[]{"[]", "{}", "{", "{\"pos\":\"1\",\"duration\":301}",
                 "{\"pos\":\"1\",\"duration\":300.5}", "{\"pos\":\"9223372036854775808\",\"duration\":300}"}) {
-            assertEquals(400, request("POST", "/api/speedtest", body, "Authorization", auth,
+            assertEquals(400, request("POST", "/api/speedtest", body,
                     "Content-Type", "application/json").statusCode(), body);
         }
         for (int ticks : new int[]{300, 600, 1200, 6000, 12000}) {
             assertEquals(503, request("POST", "/api/speedtest", "{\"pos\":\"-9223372036854775808\",\"duration\":"
-                    + ticks + ",\"maxDown\":\"ignored\",\"maxUp\":-1}", "Authorization", auth,
+                    + ticks + ",\"maxDown\":\"ignored\",\"maxUp\":-1}",
                     "Content-Type", "application/json").statusCode());
         }
     }
@@ -252,7 +265,7 @@ class TelecomHttpServerTest {
         MinecraftServer minecraft = mock(MinecraftServer.class);
         var jobs = queueWorldServer(minecraft);
         for (String path : new String[]{"/api/network", "/api/player", "/api/nperf_map",
-                "/api/tile?cx=0&cz=0", "/api/coverage?tx=0&tz=0", "/api/coverage/options"}) {
+                "/api/tile?cx=0&cz=0", "/api/coverage?tx=0&tz=0", "/api/coverage/options", "/api/map-image", "/api/zone-jobs"}) {
             assertEquals(400, request("GET", path, "{}").statusCode(), path);
             assertEquals(413, request("GET", path, "x".repeat(4097)).statusCode(), path);
             var chunked = HttpRequest.newBuilder(URI.create(base + path)).timeout(Duration.ofSeconds(3))
@@ -270,17 +283,15 @@ class TelecomHttpServerTest {
     }
 
     @Test
-    void authenticatedInvalidBodiesNeverQueueEvenWithAWorld() throws Exception {
-        String auth = bearer();
+    void invalidBodiesNeverQueueEvenWithAWorldWithoutCredentials() throws Exception {
         MinecraftServer minecraft = mock(MinecraftServer.class);
         var jobs = queueWorldServer(minecraft);
-        assertEquals(401, request("POST", "/api/speedtest", "{}").statusCode());
-        assertEquals(415, request("POST", "/api/speedtest", "{}", "Authorization", auth).statusCode());
-        assertEquals(413, request("POST", "/api/speedtest", "x".repeat(4097), "Authorization", auth,
+        assertEquals(415, request("POST", "/api/speedtest", "{}").statusCode());
+        assertEquals(413, request("POST", "/api/speedtest", "x".repeat(4097),
                 "Content-Type", "application/json").statusCode());
         for (String body : new String[]{"{}", "[]", "{", "{\"pos\":\"1\",\"duration\":301}",
                 "{\"pos\":\"1\",\"duration\":300.5}", "{\"pos\":\"9223372036854775808\",\"duration\":300}"}) {
-            assertEquals(400, request("POST", "/api/speedtest", body, "Authorization", auth,
+            assertEquals(400, request("POST", "/api/speedtest", body,
                     "Content-Type", "application/json").statusCode(), body);
         }
         verify(minecraft, never()).execute(any(Runnable.class));
@@ -470,22 +481,28 @@ class TelecomHttpServerTest {
     }
 
     @Test
-    void publicBindingFailsClosedOrRequiresAuthenticationForEveryDataRoute() throws Exception {
+    void explicitPublicBindingAllowsReadsAndMutationValidationButKeepsHostAndOriginChecks() throws Exception {
         server.stop();
         System.setProperty("telecom.http.bind", "0.0.0.0");
-        System.setProperty("telecom.http.origins", base);
+        String origin = "http://localhost:" + port;
+        System.setProperty("telecom.http.origins", base + "," + origin);
         server.start(null);
-        String token = System.getenv("TELECOM_HTTP_TOKEN");
-        if (token == null || token.isBlank()) {
-            assertNull(field("server"));
-            return;
+        assertTrue(((HttpServer) field("server")).getAddress().getAddress().isAnyLocalAddress());
+        for (String route : new String[]{"network", "player", "nperf_map", "tile?cx=0&cz=0", "map-image",
+                "coverage?tx=0&tz=0", "coverage/options", "zone-jobs"}) {
+            assertEquals(503, request("GET", "/api/" + route, null).statusCode(), route);
+            assertEquals(503, request("GET", "/api/" + route, null, "Origin", origin).statusCode(), route);
+            assertEquals(403, request("GET", "/api/" + route, null, "Origin", "https://evil.example").statusCode(), route);
+            assertEquals(403, request("GET", "/api/" + route, null, "Host", "evil.example", "Origin", origin).statusCode(), route);
         }
-        assertNotNull(field("server"));
-        for (String route : new String[]{"network", "player", "nperf_map", "tile?cx=0&cz=0", "coverage?tx=0&tz=0", "coverage/options"}) {
-            assertEquals(401, request("GET", "/api/" + route, null).statusCode());
-            assertEquals(503, request("GET", "/api/" + route, null, "Authorization", bearer()).statusCode());
+        for (String route : new String[]{"speedtest", "zone-jobs", "zone-jobs/cancel"}) {
+            assertEquals(400, request("POST", "/api/" + route, "{}", "Content-Type", "application/json", "Origin", origin).statusCode(), route);
+            assertEquals(403, request("POST", "/api/" + route, "{}", "Content-Type", "application/json", "Origin", "https://evil.example").statusCode(), route);
+            assertEquals(403, request("POST", "/api/" + route, "{}", "Content-Type", "application/json", "Host", "evil.example", "Origin", origin).statusCode(), route);
         }
         assertEquals(200, request("GET", "/", null).statusCode());
+        assertEquals(200, request("GET", "/", null, "Host", "localhost:" + port, "Origin", origin).statusCode());
+        assertEquals(404, request("GET", "/api/session", null, "Origin", origin).statusCode());
     }
 
     @Test
@@ -839,8 +856,7 @@ class TelecomHttpServerTest {
     }
 
     @Test
-    void speedtestUsesRouterCapsAndReportsOnlyConfirmedSessions() throws Exception {
-        String auth = bearer();
+    void publicSpeedtestUsesRouterAuthorityAndReportsOnlyConfirmedSessionsWithoutCredentials() throws Exception {
         MinecraftServer minecraft = mock(MinecraftServer.class);
         ServerLevel level = mock(ServerLevel.class);
         TelecomNetworkGraph graph = mock(TelecomNetworkGraph.class);
@@ -852,14 +868,21 @@ class TelecomHttpServerTest {
         node.setCapacityUp(567);
         when(graph.getNode(position)).thenReturn(node);
         TrafficSession session = mock(TrafficSession.class);
-        when(graph.getSessionByIp("10.1.0.2")).thenReturn(null, session);
+        String deviceId = TrafficSession.routerDeviceId(position);
+        when(graph.getSessionByDeviceId(deviceId)).thenReturn(null, session);
+        when(session.getDeviceId()).thenReturn(deviceId);
+        when(session.getSessionId()).thenReturn(new java.util.UUID(0, 1));
         ArrayBlockingQueue<Runnable> jobs = new ArrayBlockingQueue<>(1);
         doAnswer(invocation -> { jobs.add(invocation.getArgument(0)); return null; }).when(minecraft).execute(any(Runnable.class));
+        System.setProperty("telecom.http.bind", "0.0.0.0");
+        String origin = "http://localhost:" + port;
+        System.setProperty("telecom.http.origins", origin);
         startWorldServer(minecraft);
+        assertTrue(((HttpServer) field("server")).getAddress().getAddress().isAnyLocalAddress());
         var request = HttpRequest.newBuilder(URI.create(base + "/api/speedtest"))
-                .header("Authorization", auth).header("Content-Type", "application/json")
+                .header("Content-Type", "application/json").header("Origin", origin).header("Host", "localhost:" + port)
                 .POST(HttpRequest.BodyPublishers.ofString("{\"pos\":\"" + position.asLong()
-                        + "\",\"duration\":300,\"maxDown\":999999,\"maxUp\":999999}")).build();
+                        + "\",\"duration\":300,\"maxDown\":999999,\"maxUp\":999999,\"clientIp\":\"192.0.2.1\",\"deviceId\":\"client-selected\"}")).build();
         try (var graphs = mockStatic(TelecomNetworkGraph.class)) {
             graphs.when(() -> TelecomNetworkGraph.get(level)).thenReturn(graph);
             var response = client.sendAsync(request, HttpResponse.BodyHandlers.ofString());
@@ -868,10 +891,15 @@ class TelecomHttpServerTest {
             assertFalse(response.isDone(), "POST must still wait for its Minecraft callback");
             verify(graph, never()).getNode(any());
             job.run();
-            assertEquals(200, response.get(2, TimeUnit.SECONDS).statusCode());
+            var result = response.get(2, TimeUnit.SECONDS);
+            assertEquals(200, result.statusCode());
+            assertEquals(origin, result.headers().firstValue("Access-Control-Allow-Origin").orElseThrow());
+            var json = JsonParser.parseString(result.body()).getAsJsonObject();
+            assertEquals(deviceId, json.get("deviceId").getAsString());
+            assertEquals(new java.util.UUID(0, 1).toString(), json.get("sessionId").getAsString());
             verify(graph).startSpeedtest(position, "10.1.0.2", 1234, 567, 0, 0, 300, false, null);
             Thread.sleep(30);
-            when(graph.getSessionByIp("10.1.0.2")).thenReturn(null);
+            when(graph.getSessionByDeviceId(deviceId)).thenReturn(null);
             response = client.sendAsync(request, HttpResponse.BodyHandlers.ofString());
             job = jobs.poll(2, TimeUnit.SECONDS);
             assertNotNull(job);
@@ -881,18 +909,147 @@ class TelecomHttpServerTest {
     }
 
     @Test
+    void twoRoutersSharingAnIpCanRunIndependentWebTests() throws Exception {
+        MinecraftServer minecraft = mock(MinecraftServer.class);
+        ServerLevel level = mock(ServerLevel.class);
+        when(minecraft.overworld()).thenReturn(level);
+        var jobs = queueWorldServer(minecraft);
+        TelecomNetworkGraph graph = new TelecomNetworkGraph();
+        BlockPos a = new BlockPos(-1, 64, 0), b = new BlockPos(1, 64, 0), destination = new BlockPos(0, 64, 4);
+        graph.addNode(new NetworkNode(destination, NetworkNode.NodeType.SERVER));
+        for (BlockPos pos : java.util.List.of(a, b)) {
+            NetworkNode router = new NetworkNode(pos, NetworkNode.NodeType.ROUTER);
+            router.setIpAddress("10.0.0.2");
+            graph.addNode(router);
+            graph.addEdge(new com.florentdubut.telecom.network.NetworkEdge(pos, destination, 1000, 4,
+                    com.florentdubut.telecom.network.NetworkEdge.EdgeType.FIBER, java.util.List.of(new BlockPos(0, 64, 2))));
+        }
+        try (var graphs = mockStatic(TelecomNetworkGraph.class)) {
+            graphs.when(() -> TelecomNetworkGraph.get(level)).thenReturn(graph);
+            java.util.Set<String> sessions = new java.util.HashSet<>();
+            for (BlockPos pos : java.util.List.of(a, b, a)) {
+                Thread.sleep(30);
+                var request = HttpRequest.newBuilder(URI.create(base + "/api/speedtest"))
+                        .header("Content-Type", "application/json")
+                        .POST(HttpRequest.BodyPublishers.ofString("{\"pos\":\"" + pos.asLong() + "\",\"duration\":300}")).build();
+                var response = client.sendAsync(request, HttpResponse.BodyHandlers.ofString());
+                runQueuedJob(jobs);
+                var result = response.get(2, TimeUnit.SECONDS);
+                if (sessions.size() == 2) assertEquals(409, result.statusCode());
+                else {
+                    assertEquals(200, result.statusCode());
+                    var json = JsonParser.parseString(result.body()).getAsJsonObject();
+                    assertEquals(TrafficSession.routerDeviceId(pos), json.get("deviceId").getAsString());
+                    assertTrue(sessions.add(json.get("sessionId").getAsString()));
+                }
+            }
+            assertNotNull(graph.getSessionByDeviceId(TrafficSession.routerDeviceId(a)));
+            assertNotNull(graph.getSessionByDeviceId(TrafficSession.routerDeviceId(b)));
+            var snapshot = TelecomHttpServer.class.getDeclaredMethod("networkSnapshot", ServerLevel.class, long.class);
+            snapshot.setAccessible(true);
+            var json = JsonParser.parseString((String) snapshot.invoke(server, level, Long.MAX_VALUE)).getAsJsonObject();
+            assertEquals(2, java.util.stream.StreamSupport.stream(json.getAsJsonArray("nodes").spliterator(), false)
+                    .filter(node -> node.getAsJsonObject().has("speedtest") && node.getAsJsonObject().getAsJsonObject("speedtest").get("active").getAsBoolean()).count());
+        }
+    }
+
+    @Test
+    void publicZoneGenerationAndCancellationKeepValidationAndReleaseTicketsWithoutCredentials() throws Exception {
+        MinecraftServer minecraft = mock(MinecraftServer.class);
+        ServerLevel level = mock(ServerLevel.class);
+        when(minecraft.overworld()).thenReturn(level);
+        System.setProperty("telecom.http.bind", "0.0.0.0");
+        String origin = "http://localhost:" + port;
+        System.setProperty("telecom.http.origins", base + "," + origin);
+        var jobs = queueWorldServer(minecraft);
+        assertTrue(((HttpServer) field("server")).getAddress().getAddress().isAnyLocalAddress());
+        String mapId = ((TerrainTileStore) field("tileStore")).id();
+        String body = "{\"kind\":\"terrain\",\"minX\":0,\"minZ\":0,\"maxX\":15,\"maxZ\":15,\"mapId\":\"" + mapId + "\"}";
+        assertEquals(400, request("POST", "/api/zone-jobs", body, "Content-Type", "application/json").statusCode());
+        for (String confirmation : new String[]{"false", "\"true\"", "1", "null"}) {
+            assertEquals(400, request("POST", "/api/zone-jobs", body.substring(0, body.length() - 1)
+                    + ",\"allowGeneration\":" + confirmation + "}", "Content-Type", "application/json").statusCode());
+        }
+        for (String path : new String[]{"/api/zone-jobs", "/api/zone-jobs/cancel"}) {
+            assertEquals(415, request("POST", path, "{}").statusCode());
+            assertEquals(413, request("POST", path, "x".repeat(4097), "Content-Type", "application/json").statusCode());
+            var chunked = HttpRequest.newBuilder(URI.create(base + path)).header("Content-Type", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofInputStream(() -> new ByteArrayInputStream(new byte[4097]))).build();
+            assertEquals(413, client.send(chunked, HttpResponse.BodyHandlers.ofString()).statusCode());
+            for (String invalid : new String[]{"{}", "[]", "{"}) {
+                assertEquals(400, request("POST", path, invalid, "Content-Type", "application/json").statusCode());
+            }
+        }
+        verify(minecraft, never()).execute(any(Runnable.class));
+        assertTrue(jobs.isEmpty());
+        body = body.substring(0, body.length() - 1) + ",\"allowGeneration\":true}";
+        assertEquals(403, request("POST", "/api/zone-jobs", body, "Content-Type", "application/json", "Origin", "https://evil.example").statusCode());
+        var post = HttpRequest.newBuilder(URI.create(base + "/api/zone-jobs"))
+                .header("Content-Type", "application/json").header("Origin", origin).header("Host", "localhost:" + port);
+        var wrongWorld = client.sendAsync(post.POST(HttpRequest.BodyPublishers.ofString(body.replace(mapId, "another-world"))).build(), HttpResponse.BodyHandlers.ofString());
+        runQueuedJob(jobs);
+        assertEquals(409, wrongWorld.get(2, TimeUnit.SECONDS).statusCode());
+        Thread.sleep(30);
+        var start = client.sendAsync(post.POST(HttpRequest.BodyPublishers.ofString(body)).build(), HttpResponse.BodyHandlers.ofString());
+        runQueuedJob(jobs);
+        var result = start.get(2, TimeUnit.SECONDS);
+        assertEquals(200, result.statusCode());
+        String id = JsonParser.parseString(result.body()).getAsJsonObject().get("id").getAsString();
+        Thread.sleep(30);
+        var duplicate = client.sendAsync(post.POST(HttpRequest.BodyPublishers.ofString(body)).build(), HttpResponse.BodyHandlers.ofString());
+        runQueuedJob(jobs);
+        assertEquals(409, duplicate.get(2, TimeUnit.SECONDS).statusCode());
+        verify(level, never()).getChunkSource();
+        assertPending(request("GET", "/api/zone-jobs", null));
+        runQueuedJob(jobs);
+        assertEquals("queued", JsonParser.parseString(request("GET", "/api/zone-jobs", null).body()).getAsJsonObject().getAsJsonObject("job").get("state").getAsString());
+        ServerChunkCache chunks = mock(ServerChunkCache.class);
+        when(level.getChunkSource()).thenReturn(chunks);
+        CompletableFuture<net.minecraft.server.level.ChunkResult<net.minecraft.world.level.chunk.ChunkAccess>> generation = new CompletableFuture<>();
+        when(chunks.getChunkFuture(0, 0, net.minecraft.world.level.chunk.status.ChunkStatus.FULL, true)).thenReturn(generation);
+        server.tickZoneJobs(minecraft);
+        var ticket = org.mockito.ArgumentCaptor.forClass(net.minecraft.server.level.TicketType.class);
+        var position = new net.minecraft.world.level.ChunkPos(0, 0);
+        verify(chunks).addTicketWithRadius(ticket.capture(), eq(position), eq(0));
+        Thread.sleep(30);
+        assertEquals(403, request("POST", "/api/zone-jobs/cancel", "{\"id\":\"" + id + "\"}",
+                "Content-Type", "application/json", "Origin", "https://evil.example").statusCode());
+        verify(chunks, never()).removeTicketWithRadius(any(), any(), anyInt());
+        var cancel = client.sendAsync(HttpRequest.newBuilder(URI.create(base + "/api/zone-jobs/cancel"))
+                .header("Content-Type", "application/json").header("Origin", origin).header("Host", "localhost:" + port)
+                .POST(HttpRequest.BodyPublishers.ofString("{\"id\":\"" + id + "\"}")).build(), HttpResponse.BodyHandlers.ofString());
+        runQueuedJob(jobs);
+        assertEquals(200, cancel.get(2, TimeUnit.SECONDS).statusCode());
+        verify(chunks).removeTicketWithRadius(ticket.getValue(), position, 0);
+        assertFalse(generation.isCancelled());
+        assertPending(request("GET", "/api/zone-jobs", null));
+        runQueuedJob(jobs);
+        assertEquals("cancelled", JsonParser.parseString(request("GET", "/api/zone-jobs", null).body()).getAsJsonObject().getAsJsonObject("job").get("state").getAsString());
+        Thread.sleep(30);
+        start = client.sendAsync(post.POST(HttpRequest.BodyPublishers.ofString(body)).build(), HttpResponse.BodyHandlers.ofString());
+        runQueuedJob(jobs);
+        assertEquals(200, start.get(2, TimeUnit.SECONDS).statusCode());
+        server.tickZoneJobs(minecraft);
+        server.stop();
+        verify(chunks, times(2)).removeTicketWithRadius(ticket.getValue(), position, 0);
+        assertFalse(generation.isCancelled());
+        clearInvocations(chunks);
+        server.tickZoneJobs(minecraft);
+        verifyNoInteractions(chunks);
+    }
+
+    @Test
     void expiredMutationsDoNotAccumulateOrExecuteAfterTheirTimeout() throws Exception {
-        String auth = bearer();
         MinecraftServer minecraft = mock(MinecraftServer.class);
         var jobs = queueWorldServer(minecraft);
         String body = "{\"pos\":\"1\",\"duration\":300}";
-        var response = request("POST", "/api/speedtest", body, "Authorization", auth,
+        var response = request("POST", "/api/speedtest", body,
                 "Content-Type", "application/json");
         assertEquals(504, response.statusCode());
         assertEquals("1", response.headers().firstValue("Retry-After").orElseThrow());
         assertEquals(1, jobs.size());
         for (int i = 0; i < 20; i++) {
-            response = request("POST", "/api/speedtest", body, "Authorization", auth,
+            response = request("POST", "/api/speedtest", body,
                     "Content-Type", "application/json");
             assertEquals(429, response.statusCode());
             assertEquals("1", response.headers().firstValue("Retry-After").orElseThrow());

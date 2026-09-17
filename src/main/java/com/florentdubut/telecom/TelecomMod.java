@@ -88,6 +88,11 @@ public class TelecomMod {
         httpServer.captureChunk(event.getLevel(), event.getChunk().getPos());
     }
 
+    @SubscribeEvent
+    public void onZoneJobTick(net.neoforged.neoforge.event.tick.ServerTickEvent.Post event) {
+        httpServer.tickZoneJobs(event.getServer());
+    }
+
     @EventBusSubscriber(modid = TelecomMod.MODID, value = Dist.CLIENT)
     static class ClientModEvents {
         @SubscribeEvent

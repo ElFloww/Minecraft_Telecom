@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
-    "check": "node --check main.js && node --check coverage.js && node --check map-image.js",
+    "check": "node --check main.js && node --check coverage.js && node --check map-image.js && node --check zone.js",
     "test": "node --test tests/*.test.js"
   },
   "devDependencies": {

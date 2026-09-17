@@ -1,17 +1,18 @@
 import './style.css';
 import { CoverageStore, COVERAGE_STYLES, signalState, coverageStep, visibleCoverageTiles, retryDelay } from './coverage.js';
 import { MapImageStore } from './map-image.js';
+import { worldPoint, zoneBounds, validBounds, zoneTileCount, zoneError, exactCoverageTiles, exactCoverageViewport } from './zone.js';
 
-let sessionToken = '';
 let sessionGeneration = 0;
 let requestQueue = Promise.resolve();
 let queuedRequests = 0;
 let apiNextAt = 0;
 let apiRetryAt = 0;
 const routeRetries = new Map();
-let speedtestPending = false;
+const speedtestPending = new Map();
+const speedtestSettings = new Map();
 let tilesPaused = false;
-const authStatus = document.getElementById('auth-status');
+const connectionStatus = document.getElementById('connection-status');
 
 function deferredRequest(retryAt, message = 'Lecture differee') {
     return Object.assign(new Error(message), { deferred: true, retryAt });
@@ -22,21 +23,23 @@ function apiFetch(path, options = {}) {
     if (queuedRequests >= 8) return Promise.reject(deferredRequest(Date.now() + 1000, 'HTTP request queue full'));
     queuedRequests++;
     const generation = sessionGeneration;
-    const { isCurrent = () => true, ...fetchOptions } = options;
+    const { isCurrent = () => true, onDispatch = () => {}, ...fetchOptions } = options;
+    const read = !fetchOptions.method || fetchOptions.method === 'GET';
     const current = () => generation === sessionGeneration && isCurrent() && !document.hidden;
     const request = requestQueue.then(async () => {
         // Recheck after every wait: a preceding response may have deferred the entire backlog.
         while (true) {
             if (!current()) throw deferredRequest(Date.now() + 1000, 'Lecture annulee');
+            if (read && tilesPaused) throw deferredRequest(Infinity, 'Accès origine/proxy refusé');
             if (apiRetryAt === Infinity) throw deferredRequest(Infinity);
             const delay = Math.max(apiNextAt, apiRetryAt) - Date.now();
             if (delay <= 0) break;
             await new Promise(resolve => setTimeout(resolve, Math.min(200, delay)));
         }
-        if (Date.now() < (routeRetries.get(path) || 0)) throw deferredRequest(routeRetries.get(path));
+        if (read && Date.now() < (routeRetries.get(path) || 0)) throw deferredRequest(routeRetries.get(path));
         const headers = new Headers(options.headers);
-        if (sessionToken) headers.set('Authorization', `Bearer ${sessionToken}`);
         apiNextAt = Date.now() + 200;
+        onDispatch();
         const response = await fetch(path, { ...fetchOptions, headers, cache: 'no-store', credentials: 'omit',
             redirect: 'error', signal: AbortSignal.timeout(5000) });
         // Even stale responses must protect the shared HTTP budget.
@@ -44,28 +47,28 @@ function apiFetch(path, options = {}) {
             apiRetryAt = Math.max(apiRetryAt, Date.now() + retryDelay(response.headers?.get('Retry-After'), 1, Date.now()));
         }
         if (!current()) throw deferredRequest(Date.now() + 1000, 'Lecture annulee');
-        routeRetries.delete(path);
-        if ([202, 204].includes(response.status)) {
+        if (read) routeRetries.delete(path);
+        if (read && [202, 204].includes(response.status)) {
             routeRetries.set(path, Date.now() + retryDelay(response.headers?.get('Retry-After'), response.status === 204 ? 6 : 1, Date.now()));
             while (routeRetries.size > 128) routeRetries.delete(routeRetries.keys().next().value);
         }
         if (response.status === 401 || response.status === 403) {
-            authStatus.textContent = 'Accès refusé : vérifier le token et l’origine autorisée.';
-            tilesPaused = true;
+            connectionStatus.textContent = `Accès refusé (HTTP ${response.status}) : vérifier l’origine autorisée ou le proxy.${read ? ' Lectures suspendues ; utiliser « Reprendre les lectures » après correction.' : ''}`;
+            if (read) tilesPaused = true;
         } else if ([429, 503, 504].includes(response.status)) {
-            authStatus.textContent = apiRetryAt === Infinity
-                ? 'Retry-After supérieur à 30 s : lectures suspendues. Revalider la session pour reprendre.'
+            connectionStatus.textContent = apiRetryAt === Infinity
+                ? 'Retry-After supérieur à 30 s : lectures suspendues. Utiliser « Reprendre les lectures ».'
                 : 'Serveur occupé : lectures différées selon Retry-After.';
         } else if (routeRetries.get(path) === Infinity) {
-            authStatus.textContent = 'Retry-After supérieur à 30 s : cette lecture est suspendue. Revalider la session pour reprendre.';
-        } else if (response.status === 202) {
-            authStatus.textContent = 'Jeu en pause ou occupé : en attente du tick Minecraft.';
+            connectionStatus.textContent = 'Retry-After supérieur à 30 s : cette lecture est suspendue. Utiliser « Reprendre les lectures ».';
+        } else if (read && response.status === 202) {
+            connectionStatus.textContent = 'Jeu en pause ou occupé : en attente du tick Minecraft.';
         } else if (response.status === 204) {
-            authStatus.textContent = path.startsWith('/api/map-image?')
+            connectionStatus.textContent = path.startsWith('/api/map-image?')
                 ? 'Carte physique vide : attente d\'une nouvelle revision.'
                 : 'Zones de terrain non chargées. Nouvelle lecture après 30 s.';
-        } else if (response.status === 200 && routeRetries.size === 0) {
-            authStatus.textContent = sessionToken ? 'Session avec token actif.' : 'Lecture locale sans token.';
+        } else if (response.status === 200 && routeRetries.size === 0 && !tilesPaused) {
+            connectionStatus.textContent = 'Connexion établie.';
         }
         return response;
     });
@@ -73,41 +76,35 @@ function apiFetch(path, options = {}) {
     return request;
 }
 
-function setSessionToken(value) {
-    sessionToken = value;
+// Explicitly resume blocked reads without discarding the displayed world or HTTP budget.
+function resetDashboardSession() {
     sessionGeneration++;
+    speedtestPending.clear();
     if (apiRetryAt === Infinity) apiRetryAt = 0;
     routeRetries.clear();
     networkNextAt = nperfNextAt = playerNextAt = 0;
     tilesPaused = false;
-    terrainMapId = null;
-    invalidateTerrainImage();
-    coverageStore.invalidate(true);
-    appliedCoverageOptions = null;
-    coverageFields.disabled = true;
-    coverageAntenna.replaceChildren(new Option('Toutes les antennes actives', 'all'));
-    coverageBand.replaceChildren(new Option('Toutes les bandes', 'all'));
-    mapPointer = null;
-    tooltip.style.display = 'none';
-    networkData = { nodes: [], edges: [] };
-    nodeMap = new Map();
-    networkNodesKey = '';
-    document.getElementById('stat-nodes').textContent = '0';
-    document.getElementById('stat-edges').textContent = '0';
-    nperfData = [];
-    selectedNode = selectedEdge = hoveredNode = hoveredEdge = null;
-    detailsPanel.style.display = 'none';
-    authStatus.textContent = value ? 'Vérification du token...' : 'Token effacé.';
-    document.getElementById('session-token').value = '';
+    // Invalidate callbacks, not selections, cached pixels/radio or in-flight busy barriers.
+    if (terrainMapId !== null) initialCenterDone = true;
+    mapImageStore.generation++;
+    mapImageStore.retryAt = 0;
+    coverageStore.generation++;
+    coverageStore.retryAt = coverageStore.nextOptionsAt = coverageStore.optionsPendingAt = 0;
+    coverageStore.stopped = false;
+    coverageStore.failures = 0;
+    for (const entry of coverageStore.cache.values()) if (entry.nextAt === Infinity) entry.nextAt = 0;
+    zoneEpoch++;
+    zoneReconcile ||= !!zonePending?.dispatched || zonePending?.kind === 'cancel';
+    zonePending = null;
+    zoneNextAt = 0;
+    connectionStatus.textContent = 'Reprise des lectures...';
+    renderZone();
+    if (selectedNode?.type === 'ROUTER') showNodeDetails(selectedNode);
     fetchNetworkData();
     fetchNperfData();
 }
 
-document.getElementById('session-auth').addEventListener('submit', event => {
-    event.preventDefault();
-    setSessionToken(document.getElementById('session-token').value.trim());
-});
-document.getElementById('clear-token').addEventListener('click', () => setSessionToken(''));
+document.getElementById('resume-reads').addEventListener('click', () => resetDashboardSession());
 
 function escapeHtml(value) {
     return String(value).replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
@@ -122,6 +119,7 @@ const detailsContent = document.getElementById('details-content');
 const detailsTitle = document.getElementById('details-title');
 
 let networkData = { nodes: [], edges: [] };
+let terrainMapId = null;
 let nodeMap = new Map();
 let networkNodesKey = '';
 let pan = { x: 0, y: 0 };
@@ -150,7 +148,276 @@ const coverageStatus = document.getElementById('coverage-status');
 let appliedCoverageOptions = null;
 let mapPointer = null;
 
+const zoneSelect = document.getElementById('zone-select');
+const zoneStep = document.getElementById('zone-step');
+const zoneConfirm = document.getElementById('zone-confirm');
+const zoneStatus = document.getElementById('zone-status');
+const zoneInputs = Object.fromEntries(['minX', 'minZ', 'maxX', 'maxZ'].map(key => [key, document.getElementById(`zone-${key}`)]));
+let selectedZone = null;
+let zonePointer = null;
+let zoneJob = null;
+let zoneAcknowledgedAt = 0;
+let zonePending = null;
+let zoneEpoch = 0;
+let zonePollPending = false;
+let zoneNextAt = 0;
+let zoneReconcile = false;
+let zoneAwaitingId = null;
+let zoneMessage = '';
+let forcedCoverageView = null;
+let dismissedZoneId = null;
+let zoneTileMemo = null;
+let coverageViewport = {};
+const zoneDetailMessage = 'Zoomer pour détails... Vue partielle : seules les données exactes disponibles en cache sont affichées. Le serveur traite toute la zone progressivement.';
+
+function setSelectedZone(bounds) {
+    selectedZone = bounds;
+    for (const [key, input] of Object.entries(zoneInputs)) input.value = bounds ? String(bounds[key]) : '';
+    renderZone();
+}
+
+function zoneActive() { return zoneJob && ['queued', 'running'].includes(zoneJob.state); }
+
+function renderZone() {
+    if (forcedCoverageView) coverageView();
+    else if (zoneMessage === zoneDetailMessage) zoneMessage = '';
+    const bounds = selectedZone;
+    document.getElementById('zone-bounds').textContent = bounds
+        ? `X ${bounds.minX} à ${bounds.maxX}, Z ${bounds.minZ} à ${bounds.maxZ} | ${zoneTileCount(bounds, 16)} chunks (bornes arrondies aux chunks entiers)${[1, 8, 16].includes(Number(zoneStep.value)) ? `, ${zoneTileCount(bounds, Number(zoneStep.value) * 16)} tuiles physiques, ${zoneTileCount(bounds, Number(zoneStep.value) * 16) * 256} points estimés (tuiles entières)` : ''}`
+        : 'Aucune zone valide sélectionnée.';
+    const locked = !!zonePending || zoneActive() || zoneReconcile;
+    document.getElementById('zone-terrain').disabled = !!locked || !terrainMapId || !zoneConfirm.checked
+        || !!zoneError('terrain', bounds);
+    document.getElementById('zone-coverage').disabled = !!locked || !terrainMapId
+        || !!zoneError('coverage', bounds, Number(zoneStep.value));
+    document.getElementById('zone-cancel').disabled = (!zoneActive() && !zonePending)
+        || !!zonePending?.cancelRequested || zonePending?.kind === 'cancel';
+    document.getElementById('zone-auto').hidden = !forcedCoverageView;
+    document.getElementById('zone-progress').value = zoneJob?.progress || 0;
+    const states = { queued: 'En file', running: 'En cours', completed: 'Terminé', cancelled: 'Annulé', failed: 'Échec' };
+    zoneStatus.textContent = [zoneMessage, forcedCoverageView && coverageViewport.limited && zoneMessage !== zoneDetailMessage ? zoneDetailMessage : '', zoneJob
+        ? `${zoneJob.kind === 'terrain' ? 'Terrain' : 'Couverture'} : ${states[zoneJob.state]}, ${zoneJob.completed}/${zoneJob.total} (${Math.round(zoneJob.progress * 100)} %). ${zoneJob.message || ''}`
+        : 'Aucun job.'].filter(Boolean).join(' ');
+    for (const control of [coverageAntenna, coverageBand, coverageHeight, coveragePrecision]) control.disabled = !!forcedCoverageView;
+    coverageY.disabled = !!forcedCoverageView || coverageHeight.value !== 'y';
+}
+
+function resetZone() {
+    zoneEpoch++;
+    zoneJob = zonePending = zonePointer = forcedCoverageView = dismissedZoneId = zoneAwaitingId = null;
+    zoneTileMemo = null;
+    coverageViewport = {};
+    zoneAcknowledgedAt = 0;
+    zoneReconcile = false;
+    zoneNextAt = 0;
+    zoneMessage = '';
+    zoneConfirm.checked = zoneSelect.checked = false;
+    isDragging = false;
+    setSelectedZone(null);
+}
+
+function applyZoneJob(job) {
+    if (!job || typeof job.id !== 'string' || !job.id || !['terrain', 'coverage'].includes(job.kind)
+        || !['queued', 'running', 'completed', 'cancelled', 'failed'].includes(job.state)
+        || !validBounds(job.bounds) || !Number.isSafeInteger(job.total) || job.total < 0
+        || !Number.isSafeInteger(job.completed) || job.completed < 0 || job.completed > job.total
+        || !Number.isFinite(job.progress) || job.progress < 0 || job.progress > 1
+        || typeof job.message !== 'string') throw new Error('Statut de zone incompatible');
+    let tiles = [];
+    if (job.kind === 'coverage') {
+        if (!Array.isArray(job.coverageTiles)) throw new Error('Tuiles de zone incompatibles');
+        const key = JSON.stringify([job.id, job.bounds.minX, job.bounds.minZ, job.bounds.maxX, job.bounds.maxZ,
+            job.step, job.coverageTiles.length]);
+        // Status/progress polls do not reparse immutable descriptors. The empty POST acknowledgement can grow.
+        if (zoneTileMemo?.key !== key) zoneTileMemo = { key, tiles: exactCoverageTiles(job) };
+        tiles = zoneTileMemo.tiles;
+    }
+    if (job.kind === 'coverage' && ((job.height !== 'surface' && !/^-?\d+$/.test(String(job.height)))
+        || typeof job.antenna !== 'string' || !/^(all|-?\d+)$/.test(job.antenna)
+        || !['all', '2G', '3G', '4G', '5G'].includes(job.technology) || typeof job.band !== 'string')) {
+        throw new Error('Filtres de zone incompatibles');
+    }
+    zoneJob = job;
+    if (job.kind === 'coverage' && ['queued', 'running', 'completed'].includes(job.state) && dismissedZoneId !== job.id) {
+        const first = forcedCoverageView?.id !== job.id;
+        forcedCoverageView = { ...job, tiles };
+        coverageToggle.checked = true;
+        if (first) {
+            coverageTechnology.value = job.technology;
+            updateCoverageBands();
+            coverageAntenna.replaceChildren(new Option(job.antenna, job.antenna));
+            coverageBand.replaceChildren(new Option(job.band, job.band));
+            coverageHeight.value = job.height === 'surface' ? 'surface' : 'y';
+            coverageY.value = job.height === 'surface' ? '' : String(job.height);
+            coveragePrecision.value = String(job.step);
+            setSelectedZone({ ...job.bounds });
+        }
+    } else if (forcedCoverageView?.id === job.id || job.kind === 'terrain') {
+        forcedCoverageView = null;
+    }
+    if (job.kind === 'terrain' && job.state === 'completed') networkNextAt = 0;
+    renderZone();
+}
+
+async function pollZoneJobs() {
+    if (document.hidden || tilesPaused || zonePollPending || zonePending || Date.now() < zoneNextAt) return;
+    zonePollPending = true;
+    const epoch = zoneEpoch;
+    const isCurrent = () => epoch === zoneEpoch;
+    zoneNextAt = Date.now() + 1500;
+    try {
+        const response = await apiFetch('/api/zone-jobs', { isCurrent });
+        if (!isCurrent()) return;
+        zoneNextAt = Date.now() + 1500;
+        if ([202, 204].includes(response.status)) {
+            zoneNextAt = Date.now() + retryDelay(response.headers?.get('Retry-After'), response.status === 204 ? 6 : 1, Date.now());
+            zoneMessage = 'Statut en attente du tick Minecraft.';
+            return;
+        }
+        if (response.status !== 200) throw new Error(`Jobs HTTP ${response.status}`);
+        const data = await response.json();
+        if (!isCurrent()) return;
+        if (!data || !Object.hasOwn(data, 'job')) throw new Error('Statut de zone incompatible');
+        // An acknowledgement stays locked until the authoritative snapshot catches up.
+        if (zoneAwaitingId && data.job?.id !== zoneAwaitingId && Date.now() - zoneAcknowledgedAt < 5000) return;
+        if (data.job) applyZoneJob(data.job);
+        else zoneJob = null;
+        zoneAwaitingId = null;
+        zoneReconcile = false;
+        zoneMessage = '';
+    } catch (error) {
+        if (!isCurrent()) return;
+        zoneNextAt = error.deferred ? error.retryAt : Date.now() + 2000;
+        zoneMessage = error.deferred ? 'Lecture des jobs différée.' : error.message;
+    } finally {
+        zonePollPending = false;
+        if (isCurrent()) renderZone();
+    }
+}
+
+async function startZoneJob(kind) {
+    if (zonePending || zoneActive() || zoneReconcile) return;
+    const step = Number(zoneStep.value);
+    const filters = currentCoverageFilters();
+    zoneMessage = !terrainMapId ? 'Attendre le chargement de la carte.'
+        : zoneError(kind, selectedZone, step)
+            || (kind === 'terrain' && !zoneConfirm.checked ? 'Confirmer la génération de nouveaux chunks.' : '')
+            || (kind === 'coverage' && !filters ? 'Hauteur radio invalide.' : '');
+    if (zoneMessage) { renderZone(); return; }
+    const payload = { kind, ...selectedZone, mapId: terrainMapId, allowGeneration: kind === 'terrain' && zoneConfirm.checked,
+        step: kind === 'coverage' ? step : 16, height: filters?.y ?? 'surface', antenna: filters?.antenna ?? 'all',
+        technology: filters?.technology ?? 'all', band: filters?.band ?? 'all' };
+    const pending = { kind: 'start', cancelRequested: false, dispatched: false };
+    zonePending = pending;
+    const epoch = ++zoneEpoch;
+    const isCurrent = () => epoch === zoneEpoch && zonePending === pending;
+    zoneMessage = 'Démarrage...';
+    renderZone();
+    try {
+        const response = await apiFetch('/api/zone-jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload), isCurrent, onDispatch: () => { pending.dispatched = true; } });
+        if (!isCurrent()) return;
+        if (response.status === 409) {
+            zoneReconcile = true;
+            throw new Error('Un job global est déjà actif. Synchronisation...');
+        }
+        if (response.status !== 200 && response.status !== 202) throw new Error(`Démarrage HTTP ${response.status}`);
+        const result = await response.json();
+        if (!isCurrent()) return;
+        if (typeof result.id !== 'string' || !result.id || result.status !== 'queued') throw new Error('Réponse de démarrage incompatible');
+        zoneAwaitingId = result.id;
+        zoneAcknowledgedAt = Date.now();
+        zoneJob = { ...payload, id: result.id, state: 'queued', total: zoneTileCount(payload, kind === 'terrain' ? 16 : step * 16),
+            completed: 0, progress: 0, message: '', bounds: { minX: payload.minX, minZ: payload.minZ, maxX: payload.maxX, maxZ: payload.maxZ }, coverageTiles: [] };
+        if (!pending.cancelRequested) applyZoneJob(zoneJob);
+        zoneMessage = '';
+    } catch (error) {
+        if (!isCurrent()) return;
+        zoneMessage = error.deferred ? 'Démarrage différé. Vérifier le statut avant de réessayer.' : error.message;
+        // Never automatically replay a mutation after an ambiguous transport failure.
+        zoneReconcile = true;
+    } finally {
+        if (isCurrent()) {
+            zonePending = null;
+            zoneNextAt = 0;
+            renderZone();
+            if (pending.cancelRequested && zoneActive()) cancelZoneJob();
+        }
+    }
+}
+
+async function cancelZoneJob() {
+    if (zonePending) {
+        if (zonePending.kind === 'start') {
+            if (!zonePending.dispatched) {
+                zoneEpoch++;
+                zonePending = null;
+                zoneMessage = 'Démarrage annulé avant envoi.';
+                renderZone();
+                return;
+            }
+            zonePending.cancelRequested = true;
+            zoneMessage = 'Annulation demandée, attente de l’identifiant du job...';
+            renderZone();
+        }
+        return;
+    }
+    if (!zoneActive()) return;
+    const id = zoneJob.id, epoch = ++zoneEpoch;
+    const pending = { kind: 'cancel' };
+    zonePending = pending;
+    const isCurrent = () => epoch === zoneEpoch && zonePending === pending;
+    zoneMessage = 'Annulation...';
+    renderZone();
+    try {
+        const response = await apiFetch('/api/zone-jobs/cancel', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id }), isCurrent });
+        if (!isCurrent()) return;
+        if (response.status !== 200) throw new Error(`Annulation HTTP ${response.status}`);
+        const result = await response.json();
+        if (!isCurrent()) return;
+        if (result.status !== 'cancelled') throw new Error('Réponse d’annulation incompatible');
+        applyZoneJob({ ...zoneJob, state: 'cancelled', message: 'Les chunks créés sont conservés.' });
+        zoneAwaitingId = null;
+        zoneMessage = '';
+    } catch (error) {
+        if (isCurrent()) zoneMessage = error.deferred ? 'Annulation différée, réessayer.' : error.message;
+    } finally {
+        if (isCurrent()) { zonePending = null; zoneNextAt = 0; renderZone(); }
+    }
+}
+
+for (const input of Object.values(zoneInputs)) input.addEventListener('input', () => {
+    const bounds = Object.fromEntries(Object.entries(zoneInputs).map(([key, field]) => [key, /^-?\d+$/.test(field.value) ? Number(field.value) : NaN]));
+    selectedZone = validBounds(bounds) ? bounds : null;
+    zoneMessage = validBounds(bounds) ? '' : zoneError('terrain', bounds);
+    renderZone();
+});
+zoneStep.addEventListener('change', renderZone);
+zoneConfirm.addEventListener('change', renderZone);
+zoneSelect.addEventListener('change', () => {
+    zonePointer = null;
+    isDragging = false;
+    hoveredNode = hoveredEdge = null;
+    tooltip.style.display = 'none';
+    canvas.style.cursor = zoneSelect.checked ? 'crosshair' : '';
+});
+document.getElementById('zone-terrain').addEventListener('click', () => startZoneJob('terrain'));
+document.getElementById('zone-coverage').addEventListener('click', () => startZoneJob('coverage'));
+document.getElementById('zone-cancel').addEventListener('click', cancelZoneJob);
+document.getElementById('zone-auto').addEventListener('click', () => {
+    dismissedZoneId = forcedCoverageView?.id;
+    forcedCoverageView = null;
+    updateCoverageAntennas();
+    updateCoverageBands();
+    renderZone();
+    updateComputedCoverage();
+});
+setInterval(pollZoneJobs, 200);
+renderZone();
+
 function updateCoverageBands() {
+    if (forcedCoverageView) return;
     const previous = coverageBand.value;
     const bands = (coverageStore.options?.bands || []).filter(b => coverageTechnology.value === 'all'
         || b.technology === coverageTechnology.value);
@@ -160,6 +427,7 @@ function updateCoverageBands() {
 }
 
 function updateCoverageAntennas() {
+    if (forcedCoverageView) return;
     const previous = coverageAntenna.value;
     // Network IDs are signed-long strings; never round-trip them through Number.
     const antennas = networkData.nodes.filter(n => n.type === 'ANTENNA' && n.active !== false
@@ -170,6 +438,9 @@ function updateCoverageAntennas() {
 }
 
 function currentCoverageFilters() {
+    if (forcedCoverageView) return { level: forcedCoverageView.step === 1 ? -3 : forcedCoverageView.step === 8 ? 0 : 1,
+        precision: String(forcedCoverageView.step), step: forcedCoverageView.step, y: String(forcedCoverageView.height),
+        antenna: forcedCoverageView.antenna, technology: coverageTechnology.value, band: forcedCoverageView.band, exact: true };
     const options = coverageStore.options;
     let y = 'surface';
     if (coverageHeight.value === 'y') {
@@ -183,16 +454,37 @@ function currentCoverageFilters() {
         technology: coverageTechnology.value, band: coverageBand.value };
 }
 
-let coverageViewport = {};
 function coverageView() {
+    if (forcedCoverageView) {
+        if (coverageViewport.source !== forcedCoverageView.tiles || coverageViewport.width !== canvas.width
+            || coverageViewport.height !== canvas.height || coverageViewport.x !== pan.x
+            || coverageViewport.z !== pan.y || coverageViewport.zoom !== zoom) {
+            coverageViewport = { source: forcedCoverageView.tiles, width: canvas.width, height: canvas.height,
+                x: pan.x, z: pan.y, zoom,
+                ...exactCoverageViewport(forcedCoverageView.tiles, { width: canvas.width, height: canvas.height, pan, zoom }) };
+            coverageStore.exactKeys = new Set(coverageViewport.tiles.map(tile => coverageStore.key(tile, currentCoverageFilters())));
+        }
+        if (coverageViewport.limited && !zoneMessage) zoneMessage = zoneDetailMessage;
+        else if (!coverageViewport.limited && zoneMessage === zoneDetailMessage) zoneMessage = '';
+        return coverageViewport.tiles;
+    }
     const budget = 49;
-    if (coverageViewport.width !== canvas.width || coverageViewport.height !== canvas.height
+    if (coverageViewport.source || coverageViewport.width !== canvas.width || coverageViewport.height !== canvas.height
         || coverageViewport.x !== pan.x || coverageViewport.z !== pan.y
         || coverageViewport.zoom !== zoom || coverageViewport.budget !== budget) {
         coverageViewport = { width: canvas.width, height: canvas.height, x: pan.x, z: pan.y, zoom, budget,
             tiles: visibleCoverageTiles({ width: canvas.width, height: canvas.height, pan, zoom }, budget) };
     }
     return coverageViewport.tiles;
+}
+
+function coverageDisplayView() {
+    const tiles = coverageView();
+    if (!forcedCoverageView || !coverageViewport.limited) return tiles;
+    // At wide zoom, display cached results only, including previously visited parts of the zone.
+    return [...coverageStore.cache.values()].filter(entry => entry.tile
+        && coverageViewport.visibleKeys.has(entry.tile.key)
+        && coverageStore.entry(entry.tile) === entry && coverageStore.ready(entry.tile)).map(entry => entry.tile);
 }
 
 function updateCoverageSelection() {
@@ -241,7 +533,7 @@ function updateComputedCoverage() {
         appliedCoverageOptions = coverageStore.options;
         coverageY.min = String(appliedCoverageOptions.minY);
         coverageY.max = String(appliedCoverageOptions.maxY);
-        coverageY.value = String(Math.max(appliedCoverageOptions.minY,
+        if (!forcedCoverageView) coverageY.value = String(Math.max(appliedCoverageOptions.minY,
             Math.min(appliedCoverageOptions.maxY, Number(coverageY.value) || 0)));
         document.getElementById('coverage-y-range').textContent = `(${coverageY.min} à ${coverageY.max})`;
         updateCoverageBands();
@@ -249,7 +541,7 @@ function updateComputedCoverage() {
     coverageFields.disabled = !coverageStore.options;
     const filters = currentCoverageFilters();
     if (!filters) {
-        coverageStatus.textContent = tilesPaused ? 'Couverture suspendue : vérifier la session.' : coverageStore.message
+        coverageStatus.textContent = tilesPaused ? 'Couverture suspendue : vérifier l’origine ou le proxy, puis reprendre les lectures.' : coverageStore.message
             || (coverageStore.options ? `Y entier requis entre ${coverageY.min} et ${coverageY.max}.`
                 : 'Chargement des limites de hauteur...');
         // Keep polling model/height options even while fixed Y is missing or invalid.
@@ -259,15 +551,16 @@ function updateComputedCoverage() {
     const tiles = coverageView();
     coverageStore.select(filters);
     if (!tilesPaused) coverageStore.tick(tiles, filters);
+    if (forcedCoverageView) renderZone();
     const ready = tiles.filter(t => coverageStore.ready(t)).length;
     const progress = tiles.reduce((sum, t) => sum + (coverageStore.ready(t) ? 1
         : coverageStore.entry(t)?.data?.status === 'pending' ? coverageStore.entry(t).data.progress : 0), 0);
-    const state = tilesPaused ? 'Couverture suspendue : vérifier la session.' : coverageStore.message
+    const state = tilesPaused ? 'Couverture suspendue : vérifier l’origine ou le proxy, puis reprendre les lectures.' : coverageStore.message
         || (!coverageStore.options ? 'Chargement des options de couverture...'
-            : `${ready}/${tiles.length} tuiles prêtes, ${Math.round(progress / Math.max(1, tiles.length) * 100)} % calculé.`);
+            : `${ready}/${tiles.length} tuiles prêtes${forcedCoverageView ? ` dans la fenêtre locale (${coverageViewport.visibleKeys.size} visibles, ${forcedCoverageView.tiles.length} dans le job)` : ''}, progression des calculs serveur pour cette vue : ${Math.round(progress / Math.max(1, tiles.length) * 100)} %.`);
     const precision = filters.precision === 'auto' ? 'Auto recommandé'
         : `minimum demandé : ${filters.precision} bloc${filters.precision === '1' ? '' : 's'}`;
-    coverageStatus.textContent = `${state} Technologie : ${filters.technology === 'all' ? 'Toutes (dominante)' : filters.technology}. Pas effectif : ${filters.step} bloc${filters.step === 1 ? '' : 's'}, ${filters.precision === 'auto' || filters.step !== Number(filters.precision) ? 'adapté au zoom' : 'précision demandée atteinte'} (LOD ${filters.level}, ${precision}), ${filters.y === 'surface' ? 'surface' : `Y ${filters.y}`}.`;
+    coverageStatus.textContent = `${state} Technologie : ${filters.technology === 'all' ? 'Toutes (dominante)' : filters.technology}. Pas effectif : ${filters.step} bloc${filters.step === 1 ? '' : 's'}, ${forcedCoverageView ? 'zone exacte, indépendant du zoom' : filters.precision === 'auto' || filters.step !== Number(filters.precision) ? 'adapté au zoom' : 'précision demandée atteinte'} (LOD ${filters.level}, ${precision}), ${filters.y === 'surface' ? 'surface' : `Y ${filters.y}`}.`;
 }
 setInterval(updateComputedCoverage, 200);
 
@@ -296,7 +589,7 @@ function drawComputedCoverage() {
     }
     // Select the effective grid before rendering, without cancelling old LOD jobs.
     coverageStore.select(filters);
-    const tiles = coverageView();
+    const tiles = coverageDisplayView();
     const ready = tiles.map(tile => coverageStore.ready(tile));
     // One viewport-sized RGBA surface, capped at 32 MiB (including a 3840x2160 viewport).
     if (!coverageLayerUnavailable && typeof OffscreenCanvas !== 'undefined'
@@ -312,7 +605,7 @@ function drawComputedCoverage() {
             const target = coverageLayer.context;
             if (!target || target.isContextLost?.()) throw new Error('Radio canvas unavailable');
             const key = JSON.stringify([canvas.width, canvas.height, pan.x, pan.y, zoom, filters,
-                coverageStore.generation, coverageStore.options?.modelRevision]);
+                coverageStore.generation, coverageStore.options?.modelRevision, tiles.map(t => t.key)]);
             // Ready data/projections are immutable per cache entry; expiry changes the reference to null.
             if (coverageLayer.key !== key || ready.length !== coverageLayer.ready.length
                 || ready.some((data, i) => data !== coverageLayer.ready[i])) {
@@ -370,7 +663,7 @@ function positionTooltip(clientX, clientY) {
 }
 
 function showCoverageTooltip() {
-    if (!mapPointer || hoveredNode || hoveredEdge || isDragging) return;
+    if (!mapPointer || hoveredNode || hoveredEdge || isDragging || zoneSelect.checked) return;
     const rect = canvas.getBoundingClientRect();
     const x = (mapPointer.x - rect.left - pan.x) / zoom;
     const z = (mapPointer.y - rect.top - pan.y) / zoom;
@@ -386,7 +679,7 @@ function showCoverageTooltip() {
     }
     const filters = currentCoverageFilters();
     if (!coverageToggle.checked || !filters) return;
-    const tile = coverageView().find(t => t.tx === Math.floor(x / t.tileSize) && t.tz === Math.floor(z / t.tileSize));
+    const tile = coverageDisplayView().find(t => t.tx === Math.floor(x / t.tileSize) && t.tz === Math.floor(z / t.tileSize));
     if (!tile) return;
     const data = coverageStore.ready(tile);
     if (!data) {
@@ -440,6 +733,10 @@ async function fetchNetworkData() {
             if (generation !== sessionGeneration) return;
             if ((typeof data.mapId === 'string' || data.mapId === null) && data.mapId !== terrainMapId) {
                 terrainMapId = data.mapId;
+                speedtestPending.clear();
+                speedtestSettings.clear();
+                selectedNode = selectedEdge = hoveredNode = hoveredEdge = null;
+                detailsPanel.style.display = 'none';
                 invalidateTerrainImage();
                 coverageStore.invalidate(true);
                 appliedCoverageOptions = null;
@@ -449,6 +746,13 @@ async function fetchNetworkData() {
             mapImageStore.select(terrainMapId, data.mapImage);
             updateTerrain();
             networkData = data;
+            for (const node of data.nodes) {
+                const pending = speedtestPending.get(node.id);
+                const test = nodeSpeedtest(node);
+                if (pending?.sessionId && test && (test.active || test.sessionId === pending.sessionId)) {
+                    speedtestPending.delete(node.id);
+                }
+            }
             const nodesKey = JSON.stringify(networkData.nodes);
             if (nodesKey !== networkNodesKey) {
                 networkNodesKey = nodesKey;
@@ -489,6 +793,7 @@ async function fetchNetworkData() {
             }
         }
     } catch (e) {
+        if (generation !== sessionGeneration) return;
         networkNextAt = e.deferred ? e.retryAt : Date.now() + 2000;
         if (!e.deferred) console.warn("Could not fetch network data. Is the Minecraft server running?", e);
     } finally {
@@ -501,8 +806,8 @@ let playerNextAt = 0;
 async function fetchPlayerData() {
     if (!initialCenterDone && !playerPending && !document.hidden && Date.now() >= playerNextAt) {
         playerPending = true;
+        const generation = sessionGeneration;
         try {
-            const generation = sessionGeneration;
             const world = terrainGeneration;
             const res = await apiFetch('/api/player', { isCurrent: () => world === terrainGeneration });
             playerNextAt = Date.now() + retryDelay(res.headers?.get('Retry-After'), 1, Date.now());
@@ -514,6 +819,7 @@ async function fetchPlayerData() {
                 initialCenterDone = true;
             }
         } catch (e) {
+            if (generation !== sessionGeneration) return;
             playerNextAt = e.deferred ? e.retryAt : Date.now() + 2000;
         } finally {
             playerPending = false;
@@ -527,18 +833,36 @@ setInterval(() => { if (Date.now() >= networkNextAt) fetchNetworkData(); }, 200)
 fetchNetworkData();
 
 canvas.addEventListener('pointerdown', e => {
+    if (e.isPrimary === false || (e.button !== undefined && e.button !== 0)) return;
     canvas.setPointerCapture(e.pointerId);
+    if (zoneSelect.checked) {
+        e.preventDefault();
+        const point = worldPoint(e.clientX, e.clientY, canvas.getBoundingClientRect(), pan, zoom);
+        zonePointer = { id: e.pointerId, start: point };
+        isDragging = false;
+        hasDragged = true;
+        hoveredNode = hoveredEdge = null;
+        tooltip.style.display = 'none';
+        setSelectedZone(zoneBounds(point, point));
+        return;
+    }
     isDragging = true;
     hasDragged = false;
     lastMouse = { x: e.clientX, y: e.clientY };
 });
-window.addEventListener('pointerup', () => {
+window.addEventListener('pointerup', e => {
+    if (zonePointer?.id === e.pointerId) {
+        const point = worldPoint(e.clientX, e.clientY, canvas.getBoundingClientRect(), pan, zoom);
+        setSelectedZone(zoneBounds(zonePointer.start, point));
+        zonePointer = null;
+        hasDragged = true;
+    }
     isDragging = false;
 });
-window.addEventListener('pointercancel', () => { isDragging = false; });
+window.addEventListener('pointercancel', () => { isDragging = false; zonePointer = null; });
 
 canvas.addEventListener('click', e => {
-    if (hasDragged) return; // Don't open if they were panning the map
+    if (hasDragged || zoneSelect.checked) return; // Selection gestures never open equipment.
     
     if (hoveredNode) {
         selectedNode = hoveredNode;
@@ -560,6 +884,67 @@ detailsClose.addEventListener('click', () => {
     selectedEdge = null;
     detailsPanel.style.display = 'none';
 });
+
+function nodeSpeedtest(node) {
+    return typeof node.id === 'string' && node.speedtest?.deviceId === node.id ? node.speedtest : null;
+}
+
+function routerSettings(id) {
+    if (!speedtestSettings.has(id)) {
+        speedtestSettings.set(id, { duration: '300', error: '' });
+        if (speedtestSettings.size > 128) speedtestSettings.delete(speedtestSettings.keys().next().value);
+    }
+    return speedtestSettings.get(id);
+}
+
+async function startSpeedtest(deviceId) {
+    const node = nodeMap.get(deviceId);
+    if (typeof deviceId !== 'string' || node?.type !== 'ROUTER'
+        || nodeSpeedtest(node)?.active || speedtestPending.has(deviceId)) return;
+    const settings = routerSettings(deviceId);
+    const refresh = () => {
+        if (selectedNode?.id === deviceId && nodeMap.has(deviceId)) showNodeDetails(nodeMap.get(deviceId));
+    };
+    if (speedtestPending.size >= 8) {
+        settings.error = 'File de démarrage pleine, réessayer après actualisation.';
+        refresh();
+        return;
+    }
+    const generation = sessionGeneration, world = terrainGeneration;
+    const pending = { sessionId: null };
+    const isCurrent = () => generation === sessionGeneration && world === terrainGeneration
+        && speedtestPending.get(deviceId) === pending;
+    speedtestPending.set(deviceId, pending);
+    settings.error = '';
+    refresh();
+    try {
+        const response = await apiFetch('/api/speedtest', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pos: deviceId, duration: Number(settings.duration) }),
+            isCurrent,
+        });
+        if (!isCurrent()) return;
+        if (!response.ok) throw new Error(`Erreur HTTP ${response.status}`);
+        const result = await response.json();
+        if (!isCurrent()) return;
+        if (result.status !== 'started' || result.deviceId !== deviceId
+            || typeof result.sessionId !== 'string' || !result.sessionId) {
+            throw new Error('Réponse Speedtest invalide');
+        }
+        // Keep the device locked until a network snapshot confirms this session.
+        pending.sessionId = result.sessionId;
+        const test = nodeSpeedtest(nodeMap.get(deviceId) || node);
+        if (test && (test.active || test.sessionId === pending.sessionId)) speedtestPending.delete(deviceId);
+        networkNextAt = 0;
+        refresh();
+    } catch (error) {
+        if (!isCurrent()) return;
+        speedtestPending.delete(deviceId);
+        settings.error = error.deferred ? 'Démarrage différé, réessayer.' : error.message || 'Erreur de connexion';
+        refresh();
+    }
+}
 
 function showNodeDetails(node) {
     detailsPanel.style.display = 'flex';
@@ -609,8 +994,21 @@ function showNodeDetails(node) {
     }
     
     if (node.type === 'ROUTER') {
+        const test = nodeSpeedtest(node);
+        const progress = test && Number.isFinite(test.ticksElapsed) && test.totalTicksPerPhase > 0
+            ? Math.max(0, Math.min(100, test.ticksElapsed / test.totalTicksPerPhase * 100)) : 0;
+        const speed = value => Number.isFinite(value) && value >= 0 ? formatSpeed(value) : 'En attente';
         html += `
             <div class="section-title">Speedtest Distant</div>
+            ${test ? `
+                <div class="info-row"><span class="label">Phase</span><span>${escapeHtml(test.state)}</span></div>
+                <div class="info-row"><span class="label">Progression de phase</span><span>${Math.round(progress)} %</span></div>
+                <div class="progress-container"><div class="progress-bar" style="width: ${progress}%; background: #38bdf8"></div></div>
+                <div class="info-row"><span class="label">Ping</span><span>${Number.isFinite(test.pingMs) && test.pingMs >= 0 ? `${test.pingMs} ms` : 'En attente'}</span></div>
+                <div class="info-row"><span class="label">Débit instantané</span><span>${speed(test.actualBandwidth)}</span></div>
+                <div class="info-row"><span class="label">Téléchargement (Down)</span><span>${speed(test.downloadBandwidth)}</span></div>
+                <div class="info-row"><span class="label">Envoi (Up)</span><span>${speed(test.uploadBandwidth)}</span></div>
+            ` : ''}
             <select id="speedtest-duration" class="duration-select">
                 <option value="300">15 secondes</option>
                 <option value="600">30 secondes</option>
@@ -619,39 +1017,24 @@ function showNodeDetails(node) {
                 <option value="12000">10 minutes</option>
             </select>
             <button id="btn-speedtest" class="speedtest-btn">Démarrer Speedtest</button>
+            <div role="status">${escapeHtml(routerSettings(node.id).error)}</div>
         `;
     }
 
-    const previousDuration = document.getElementById('speedtest-duration')?.value;
     detailsContent.innerHTML = html;
-    if (previousDuration && node.type === 'ROUTER') document.getElementById('speedtest-duration').value = previousDuration;
 
     if (node.type === 'ROUTER') {
         const btn = document.getElementById('btn-speedtest');
-        btn.disabled = !sessionToken || speedtestPending;
-        if (!sessionToken) btn.innerText = 'Token requis pour démarrer';
-        btn.addEventListener('click', () => {
-            if (speedtestPending || !sessionToken) return;
-            speedtestPending = true;
-            const duration = document.getElementById('speedtest-duration').value;
-            btn.disabled = true;
-            btn.innerText = "Démarrage...";
-            apiFetch('/api/speedtest', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ pos: node.id, duration: parseInt(duration) })
-            }).then(r => {
-                if(r.ok) {
-                    btn.innerText = "Speedtest en cours !";
-                } else {
-                    btn.innerText = `Erreur HTTP ${r.status}`;
-                    btn.disabled = false;
-                }
-            }).catch(e => {
-                btn.innerText = "Erreur de connexion";
-                btn.disabled = false;
-            }).finally(() => { speedtestPending = false; });
-        });
+        const duration = document.getElementById('speedtest-duration');
+        duration.value = routerSettings(node.id).duration;
+        duration.addEventListener('change', () => { routerSettings(node.id).duration = duration.value; });
+        const active = nodeSpeedtest(node)?.active === true;
+        const pending = speedtestPending.get(node.id);
+        btn.disabled = typeof node.id !== 'string' || active || !!pending;
+        btn.innerText = active ? 'Speedtest en cours !' : pending
+            ? (pending.sessionId ? 'Démarré, attente du statut...' : 'Démarrage...')
+            : 'Démarrer Speedtest';
+        btn.addEventListener('click', () => startSpeedtest(node.id));
     }
 }
 
@@ -731,6 +1114,16 @@ function formatSpeed(mbps) {
 }
 
 window.addEventListener('pointermove', e => {
+    if (zoneSelect.checked) {
+        if (zonePointer?.id === e.pointerId) {
+            const point = worldPoint(e.clientX, e.clientY, canvas.getBoundingClientRect(), pan, zoom);
+            setSelectedZone(zoneBounds(zonePointer.start, point));
+        }
+        mapPointer = null;
+        hoveredNode = hoveredEdge = null;
+        tooltip.style.display = 'none';
+        return;
+    }
     if (isDragging) {
         pan.x += e.clientX - lastMouse.x;
         pan.y += e.clientY - lastMouse.y;
@@ -811,6 +1204,7 @@ canvas.addEventListener('pointerleave', () => {
 });
 
 function zoomAt(factor, x, y) {
+    if (zonePointer) return;
     const nextZoom = Math.max(0.25, Math.min(32, zoom * factor));
     const ratio = nextZoom / zoom;
     zoom = nextZoom;
@@ -831,12 +1225,12 @@ canvas.addEventListener('wheel', e => {
 });
 
 const mapImageStore = new MapImageStore(apiFetch, { decode: blob => createImageBitmap(blob), now: () => Date.now() });
-let terrainMapId = null;
 let terrainGeneration = 0;
 const terrainStatus = document.getElementById('terrain-status');
 
 function invalidateTerrainImage() {
     terrainGeneration++;
+    resetZone();
     mapImageStore.invalidate();
     for (const path of routeRetries.keys()) if (path.startsWith('/api/map-image?')) routeRetries.delete(path);
 }
@@ -886,6 +1280,7 @@ async function fetchNperfData() {
             initialCenterDone = true;
         }
     } catch (e) {
+        if (generation !== sessionGeneration || world !== terrainGeneration) return;
         nperfNextAt = e.deferred ? e.retryAt : Date.now() + 2000;
         if (!e.deferred) console.error(e);
     } finally {
@@ -946,6 +1341,19 @@ function draw() {
 
     drawComputedCoverage();
     drawNperfCoverage();
+
+    const zoneOverlay = forcedCoverageView?.bounds || selectedZone;
+    if (zoneOverlay) {
+        const x = zoneOverlay.minX * zoom + pan.x, z = zoneOverlay.minZ * zoom + pan.y;
+        const width = (zoneOverlay.maxX - zoneOverlay.minX + 1) * zoom;
+        const height = (zoneOverlay.maxZ - zoneOverlay.minZ + 1) * zoom;
+        ctx.fillStyle = 'rgba(56,189,248,0.08)';
+        ctx.fillRect(x, z, width, height);
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([]);
+        ctx.strokeRect(x, z, width, height);
+    }
 
     const showInfra = document.getElementById('show-infra');
     if (!showInfra || showInfra.checked) {
@@ -1060,8 +1468,11 @@ document.addEventListener('visibilitychange', () => {
         updateComputedCoverage();
         fetchNetworkData();
         fetchNperfData();
+        pollZoneJobs();
         animationFrame = requestAnimationFrame(draw);
     } else {
+        zonePointer = null;
+        isDragging = false;
         mapPointer = null;
         tooltip.style.display = 'none';
     }

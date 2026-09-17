@@ -1,5 +1,7 @@
 package com.florentdubut.telecom.client.gui;
 
+import com.florentdubut.telecom.client.ClientSpeedtestState;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.Screen;
@@ -9,6 +11,9 @@ import net.neoforged.neoforge.client.network.ClientPacketDistributor;
 public class SmartphoneSpeedtestScreen extends Screen {
 
     private final Screen parentScreen;
+    private final ClientSpeedtestState.Key speedtestKey;
+    private Button startButton;
+    private boolean speedtestPending;
     private boolean speedtestActive = false;
     private com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload currentSpeedtestData = null;
     
@@ -21,19 +26,34 @@ public class SmartphoneSpeedtestScreen extends Screen {
     public SmartphoneSpeedtestScreen(Screen parentScreen) {
         super(Component.literal("Speedtest"));
         this.parentScreen = parentScreen;
+        var player = Minecraft.getInstance().player;
+        this.speedtestKey = player == null ? null
+                : ClientSpeedtestState.mobileKey(ClientSpeedtestState.currentDimension(), player.getUUID());
+        restoreSpeedtest();
     }
     
     public void updateSpeedtestProgress(com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload payload) {
-        if (SmartphoneHUD.latestScan == null || !payload.clientIp().equals(SmartphoneHUD.latestScan.ipAddress())) return;
-        
-        this.speedtestActive = !payload.state().equals("FINISHED");
-        this.currentSpeedtestData = payload;
-        
-        if (payload.state().equals("DOWNLOAD")) {
-            this.lastDownBw = payload.actualBandwidth();
-        } else if (payload.state().equals("UPLOAD")) {
-            this.lastUpBw = payload.actualBandwidth();
+        if (speedtestKey == null || !speedtestKey.matches(payload)) return;
+        restoreSpeedtest();
+    }
+
+    private void restoreSpeedtest() {
+        var state = ClientSpeedtestState.get(speedtestKey);
+        speedtestActive = state.active();
+        speedtestPending = state.pending();
+        currentSpeedtestData = state.pending() ? null : state.payload();
+        lastDownBw = currentSpeedtestData == null ? 0 : currentSpeedtestData.downloadBandwidth();
+        lastUpBw = currentSpeedtestData == null ? 0 : currentSpeedtestData.uploadBandwidth();
+        if (startButton != null) {
+            startButton.active = speedtestKey != null && !speedtestActive;
+            startButton.setMessage(Component.literal(speedtestPending ? "Waiting..." : "Start Test"));
         }
+    }
+
+    @Override
+    public void tick() {
+        super.tick();
+        restoreSpeedtest();
     }
 
     @Override
@@ -54,8 +74,9 @@ public class SmartphoneSpeedtestScreen extends Screen {
             b.setMessage(Component.literal("Durée: " + DURATION_LABELS[durationIndex]));
         }).bounds(startX + 30, startY + 195, 100, 20).build());
 
-        this.addRenderableWidget(Button.builder(Component.literal("Start Test"), b -> {
-            if (this.speedtestActive) return;
+        this.startButton = this.addRenderableWidget(Button.builder(Component.literal("Start Test"), b -> {
+            restoreSpeedtest();
+            if (speedtestKey == null || this.speedtestActive) return;
             com.florentdubut.telecom.network.packet.NetworkScanResponsePayload scan = SmartphoneHUD.latestScan;
             if (scan != null && scan.found()) {
                 int extraPing = 0;
@@ -70,6 +91,7 @@ public class SmartphoneSpeedtestScreen extends Screen {
                     extraPing = 200 + (int)(Math.random() * 200);
                 }
 
+                if (!ClientSpeedtestState.markPending(speedtestKey)) return;
                 ClientPacketDistributor.sendToServer(new com.florentdubut.telecom.network.packet.StartSpeedtestPayload(
                     scan.antennaPos(), 
                     scan.ipAddress(), 
@@ -79,16 +101,14 @@ public class SmartphoneSpeedtestScreen extends Screen {
                     scan.frequenciesMask(),
                     DURATION_TICKS[durationIndex]
                 ));
-                this.speedtestActive = true;
-                this.currentSpeedtestData = null;
-                this.lastDownBw = 0;
-                this.lastUpBw = 0;
+                restoreSpeedtest();
             } else {
                 if (minecraft.player != null) {
                     minecraft.player.displayClientMessage(Component.literal("No Network Signal!"), false);
                 }
             }
         }).bounds(startX + 30, startY + 220, 100, 20).build());
+        restoreSpeedtest();
         
         this.addRenderableWidget(Button.builder(Component.literal("< Back"), b -> {
             net.minecraft.client.Minecraft.getInstance().setScreen(parentScreen);
@@ -120,17 +140,17 @@ public class SmartphoneSpeedtestScreen extends Screen {
 
         guiGraphics.drawCenteredString(this.font, "SPEEDTEST", startX + screenW / 2, startY + 45, 0xFFFFFFFF);
         
-        if (currentSpeedtestData != null) {
-            guiGraphics.drawCenteredString(this.font, speedtestActive ? "Testing: " + currentSpeedtestData.state() : "FINISHED", startX + screenW / 2, startY + 70, speedtestActive ? 0xFFAAAAAA : 0xFF00FF00);
+        if (speedtestPending) {
+            guiGraphics.drawCenteredString(this.font, "Waiting...", startX + screenW / 2, startY + 70, 0xFFAAAAAA);
+        } else if (currentSpeedtestData != null) {
+            String state = currentSpeedtestData.state();
+            int color = speedtestActive ? 0xFFAAAAAA : "FINISHED".equals(state) ? 0xFF00FF00 : 0xFFFF5555;
+            guiGraphics.drawCenteredString(this.font, speedtestActive ? "Testing: " + state : state, startX + screenW / 2, startY + 70, color);
             
             guiGraphics.drawString(this.font, "Ping: " + currentSpeedtestData.pingMs() + " ms", startX + 20, startY + 90, 0xFF00FF00);
             
-            if (currentSpeedtestData.state().equals("DOWNLOAD") || currentSpeedtestData.state().equals("UPLOAD") || currentSpeedtestData.state().equals("FINISHED")) {
-                guiGraphics.drawString(this.font, "Down: " + this.lastDownBw + " Mbps", startX + 20, startY + 110, 0xFF00FFFF);
-            }
-            if (currentSpeedtestData.state().equals("UPLOAD") || currentSpeedtestData.state().equals("FINISHED")) {
-                guiGraphics.drawString(this.font, "Up: " + this.lastUpBw + " Mbps", startX + 20, startY + 130, 0xFFFF8800);
-            }
+            guiGraphics.drawString(this.font, "Down: " + this.lastDownBw + " Mbps", startX + 20, startY + 110, 0xFF00FFFF);
+            guiGraphics.drawString(this.font, "Up: " + this.lastUpBw + " Mbps", startX + 20, startY + 130, 0xFFFF8800);
         }
     }
 

@@ -32,7 +32,7 @@ import java.util.zip.GZIPOutputStream;
 /** Observed 3D terrain only. No chunk references, generation, or disk work in radio scans. */
 public final class RadioTerrainCache {
     static final int CAPACITY = 256;
-    static final int DISK_CAPACITY = 256;
+    static final int DISK_CAPACITY = 4096;
     static final int QUEUE_CAPACITY = 128;
     static final int PREFETCH_LIMIT = 48;
     private static final int MAGIC = 0x52414431; // Radio material model / file format version.

@@ -9,15 +9,12 @@
     <div id="app">
       <div class="sidebar glass">
         <h1>Telecom Dashboard</h1>
-        <form id="session-auth" autocomplete="off">
-          <label for="session-token">Token HTTP de session</label>
-          <input id="session-token" type="password" autocomplete="off" maxlength="1024" placeholder="TELECOM_HTTP_TOKEN" />
-          <button class="speedtest-btn" type="submit">Appliquer</button>
-          <button class="speedtest-btn" id="clear-token" type="button">Effacer la session</button>
-          <small>En mémoire uniquement. Requis pour les mutations et tout accès distant.</small>
-          <p id="auth-status" role="status" aria-live="polite">Lecture locale sans token.</p>
+        <div class="connection-controls">
+          <p class="access-warning">Sans authentification : toute personne accédant à cette page peut lancer les actions</p>
+          <button class="speedtest-btn" id="resume-reads" type="button">Reprendre les lectures</button>
+          <p id="connection-status" role="status" aria-live="polite"></p>
           <p id="terrain-status" role="status" aria-live="polite"></p>
-        </form>
+        </div>
         
         <div class="stat-card">
           <h3>Network Nodes</h3>
@@ -39,6 +36,33 @@
           <div class="legend-item"><span class="dot pm"></span> PM</div>
           <div class="legend-item"><span class="dot sr"></span> SR</div>
         </div>
+
+        <section class="zone-controls" aria-labelledby="zone-title">
+          <h3 id="zone-title">Travaux sur une zone</h3>
+          <label class="toggle-label"><input id="zone-select" type="checkbox"> Sélectionner une zone</label>
+          <small>Glisser sur la carte avec la souris ou le doigt. Bornes inclusives en blocs du monde, arrondies vers le bas.</small>
+          <p id="zone-bounds" aria-live="polite">Aucune zone sélectionnée.</p>
+          <details><summary>Modifier les bornes</summary>
+            <div class="zone-inputs">
+              <label>minX<input id="zone-minX" type="number" step="1" min="-30000000" max="29999999"></label>
+              <label>minZ<input id="zone-minZ" type="number" step="1" min="-30000000" max="29999999"></label>
+              <label>maxX<input id="zone-maxX" type="number" step="1" min="-30000000" max="29999999"></label>
+              <label>maxZ<input id="zone-maxZ" type="number" step="1" min="-30000000" max="29999999"></label>
+            </div>
+          </details>
+          <label for="zone-step">Pas du calcul de zone (obligatoire)</label>
+          <select id="zone-step" required><option value="">Choisir le pas</option><option value="1">1 bloc</option><option value="8">8 blocs</option><option value="16">16 blocs</option></select>
+          <small>Couverture : 1024 tuiles physiques maximum, soit 262144 points, côté = pas × 16. Utilise les filtres radio ci-dessous au démarrage. Les pas 1, 8 et 16 restent exacts, indépendamment du zoom.</small>
+          <label class="toggle-label"><input id="zone-confirm" type="checkbox"> Autoriser la génération de nouveaux chunks</label>
+          <small>Terrain : 4096 chunks maximum, bornes arrondies aux chunks entiers. Minecraft vanilla peut aussi générer des voisins. Les grandes zones peuvent prendre longtemps : le serveur les traite progressivement, même sans afficher toute la zone. Le navigateur ne charge que 64 tuiles proches à la fois et conserve au plus 128 tuiles radio.</small>
+          <button id="zone-terrain" class="speedtest-btn" type="button">Générer le terrain</button>
+          <button id="zone-coverage" class="speedtest-btn" type="button">Calculer couverture</button>
+          <progress id="zone-progress" max="1" value="0" aria-label="Progression du job"></progress>
+          <p id="zone-status" role="status" aria-live="polite">Aucun job.</p>
+          <button id="zone-cancel" class="speedtest-btn" type="button" disabled>Annuler le job</button>
+          <small>Annuler ne retire pas les chunks déjà créés.</small>
+          <button id="zone-auto" class="speedtest-btn" type="button" hidden>Retour vue automatique</button>
+        </section>
 
         <div class="coverage-controls">
           <h3>Affichage</h3>
@@ -64,7 +88,7 @@
           </fieldset>
           <button id="coverage-refresh" class="speedtest-btn" type="button">Actualiser la couverture</button>
           <p id="coverage-status" role="status" aria-live="polite">Calque calculé désactivé.</p>
-          <small>Chaque case colorée est une zone estimée à partir de son centre. Le pas effectif augmente au dézoom pour couvrir tout l’écran, avec au plus 256 cellules par tuile. Les couvertures 2G, 3G, 4G et 5G sont indépendantes ; « Toutes » affiche la dominante (5G &gt; 4G &gt; 3G &gt; 2G).</small>
+          <small>Chaque case colorée est une zone estimée à partir de son centre. En vue automatique, le pas effectif augmente au dézoom pour couvrir tout l’écran, avec au plus 256 cellules par tuile. Une zone conserve son pas exact ; zoomer pour afficher les détails manquants. Les couvertures 2G, 3G, 4G et 5G sont indépendantes ; « Toutes » affiche la dominante (5G &gt; 4G &gt; 3G &gt; 2G).</small>
           <div class="coverage-legend" aria-label="Légende du signal calculé">
             <span><i style="background:#22c55e"></i> Fort &gt; -80 dBm</span>
             <span><i style="background:#eab308"></i> Moyen &gt; -100 dBm</span>

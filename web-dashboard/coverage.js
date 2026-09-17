@@ -188,11 +188,12 @@ export class CoverageStore {
     async tick(tiles, filters) {
         this.select(filters);
         const now = this.clock();
-        if (this.busy || this.stopped || now < this.retryAt) return;
         const visible = new Map(tiles.map(t => [this.key(t), t]));
+        this.exactKeys = filters.exact ? new Set(visible.keys()) : null;
+        if (this.busy || this.stopped || now < this.retryAt) return;
         const pending = [...this.cache].filter(([, entry]) => entry.pending || entry.data?.status === 'pending');
         // Drain due jobs before admitting new ones, including jobs left behind by panning.
-        const duePending = pending.filter(([, entry]) => entry.nextAt <= now)
+        const duePending = pending.filter(([key, entry]) => entry.nextAt <= now && (!filters.exact || visible.has(key)))
             .sort(([a, ae], [b, be]) => Number(visible.has(b)) - Number(visible.has(a))
                 || ae.nextAt - be.nextAt || (visible.get(a)?.distance ?? 0) - (visible.get(b)?.distance ?? 0))[0];
         const optionsDue = this.options ? now >= this.nextOptionsAt : now >= this.optionsPendingAt;
@@ -203,7 +204,7 @@ export class CoverageStore {
             tile = entry.tile;
             requestFilters = entry.filters;
             this.pendingTurn = true;
-        } else if (this.options && !optionsDue && pending.length < 16) {
+        } else if (this.options && !optionsDue && pending.filter(([key]) => !filters.exact || visible.has(key)).length < 16) {
             const unseen = tiles.filter(t => !this.entry(t)).sort((a, b) => a.distance - b.distance)[0];
             const expired = tiles.filter(t => this.entry(t)?.data?.status === 'ready'
                 && !this.entry(t).pending && this.entry(t).nextAt <= now)
@@ -216,12 +217,14 @@ export class CoverageStore {
         const generation = this.generation;
         const key = tile ? this.key(tile, requestFilters) : null;
         const modelRevision = this.options?.modelRevision;
+        const isCurrent = () => generation === this.generation && (!tile || modelRevision === this.options?.modelRevision)
+            && (!tile || !this.viewFilters?.exact || this.exactKeys?.has(key));
         this.busy = true;
         try {
             const response = await this.fetcher(tile ? coverageQuery(tile, requestFilters) : '/api/coverage/options', {
-                isCurrent: () => generation === this.generation && (!tile || modelRevision === this.options?.modelRevision),
+                isCurrent,
             });
-            if (generation !== this.generation || (tile && modelRevision !== this.options?.modelRevision)) return;
+            if (!isCurrent()) return;
             if (response.status === 202 || response.status === 204) {
                 const delay = retryDelay(response.headers?.get('Retry-After'), response.status === 204 ? 6 : 1, this.clock());
                 const nextAt = this.clock() + delay;
@@ -241,7 +244,7 @@ export class CoverageStore {
                 throw error;
             }
             const data = await response.json();
-            if (generation !== this.generation || (tile && modelRevision !== this.options?.modelRevision)) return;
+            if (!isCurrent()) return;
             if (!tile) {
                 const clean = validateCoverageOptions(data);
                 if (this.options && this.options.modelRevision !== clean.modelRevision) {
@@ -292,9 +295,11 @@ export class CoverageStore {
         } finally {
             this.busy = false;
             while (this.cache.size > 128) {
-                const oldest = [...this.cache.keys()].find(key => !this.cache.get(key).pending
-                    && this.cache.get(key).data?.status !== 'pending');
-                if (oldest === undefined) break;
+                const keys = [...this.cache.keys()];
+                // Exact zone jobs run on the server; offscreen pending entries need not pin browser memory.
+                const oldest = (this.viewFilters?.exact ? keys.find(key => !this.exactKeys?.has(key)) : undefined)
+                    ?? keys.find(key => !this.cache.get(key).pending && this.cache.get(key).data?.status !== 'pending')
+                    ?? keys[0];
                 this.cache.delete(oldest);
             }
         }

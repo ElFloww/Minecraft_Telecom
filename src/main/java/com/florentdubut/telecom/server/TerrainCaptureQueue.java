@@ -15,6 +15,9 @@ import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.Objects;
 import java.util.Set;
+import java.util.Map;
+import java.util.HashMap;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
@@ -34,6 +37,7 @@ final class TerrainCaptureQueue implements AutoCloseable {
     private final LongSupplier nanoTime;
     private final ArrayBlockingQueue<ChunkPos> queue = new ArrayBlockingQueue<>(CAPACITY);
     private final Set<ChunkPos> pending = new HashSet<>();
+    private final Map<ChunkPos, CompletableFuture<Boolean>> waiters = new HashMap<>();
     private final LinkedHashSet<ChunkPos> failed = new LinkedHashSet<>();
     private final Thread worker;
     private volatile boolean closed;
@@ -61,6 +65,14 @@ final class TerrainCaptureQueue implements AutoCloseable {
         if (!queue.offer(pos)) pending.remove(pos);
     }
 
+    synchronized CompletableFuture<Boolean> captureAsync(int cx, int cz) {
+        ChunkPos pos = new ChunkPos(cx, cz);
+        if (closed || failed.contains(pos)) return CompletableFuture.completedFuture(false);
+        offer(cx, cz);
+        if (!pending.contains(pos)) return CompletableFuture.failedFuture(new java.util.concurrent.RejectedExecutionException("Terrain capture queue full"));
+        return waiters.computeIfAbsent(pos, ignored -> new CompletableFuture<>());
+    }
+
     // Called on the server thread after start, never from the capture worker.
     void seedLoadedChunks() {
         synchronized (this) {
@@ -82,8 +94,13 @@ final class TerrainCaptureQueue implements AutoCloseable {
                 Thread.currentThread().interrupt();
                 return;
             }
+            boolean success = false;
             try {
-                if (closed || store.read(pos.x, pos.z) != null) continue;
+                if (closed) continue;
+                if (store.read(pos.x, pos.z) != null) {
+                    success = true;
+                    continue;
+                }
                 int[] pixels = new int[256];
                 int[] nextRow = {0};
                 int[] result;
@@ -110,6 +127,7 @@ final class TerrainCaptureQueue implements AutoCloseable {
                 } finally {
                     image.flush();
                 }
+                success = true;
                 if (!closed) onSaved.accept(pos.x, pos.z);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -126,11 +144,14 @@ final class TerrainCaptureQueue implements AutoCloseable {
                     LOGGER.warn("Cannot capture terrain chunk {}, {}", pos.x, pos.z, e);
                 }
             } finally {
+                CompletableFuture<Boolean> waiter;
                 synchronized (this) {
                     if (snapshot != null) snapshot.cancel(false);
                     snapshot = null;
                     pending.remove(pos);
+                    waiter = waiters.remove(pos);
                 }
+                if (waiter != null) waiter.complete(success);
             }
         }
     }
@@ -167,6 +188,8 @@ final class TerrainCaptureQueue implements AutoCloseable {
         if (snapshot != null) snapshot.cancel(false);
         queue.clear();
         pending.clear();
+        waiters.values().forEach(waiter -> waiter.cancel(false));
+        waiters.clear();
         failed.clear();
         worker.interrupt();
         // Never join here: close may run on the server thread needed by the outstanding task.

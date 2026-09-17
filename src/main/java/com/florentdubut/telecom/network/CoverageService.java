@@ -375,6 +375,17 @@ public final class CoverageService {
         if (state.entries.values().removeIf(job -> job.chunks.contains(chunk))) state.modelRevision++;
     }
 
+    public static void invalidateArea(ServerLevel level, int minX, int minZ, int maxX, int maxZ) {
+        State state = STATES.get(level);
+        if (state == null) return;
+        boolean changed = state.entries.values().removeIf(job -> {
+            long size = job.request.tileSize();
+            long x = job.request.tileX() * size, z = job.request.tileZ() * size;
+            return x <= maxX && z <= maxZ && x + size > minX && z + size > minZ;
+        });
+        if (changed) state.modelRevision++;
+    }
+
     public static void invalidateAntennas(ServerLevel level) {
         State state = STATES.get(level);
         if (state != null) {

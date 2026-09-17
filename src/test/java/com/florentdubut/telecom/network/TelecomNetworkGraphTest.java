@@ -93,9 +93,14 @@ class TelecomNetworkGraphTest {
     @Test
     void boundsSessionsAndDoesNotPersistTransientTests() {
         TelecomNetworkGraph graph = connectedGraph();
+        for (int i = 0; i < 300; i++) {
+            BlockPos router = ROUTER.offset(0, 0, i + 1);
+            graph.addNode(new NetworkNode(router, NetworkNode.NodeType.ROUTER));
+            graph.addEdge(new NetworkEdge(router, SERVER, 10000, 24, NetworkEdge.EdgeType.FIBER, List.of()));
+        }
         graph.setDirty(false);
         for (int i = 0; i < 300; i++) {
-            graph.startSpeedtest(ROUTER, "client-" + i, 100, 100, 0, 0, 300, false, null);
+            graph.startSpeedtest(ROUTER.offset(0, 0, i + 1), "client-" + i, 100, 100, 0, 0, 300, false, null);
         }
         assertNotNull(graph.getSessionByIp("client-255"));
         assertNull(graph.getSessionByIp("client-256"));

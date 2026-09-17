@@ -53,13 +53,19 @@ Ces configurations utilisent `run/`. Le serveur normal reste soumis a l'acceptat
 5. Pour le mobile, relier une antenne au reseau, ouvrir sa configuration et activer au moins une bande.
 6. Utiliser un smartphone pour consulter la reception et lancer un test mobile.
 
-Le test doit disposer d'un chemin jusqu'a un serveur. Les debits et l'identite reseau utilises sont calcules cote serveur. Un joueur ne peut lancer qu'un test manuel a la fois ; le graphe limite l'ensemble des sessions a 256. Les choix de duree existants concernent chaque phase de debit, pas la duree totale du test.
+Le test doit disposer d'un chemin jusqu'a un serveur. Les debits et l'identite reseau utilises sont calcules cote serveur. Un meme joueur peut lancer plusieurs tests simultanes sur des appareils distincts : plusieurs routeurs et son mobile, par exemple. Un seul test actif est autorise par appareil, avec une limite globale de 256 sessions par dimension. Les choix de duree existants concernent chaque phase de debit, pas la duree totale du test.
+
+Les routeurs sont identifies par position, et non par IP ; le terminal mobile reste lie a l'UUID du joueur (plusieurs items smartphone du meme joueur representent donc le meme terminal logique). Chaque test dispose de son identifiant de session. Fermer un ecran n'annule pas les autres tests et leur suivi est restaure a la reouverture. Les liens communs partagent leur capacite. Le dashboard affiche l'etat et les resultats par routeur et ne bloque pas le demarrage sur un autre appareil.
+
+Le protocole de synchronisation des tests est passe en version 1.1. Le client et le serveur doivent utiliser le JAR actualise ; les sauvegardes du monde ne changent pas de format.
 
 Les IP mobiles sont allouees par UUID, persistees par dimension dans une plage privee `172.16.0.0/12` et restent independantes de la position de l'antenne. L'adressage hierarchique du reseau fixe reste a remplacer par un IPAM stable.
 
 ## Dashboard et securite
 
-Par defaut, le dashboard ecoute seulement sur `http://127.0.0.1:8080`. La consultation locale ne requiert pas de token ; toute action de speedtest requiert un token. Une ecoute non locale refuse de demarrer sans token et protege toutes les API de donnees.
+Par defaut, le dashboard ecoute seulement sur `http://127.0.0.1:8080`. Il ne comporte aucune authentification : les actions sont directement accessibles aux clients autorises par les controles d'hote et d'origine.
+
+**Toute personne pouvant acceder au dashboard peut lancer les speedtests, generer du terrain et annuler les travaux.** Conserver l'ecoute locale ou restreindre l'acces reseau avec un pare-feu, un tunnel ou un reverse proxy. Les controles d'origine ne remplacent pas une authentification.
 
 ### Fond de carte permanent
 
@@ -101,7 +107,7 @@ Les chunks manquants sont marques **inconnus**, jamais assimiles a de l'air. La 
 
 Une antenne dont le trajet est inconnu n'empeche pas la reception d'une autre antenne dont le signal est calcule. Le telephone et la carte choisissent le meilleur signal parmi les trajets connus ; ils n'annoncent un trajet inconnu que si aucun signal exploitable n'est confirme.
 
-Le terrain radio observe est maintenant conserve en **3D**, independamment du PNG de la carte : palettes copiees au chargement/dechargement, LRU de 256 chunks en memoire et au plus 256 fichiers compresses par monde/dimension sous `<monde>/telecom-radio/<dimension>/`. Une antenne et des obstacles observes restent utilisables apres dechargement tant que leurs donnees sont conservees ; un chunk charge est toujours prioritaire sur sa copie. Une zone evincee a la fois de la memoire et du disque doit etre observee a nouveau. Les lectures/ecritures disque utilisent un worker et une file de 128 taches maximum, sans forcer de generation.
+Le terrain radio observe est maintenant conserve en **3D**, independamment du PNG de la carte : palettes copiees au chargement/dechargement, LRU de 256 chunks en memoire et au plus 4096 fichiers compresses par monde/dimension sous `<monde>/telecom-radio/<dimension>/`. Une antenne et des obstacles observes restent utilisables apres dechargement tant que leurs donnees sont conservees ; un chunk charge est toujours prioritaire sur sa copie. Une zone evincee a la fois de la memoire et du disque doit etre observee a nouveau. Les lectures/ecritures disque utilisent un worker et une file de 128 taches maximum, sans forcer de generation.
 
 Le message "Trajet radio inconnu" signifie qu'une portion n'a jamais ete observee, que sa restauration disque est encore en cours ou que la persistance ne peut pas etre consideree fiable. Il ne faut pas remplacer ces donnees par de l'air. Apres un arret non propre ou une ecriture perdue, les snapshots concernes sont invalides par precaution. Une simple image de surface ne suffit pas a reconstituer les obstacles.
 
@@ -113,6 +119,20 @@ Le test `CoveragePerformanceTest` compare une grille de 16 x 16 blocs sur 14 ban
 
 Ce calque concerne actuellement la carte web de l'Overworld. Son ajout a la carte dans Minecraft reste prevu.
 
+### Travaux sur une zone
+
+Dans le dashboard, activer **Selectionner une zone**. Dessiner un rectangle sur la carte ou saisir ses bornes.
+
+- **Generer le terrain** : cocher la confirmation, puis lancer. Les chunks sont charges/generes progressivement, un a la fois, et leurs captures completent l'image globale. Les PNG deja enregistres restent inchanges.
+- **Calculer couverture** : choisir un pas exact de 1, 8 ou 16 blocs et les filtres radio, puis lancer. Le calcul de cette zone est relance et reste au pas choisi, meme au dezoom. **Retour vue automatique** restaure le fonctionnement normal de la carte.
+- La progression et l'annulation sont disponibles. Une annulation arrete le traitement suivant, mais ne retire pas les chunks deja crees ni la generation vanilla deja engagee.
+
+Limites : un travail actif, **4096 chunks** maximum pour le terrain et **1024 tuiles physiques de couverture** (262 144 points maximum). Pour des zones carrees alignees, cela represente 1024 x 1024 blocs de terrain, ou une couverture de 512 x 512 blocs au pas 1, 4096 x 4096 au pas 8 et 8192 x 8192 au pas 16. Les limites sont arrondies aux chunks ou aux tuiles de calcul.
+
+Le serveur traite toute la zone progressivement, sans augmenter le nombre de chunks generes simultanement. Le navigateur travaille sur une fenetre de 64 tuiles de detail au maximum et conserve tous les descripteurs de zone pour la navigation. A grand dezoom, zoomer pour voir les details exacts ou revenir a la vue automatique pour un apercu global. Les grandes zones peuvent prendre longtemps ; Minecraft peut generer des voisins necessaires. Faire une sauvegarde du monde avant une preparation importante.
+
+Le calcul radio seul ne genere pas de terrain : preparer d'abord la zone si necessaire. Les trajets vers une antenne passant hors de la zone peuvent encore manquer de donnees et rester inconnus. Les travaux ne sont pas repris automatiquement apres redemarrage ; les captures deja sauvegardees restent disponibles.
+
 ### Configuration HTTP
 
 | Configuration | Defaut | Role |
@@ -121,13 +141,12 @@ Ce calque concerne actuellement la carte web de l'Overworld. Son ajout a la cart
 | Propriete JVM `telecom.http.bind` | `127.0.0.1` | Adresse d'ecoute. |
 | Propriete JVM `telecom.http.port` | `8080` | Port de 1 a 65535. |
 | Propriete JVM `telecom.http.origins` | vide | Origines supplementaires exactes, separees par virgules, sans chemin ni wildcard. |
-| Variable d'environnement `TELECOM_HTTP_TOKEN` | absente | Secret Bearer pour les actions et l'acces distant. |
 
-Les proprietes `-Dtelecom.http.*` doivent etre passees a la JVM du jeu ou du serveur, pas seulement a la JVM Gradle. Le token est herite de l'environnement du processus. Utiliser un secret aleatoire robuste ; ne jamais le publier dans Git, les URLs ou les logs. Il est saisi dans le dashboard et conserve uniquement en memoire de page.
+Les proprietes `-Dtelecom.http.*` doivent etre passees a la JVM du jeu ou du serveur, pas seulement a la JVM Gradle. Aucune cle ni session de connexion n'est requise pour le dashboard. Les limites de taille, la confirmation de generation et les controles d'identite du monde restent obligatoires.
 
 Pour le developpement web, `npm --prefix web-dashboard run dev` lance Vite sur loopback et proxifie `/api` vers le port 8080. Autoriser son origine exacte, par exemple `http://localhost:5173`, dans la JVM Minecraft. Une origine autorisee permet aussi son autorite HTTP pour les controles `Host`, notamment derriere un reverse proxy.
 
-Pour un acces distant, utiliser HTTPS via reverse proxy ou tunnel securise. Aucun TLS ni systeme de roles operateurs n'est fourni dans ce premier lot. Les fichiers statiques restent accessibles pour permettre la saisie du token, sans donner acces aux donnees protegees.
+Pour un acces distant, utiliser HTTPS via reverse proxy ou un tunnel et limiter les clients autorises. Le mod n'integre ni TLS ni authentification ; ne pas l'exposer directement sur Internet.
 
 ### Limites operationnelles
 
@@ -150,19 +169,13 @@ Pour un acces distant, utiliser HTTPS via reverse proxy ou tunnel securise. Aucu
 
 La suite JUnit couvre graphe/NBT, sessions, baux mobiles, codecs, ressources d'items, enregistrement du mod, block entities et HTTP. Le serveur ephemere JUnit ne cree pas de monde ; les interactions de blocs sont donc verifiees separement par GameTest.
 
-Pour exercer aussi les chemins HTTP authentifies avec un token reserve aux tests :
+Pour executer seulement les tests HTTP :
 
 ```sh
-TELECOM_HTTP_TOKEN=local-test-token ./gradlew test --rerun
+./gradlew test --rerun --tests '*TelecomHttpServerTest'
 ```
 
-Pour verifier le comportement sans token :
-
-```sh
-env -u TELECOM_HTTP_TOKEN ./gradlew test --rerun --tests '*TelecomHttpServerTest'
-```
-
-Les tests HTTP necessitant un token sont ignores si aucun token n'est defini. Les tests HTTP utilisent de vraies connexions locales et des objets Minecraft simules ; ils ne remplacent pas une recette interactive multijoueur. Les benchmarks Ville/Stress et la verification visuelle complete restent a realiser.
+Tous les tests HTTP s'executent sans identifiants. Ils utilisent de vraies connexions locales et des objets Minecraft simules ; ils ne remplacent pas une recette interactive multijoueur. Les benchmarks Ville/Stress et la verification visuelle complete restent a realiser.
 
 ## References et licence
 

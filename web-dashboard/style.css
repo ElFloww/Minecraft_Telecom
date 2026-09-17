@@ -336,9 +336,9 @@ canvas {
   margin-top: 10px;
 }
 
-#session-auth { display: grid; gap: 8px; font-size: 0.85rem; }
-#session-auth input { width: 100%; padding: 8px; background: var(--bg-color); color: var(--text-primary); border: 1px solid var(--glass-border); border-radius: 4px; }
-#session-auth small, #auth-status, #terrain-status { color: var(--text-secondary); overflow-wrap: anywhere; }
+.connection-controls { display: grid; gap: 8px; font-size: 0.85rem; }
+.access-warning { padding: 8px; color: #fbbf24; border: 1px solid currentColor; border-radius: 4px; }
+#connection-status, #terrain-status { color: var(--text-secondary); overflow-wrap: anywhere; }
 #terrain-status:empty { display: none; }
 
 #coverage-filters { display: grid; gap: 7px; border: 0; margin-top: 16px; min-width: 0; font-size: 0.85rem; }
@@ -355,6 +355,13 @@ canvas {
 .map-zoom button { width: 44px; height: 44px; border: 1px solid var(--glass-border); border-radius: 6px; background: var(--bg-color); color: var(--text-primary); font-size: 1.4rem; cursor: pointer; }
 body, #app { height: 100dvh; }
 .map-container { min-width: 0; min-height: 0; }
+.zone-controls { display: grid; gap: 8px; font-size: 0.85rem; }
+.zone-controls small { color: var(--text-secondary); line-height: 1.5; }
+.zone-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+.zone-controls input[type="number"], .zone-controls select { width: 100%; min-width: 0; padding: 8px; background: var(--bg-color); color: var(--text-primary); border: 1px solid var(--glass-border); border-radius: 4px; }
+.zone-controls progress { width: 100%; accent-color: #38bdf8; }
+#zone-bounds, #zone-status { overflow-wrap: anywhere; }
+.zone-controls [hidden] { display: none; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
 
 @media (max-width: 640px) {
