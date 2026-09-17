@@ -167,6 +167,8 @@ class MultiDeviceSpeedtestTest {
         assertNull(mobile(owner));
         assertEquals(TrafficSession.SessionState.FAILED, phone.getState());
         assertEquals("FAILED", graph.getLastResultByDeviceId(phone.getDeviceId()).state());
+        assertEquals("device_unavailable", phone.getFailureReason());
+        assertEquals("device_unavailable", graph.getLastResultByDeviceId(phone.getDeviceId()).errorCode());
         tick(5);
         assertEquals("FINISHED", graph.getLastResultByDeviceId(router.getDeviceId()).state());
         verify(level, never()).getBlockEntity(any());
@@ -197,6 +199,9 @@ class MultiDeviceSpeedtestTest {
             assertEquals(session.getDeviceId(), update.deviceId());
             assertEquals(session.getSessionId(), update.sessionId());
             assertEquals("minecraft:overworld", update.dimension());
+            assertEquals(session.getServerId(), update.serverId());
+            assertEquals(session.getServerName(), update.serverName());
+            assertEquals("", update.errorCode());
         }
         assertEquals(session.getFinalDownBw(), finished.downloadBandwidth());
         assertEquals(session.getFinalUpBw(), finished.uploadBandwidth());

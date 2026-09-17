@@ -97,6 +97,8 @@ public final class TelecomWorldGameTests {
         BlockPos serverPos = helper.absolutePos(server);
         BlockPos routerPos = helper.absolutePos(router);
         AtomicReference<NetworkNode> originalRouter = new AtomicReference<>();
+        AtomicReference<String> routerIp = new AtomicReference<>();
+        AtomicReference<String> serverIp = new AtomicReference<>();
         helper.setBlock(server, ModBlocks.SERVER.get());
         helper.setBlock(cable, ModBlocks.FIBER_CABLE.get());
         helper.setBlock(otherCable, ModBlocks.FIBER_CABLE.get());
@@ -111,12 +113,18 @@ public final class TelecomWorldGameTests {
                 })
                 .thenExecute(() -> {
                     originalRouter.set(graph.getNode(routerPos));
+                    routerIp.set(graph.getNode(routerPos).getIpAddress());
+                    serverIp.set(graph.getNode(serverPos).getIpAddress());
+                    helper.assertTrue(routerIp.get() != null && serverIp.get() != null
+                            && !routerIp.get().equals(serverIp.get()), "Server and router must have distinct fixed addresses");
                     helper.destroyBlock(cable);
                 })
                 .thenWaitUntil(() -> {
                     helper.assertTrue(graph.calculatePathStats(routerPos, serverPos) == null, "Breaking fiber must invalidate the cached path");
                     helper.assertTrue(graph.getNode(routerPos) == originalRouter.get(), "Cable updates must not replace the router node");
                     assertNode(helper, graph, serverPos, NetworkNode.NodeType.SERVER);
+                    helper.assertValueEqual(graph.getNode(routerPos).getIpAddress(), routerIp.get(), "Disconnecting fiber must retain router IP");
+                    helper.assertValueEqual(graph.getNode(serverPos).getIpAddress(), serverIp.get(), "Disconnecting fiber must retain server IP");
                 })
                 .thenExecute(() -> {
                     BlockPos pos = helper.absolutePos(cable);
@@ -127,7 +135,11 @@ public final class TelecomWorldGameTests {
                 })
                 .thenWaitUntil(() -> helper.assertTrue(graph.calculatePathStats(routerPos, serverPos) != null,
                         "Repairing fiber must restore the path"))
-                .thenExecute(() -> helper.destroyBlock(router))
+                .thenExecute(() -> {
+                    helper.assertValueEqual(graph.getNode(routerPos).getIpAddress(), routerIp.get(), "Reconnecting fiber must retain router IP");
+                    helper.assertValueEqual(graph.getNode(serverPos).getIpAddress(), serverIp.get(), "Reconnecting fiber must retain server IP");
+                    helper.destroyBlock(router);
+                })
                 .thenIdle(5)
                 .thenExecute(() -> {
                     helper.assertTrue(graph.getNode(routerPos) == null, "Destroyed router must stay removed after pending onLoad callbacks");
@@ -238,6 +250,8 @@ public final class TelecomWorldGameTests {
                         var restored = TelecomNetworkGraph.CODEC.parse(NbtOps.INSTANCE, disk.get("data")).getOrThrow();
                         assertNode(helper, restored, routerPos, NetworkNode.NodeType.ROUTER);
                         assertNode(helper, restored, serverPos, NetworkNode.NodeType.SERVER);
+                        helper.assertValueEqual(restored.getNode(routerPos).getIpAddress(), graph.getNode(routerPos).getIpAddress(), "Disk-loaded router must retain its fixed IP");
+                        helper.assertValueEqual(restored.getNode(serverPos).getIpAddress(), graph.getNode(serverPos).getIpAddress(), "Disk-loaded server must retain its fixed IP");
                         helper.assertValueEqual(restored.getNode(routerPos).getCapacityDown(), 10000, "Saved router capacity");
                         helper.assertValueEqual(restored.getNode(antennaPos).getFrequenciesMask(), 5, "Saved antenna frequencies");
                         helper.assertTrue(restored.calculatePathStats(routerPos, serverPos) != null, "Disk-loaded graph must retain its path");

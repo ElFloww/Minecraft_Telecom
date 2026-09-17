@@ -261,6 +261,8 @@ canvas {
 .details-content .info-row {
   display: flex;
   justify-content: space-between;
+  gap: 12px;
+  overflow-wrap: anywhere;
   margin-bottom: 12px;
   font-size: 0.9rem;
 }
@@ -335,6 +337,16 @@ canvas {
   border-radius: 4px;
   margin-top: 10px;
 }
+
+.speedtest-catalog-status {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+  margin-bottom: 8px;
+}
+
+#speedtest-refresh { cursor: pointer; }
+#speedtest-server:disabled, #speedtest-refresh:disabled { opacity: 0.65; }
 
 .connection-controls { display: grid; gap: 8px; font-size: 0.85rem; }
 .access-warning { padding: 8px; color: #fbbf24; border: 1px solid currentColor; border-radius: 4px; }

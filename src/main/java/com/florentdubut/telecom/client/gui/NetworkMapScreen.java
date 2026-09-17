@@ -1,134 +1,411 @@
 package com.florentdubut.telecom.client.gui;
 
+import com.florentdubut.telecom.network.TelecomFrequency;
+import com.florentdubut.telecom.network.packet.CoverageTilePayload;
 import com.florentdubut.telecom.network.packet.MapNodeData;
+import com.florentdubut.telecom.network.packet.RequestNetworkMapPayload;
 import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
-import net.minecraft.world.entity.player.Player;
+import net.neoforged.neoforge.client.network.ClientPacketDistributor;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 
 public class NetworkMapScreen extends Screen {
-    private List<MapNodeData> nodes = new ArrayList<>();
+    private static final String[] TECHNOLOGIES = {"all", "2G", "3G", "4G", "5G"};
+    private static final int[] PRECISIONS = {1, 8, 16};
+    private static final String[] LEGEND = {"strong", "medium", "weak", "below", "none", "unknown"};
+    private final CoverageMapState coverage = new CoverageMapState();
+    private List<MapNodeData> nodes = List.of();
     private boolean loading = true;
-    
-    // View state
-    private double panX = 0;
-    private double panY = 0;
+    private boolean centered;
+    private boolean closed;
+    private boolean coverageEnabled;
+    private double panX;
+    private double panY;
     private double zoom = 1.0;
-    private boolean isDragging = false;
+    private boolean isDragging;
+    private long ticks;
+    private long viewChangedAt;
+    private String dimension = "";
+    private int technologyIndex;
+    private String band = "all";
+    private String antenna = "all";
+    private int precisionIndex = 2;
+    private int heightMode; // Surface, live player Y, custom Y.
+    private String customY = "64";
+    private String lastHeight = "surface";
+    private boolean validHeight = true;
+    private int mapTop;
+    private int mapBottom;
+    private EditBox heightBox;
+    private Button coverageButton;
+    private Button technologyButton;
+    private Button bandButton;
+    private Button antennaButton;
+    private Button heightButton;
+    private Button precisionButton;
 
     public NetworkMapScreen() {
-        super(Component.literal("Network Map"));
+        super(text("title"));
     }
 
-    public void receiveData(List<MapNodeData> nodesData) {
-        this.nodes = nodesData;
-        this.loading = false;
-        
-        // Center on player initially
-        Player player = minecraft.player;
-        if (player != null) {
-            panX = -player.getX() * zoom;
-            panY = -player.getZ() * zoom;
-        }
+    private static Component text(String key, Object... args) {
+        return Component.translatable("screen.telecom.map." + key, args);
     }
 
     @Override
-    public void render(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
-        int width = this.width;
-        int height = this.height;
-        
-        int centerX = width / 2;
-        int centerY = height / 2;
+    protected void init() {
+        super.init();
+        closed = false;
+        dimension = currentDimension();
+        int columns = width >= 640 ? 6 : 3;
+        int gap = 4;
+        int buttonWidth = Math.max(20, (width - (columns + 1) * gap) / columns);
+        mapTop = 4 + ((8 + columns - 1) / columns) * 22;
+        mapBottom = Math.max(mapTop + 1, height - 48);
+        zoom = Math.max(zoom, CoverageMapState.minimumZoom(width, mapBottom - mapTop));
+        coverageButton = button(0, columns, buttonWidth, button -> {
+            coverageEnabled = !coverageEnabled;
+            viewChanged();
+        });
+        technologyButton = button(1, columns, buttonWidth, button -> {
+            technologyIndex = (technologyIndex + 1) % TECHNOLOGIES.length;
+            band = "all";
+            viewChanged();
+        });
+        bandButton = button(2, columns, buttonWidth, button -> {
+            List<String> bands = new ArrayList<>();
+            bands.add("all");
+            Arrays.stream(TelecomFrequency.values())
+                    .filter(f -> technologyIndex == 0 || f.getTechnology().equals(TECHNOLOGIES[technologyIndex]))
+                    .forEach(f -> bands.add(f.name()));
+            band = bands.get((bands.indexOf(band) + 1) % bands.size());
+            viewChanged();
+        });
+        antennaButton = button(3, columns, buttonWidth, button -> {
+            antenna = "all";
+            viewChanged();
+        });
+        antennaButton.setTooltip(Tooltip.create(text("antenna_hint")));
+        heightButton = button(4, columns, buttonWidth, button -> {
+            heightMode = (heightMode + 1) % 3;
+            viewChanged();
+        });
+        precisionButton = button(5, columns, buttonWidth, button -> {
+            precisionIndex = (precisionIndex + 1) % PRECISIONS.length;
+            viewChanged();
+        });
+        precisionButton.setTooltip(Tooltip.create(text("precision_hint")));
+        heightBox = new EditBox(font, gap + (6 % columns) * (buttonWidth + gap),
+                4 + (6 / columns) * 22, buttonWidth, 20, text("custom_y"));
+        heightBox.setMaxLength(11);
+        heightBox.setValue(customY);
+        heightBox.setTooltip(Tooltip.create(text("custom_y_hint")));
+        heightBox.setResponder(value -> {
+            customY = value;
+            viewChanged();
+        });
+        addRenderableWidget(heightBox);
+        button(7, columns, buttonWidth, button -> {
+            centerOnPlayer();
+            viewChanged(true);
+        }).setMessage(text("center"));
+        if (!centered) centerOnPlayer();
+        viewChanged();
+    }
 
-        if (loading) {
-            guiGraphics.drawCenteredString(this.font, "Loading Map Data...", centerX, centerY, 0xFFFFFFFF);
+    private Button button(int index, int columns, int buttonWidth, Button.OnPress action) {
+        return addRenderableWidget(Button.builder(Component.empty(), action)
+                .bounds(4 + (index % columns) * (buttonWidth + 4), 4 + (index / columns) * 22, buttonWidth, 20).build());
+    }
+
+    private void centerOnPlayer() {
+        if (minecraft != null && minecraft.player != null) {
+            panX = -minecraft.player.getX() * zoom;
+            panY = -minecraft.player.getZ() * zoom;
+            centered = true;
+        }
+    }
+
+    private String currentDimension() {
+        return minecraft == null || minecraft.level == null ? "" : minecraft.level.dimension().identifier().toString();
+    }
+
+    private String selectedHeight() {
+        validHeight = true;
+        if (heightMode == 0) return "surface";
+        if (heightMode == 1) return minecraft != null && minecraft.player != null
+                ? Integer.toString(minecraft.player.blockPosition().above().getY()) : "64";
+        try {
+            return Integer.toString(Integer.parseInt(customY));
+        } catch (NumberFormatException exception) {
+            validHeight = false;
+            return "";
+        }
+    }
+
+    private void viewChanged() {
+        viewChanged(false);
+    }
+
+    private void viewChanged(boolean preserveVisible) {
+        String height = selectedHeight();
+        preserveVisible &= lastHeight.equals(height);
+        lastHeight = height;
+        viewChangedAt = ticks;
+        var tiles = coverageEnabled && validHeight
+                ? CoverageMapState.visibleTiles(width, mapBottom - mapTop, width / 2.0 + panX,
+                    (mapBottom - mapTop) / 2.0 + panY, zoom, PRECISIONS[precisionIndex]) : List.<CoverageMapState.Tile>of();
+        if (preserveVisible) coverage.move(tiles);
+        else coverage.reset(dimension, tiles);
+        updateLabels();
+    }
+
+    private void updateLabels() {
+        if (heightBox == null) return;
+        coverageButton.setMessage(text(coverageEnabled ? "coverage_on" : "coverage_off"));
+        technologyButton.setMessage(text("technology", technologyIndex == 0 ? text("all") : TECHNOLOGIES[technologyIndex]));
+        bandButton.setMessage(text("band", band.equals("all") ? text("all") : bandLabel(band)));
+        antennaButton.setMessage(text(antenna.equals("all") ? "antennas_all" : "antenna_selected"));
+        heightButton.setMessage(text("height", heightMode == 0 ? text("surface") : heightMode == 1 ? text("player_y") : text("custom_y")));
+        heightButton.setTooltip(Tooltip.create(text("sample_y", heightMode == 0 ? text("surface") : lastHeight)));
+        precisionButton.setMessage(text("precision", PRECISIONS[precisionIndex]));
+        heightBox.active = heightMode == 2;
+        heightBox.setTextColor(validHeight ? 0xFFFFFFFF : 0xFFFF6666);
+    }
+
+    private static String bandLabel(String value) {
+        for (TelecomFrequency frequency : TelecomFrequency.values()) {
+            if (frequency.name().equals(value)) return frequency.getTechnology() + " " + frequency.getFrequencyLabel();
+        }
+        return value;
+    }
+
+    public void receiveData(List<MapNodeData> nodesData) {
+        if (closed || !dimension.equals(currentDimension())) return;
+        nodes = List.copyOf(nodesData);
+        loading = false;
+    }
+
+    public void receiveCoverage(CoverageTilePayload payload) {
+        if (!closed && coverageEnabled && minecraft != null && minecraft.screen == this
+                && dimension.equals(currentDimension())) coverage.receive(payload, ticks);
+    }
+
+    @Override
+    public void tick() {
+        super.tick();
+        ticks++;
+        if (closed) return;
+        if (minecraft == null || minecraft.player == null || minecraft.level == null
+                || !dimension.equals(currentDimension())) {
+            onClose();
             return;
         }
-
-        // Draw grid
-        guiGraphics.fill(0, 0, width, height, 0xFF111111);
-        
-        // Render origin (Player pos)
-        Player player = minecraft.player;
-        if (player != null) {
-            double px = player.getX();
-            double pz = player.getZ();
-            int sx = (int) (centerX + (px * zoom) + panX);
-            int sy = (int) (centerY + (pz * zoom) + panY);
-            guiGraphics.fill(sx - 2, sy - 2, sx + 2, sy + 2, 0xFF00FF00);
-            guiGraphics.drawString(this.font, "You", sx + 5, sy - 5, 0xFF00FF00);
+        if (!lastHeight.equals(selectedHeight())) viewChanged();
+        if (loading && minecraft.getConnection() != null && ticks % 20 == 0) {
+            ClientPacketDistributor.sendToServer(new RequestNetworkMapPayload());
         }
+        // Let a pan, zoom, or edit settle before creating expensive server jobs.
+        if (!coverageEnabled || !validHeight || isDragging || ticks - viewChangedAt < 4
+                || minecraft.getConnection() == null) return;
+        var request = coverage.nextRequest(ticks, lastHeight, antenna, TECHNOLOGIES[technologyIndex], band);
+        if (request != null) ClientPacketDistributor.sendToServer(request);
+    }
 
+    @Override
+    public void removed() {
+        closed = true;
+        isDragging = false;
+        coverage.reset("", List.of());
+        super.removed();
+    }
+
+    @Override
+    public void renderBackground(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+        // The map supplies its own opaque background; do not blur it behind the controls.
+    }
+
+    private int screenX(double x) { return (int) Math.floor(width / 2.0 + panX + x * zoom); }
+    private int screenZ(double z) { return (int) Math.floor((mapTop + mapBottom) / 2.0 + panY + z * zoom); }
+    private boolean inMap(double x, double y) { return x >= 0 && x < width && y >= mapTop && y < mapBottom; }
+
+    @Override
+    public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+        graphics.fill(0, 0, width, height, 0xFF111111);
+        graphics.enableScissor(0, mapTop, width, mapBottom);
+        List<Component> tooltip = new ArrayList<>();
+        if (coverageEnabled) renderCoverage(graphics, mouseX, mouseY, tooltip);
         MapNodeData hoveredNode = null;
-
         for (MapNodeData node : nodes) {
-            int nx = (int) (centerX + (node.pos().getX() * zoom) + panX);
-            int ny = (int) (centerY + (node.pos().getZ() * zoom) + panY);
-
-            // Skip off-screen
-            if (nx < -50 || nx > width + 50 || ny < -50 || ny > height + 50) continue;
-
-            int color = 0xFFFFFFFF;
-            switch(node.type()) {
-                case "SERVER": color = 0xFFFF0000; break;
-                case "ROUTER": color = 0xFFFFAA00; break;
-                case "ANTENNA": color = 0xFF00FFFF; break;
-                case "NRO": color = 0xFFFF00FF; break;
-                case "NRA": color = 0xFFAAFF00; break;
-                case "PM": color = 0xFFFFFF00; break;
-                case "SR": color = 0xFF55FF55; break;
-            }
-
+            int x = screenX(node.pos().getX()), y = screenZ(node.pos().getZ());
+            if (x < -5 || x > width + 5 || y < mapTop - 5 || y > mapBottom + 5) continue;
+            int color = switch (node.type()) {
+                case "SERVER" -> 0xFFFF0000;
+                case "ROUTER" -> 0xFFFFAA00;
+                case "ANTENNA" -> 0xFF00FFFF;
+                case "NRO" -> 0xFFFF00FF;
+                case "NRA" -> 0xFFAAFF00;
+                case "PM" -> 0xFFFFFF00;
+                case "SR" -> 0xFF55FF55;
+                default -> 0xFFFFFFFF;
+            };
             int size = node.type().equals("ANTENNA") ? 4 : 3;
-            guiGraphics.fill(nx - size, ny - size, nx + size, ny + size, color);
+            graphics.fill(x - size - 1, y - size - 1, x + size + 1, y + size + 1, 0xFF000000);
+            graphics.fill(x - size, y - size, x + size, y + size, color);
+            if (antenna.equals(Long.toString(node.pos().asLong()))) graphics.renderOutline(x - 6, y - 6, 12, 12, 0xFFFFFFFF);
+            if (Math.abs(mouseX - x) <= size && Math.abs(mouseY - y) <= size) hoveredNode = node;
+        }
+        if (minecraft != null && minecraft.player != null) {
+            int x = screenX(minecraft.player.getX()), y = screenZ(minecraft.player.getZ());
+            graphics.fill(x - 2, y - 2, x + 2, y + 2, 0xFF00FF00);
+            graphics.drawString(font, text("you"), x + 5, y - 5, 0xFF00FF00);
+        }
+        if (loading) graphics.drawString(font, text("loading"), 5, mapTop + 4, 0xFFFFFFFF);
+        graphics.disableScissor();
+        renderFooter(graphics, mouseX, mouseY);
+        graphics.nextStratum();
+        super.render(graphics, mouseX, mouseY, partialTick);
+        if (inMap(mouseX, mouseY)) {
+            if (hoveredNode != null) {
+                tooltip.add(Component.literal(hoveredNode.type()));
+                tooltip.add(text("position", hoveredNode.pos().toShortString()));
+                if (hoveredNode.ipAddress() != null && !hoveredNode.ipAddress().isEmpty()) tooltip.add(text("ip", hoveredNode.ipAddress()));
+                if (hoveredNode.extraInfo() != null && !hoveredNode.extraInfo().isEmpty()) tooltip.add(text("technology", hoveredNode.extraInfo()));
+                if (hoveredNode.type().equals("ANTENNA")) tooltip.add(text("antenna_hint"));
+            }
+            if (!tooltip.isEmpty()) graphics.setComponentTooltipForNextFrame(font, tooltip, mouseX, mouseY);
+        }
+    }
 
-            // Check hover
-            if (mouseX >= nx - size && mouseX <= nx + size && mouseY >= ny - size && mouseY <= ny + size) {
-                hoveredNode = node;
+    private void renderCoverage(GuiGraphics graphics, int mouseX, int mouseY, List<Component> tooltip) {
+        for (var tile : coverage.tiles()) {
+            double originX = (double) tile.x() * tile.span(), originZ = (double) tile.z() * tile.span();
+            int x = screenX(originX), y = screenZ(originZ);
+            int right = screenX(originX + tile.span()), bottom = screenZ(originZ + tile.span());
+            var data = coverage.data(tile, ticks);
+            boolean ready = data != null && data.status().equals("ready");
+            graphics.fill(x, y, right, bottom, CoverageMapState.color(ready ? "unknown" : "pending"));
+            if (!ready) {
+                graphics.renderOutline(x, y, right - x, bottom - y, 0xFF435366);
+                if (mouseX >= x && mouseX < right && mouseY >= y && mouseY < bottom) {
+                    tooltip.add(text("status." + (data == null ? "pending" : data.status())));
+                    if (data != null) tooltip.add(text("progress", Math.round(data.progress() * 100)));
+                }
+                continue;
+            }
+            for (var cell : data.cells()) {
+                // Service samples are block centres (integer step / 2, including step 1).
+                int left = screenX((double) cell.x() - tile.step() / 2);
+                int top = screenZ((double) cell.z() - tile.step() / 2);
+                int cellRight = screenX((double) cell.x() - tile.step() / 2 + tile.step());
+                int cellBottom = screenZ((double) cell.z() - tile.step() / 2 + tile.step());
+                String state = CoverageMapState.signalState(cell);
+                graphics.fill(left, top, cellRight, cellBottom, CoverageMapState.color(state));
+                if (mouseX >= left && mouseX < cellRight && mouseY >= top && mouseY < cellBottom) {
+                    tooltip.add(text("legend." + state));
+                    tooltip.add(text("position", cell.x() + ", " + cell.y() + ", " + cell.z()));
+                    tooltip.add(text("sample_y", cell.y()));
+                    tooltip.add(text("power", "signal".equals(cell.state()) && Float.isFinite(cell.powerDbm())
+                            ? String.format(Locale.ROOT, "%.1f dBm", cell.powerDbm()) : text("unavailable")));
+                    tooltip.add(text("technology", valueOrUnknown(cell.technology())));
+                    tooltip.add(text("band", valueOrUnknown(cell.band() == null ? null : bandLabel(cell.band()))));
+                    tooltip.add(text("antenna", antennaPosition(cell.antenna())));
+                    String service = "available".equals(cell.service()) ? "available"
+                            : "unavailable".equals(cell.service()) ? "unavailable" : "unknown";
+                    tooltip.add(text("service", text("service." + service)));
+                }
             }
         }
+    }
 
-        // Overlay text
-        guiGraphics.drawString(this.font, "Zoom: " + String.format("%.2fx", zoom), 10, 10, 0xFFFFFFFF);
-        guiGraphics.drawString(this.font, "Nodes: " + nodes.size(), 10, 25, 0xFFFFFFFF);
+    private static Object valueOrUnknown(String value) {
+        return value == null || value.isEmpty() ? text("unavailable") : value;
+    }
 
-        // Render Tooltip
-        if (hoveredNode != null) {
-            List<Component> tooltip = new ArrayList<>();
-            tooltip.add(Component.literal(hoveredNode.type()).withStyle(net.minecraft.ChatFormatting.BOLD));
-            tooltip.add(Component.literal("Pos: " + hoveredNode.pos().toShortString()));
-            if (hoveredNode.ipAddress() != null && !hoveredNode.ipAddress().isEmpty()) {
-                tooltip.add(Component.literal("IP: " + hoveredNode.ipAddress()).withStyle(net.minecraft.ChatFormatting.AQUA));
-            }
-            if (hoveredNode.extraInfo() != null && !hoveredNode.extraInfo().isEmpty()) {
-                tooltip.add(Component.literal("Tech: " + hoveredNode.extraInfo()).withStyle(net.minecraft.ChatFormatting.GREEN));
-            }
-            guiGraphics.setComponentTooltipForNextFrame(this.font, tooltip, mouseX, mouseY);
+    private static Object antennaPosition(String value) {
+        if (value == null || value.isEmpty()) return text("unavailable");
+        try {
+            return BlockPos.of(Long.parseLong(value)).toShortString();
+        } catch (NumberFormatException exception) {
+            return value;
         }
-        
-        super.render(guiGraphics, mouseX, mouseY, partialTick);
+    }
+
+    private void renderFooter(GuiGraphics graphics, int mouseX, int mouseY) {
+        int ready = 0, pending = 0, busy = 0, invalid = 0;
+        float progress = 0;
+        List<CoverageMapState.Tile> tiles = coverage.tiles();
+        for (var tile : tiles) {
+            var data = coverage.data(tile, ticks);
+            if (data == null) { pending++; continue; }
+            switch (data.status()) {
+                case "ready" -> { ready++; progress++; }
+                case "busy" -> busy++;
+                case "invalid", "limited" -> invalid++;
+                default -> { pending++; progress += data.progress(); }
+            }
+        }
+        Component status = !validHeight ? text("invalid_y") : !coverageEnabled
+                ? text("navigation", String.format(Locale.ROOT, "%.2f", zoom), nodes.size())
+                : text("summary", ready, tiles.size(), tiles.isEmpty() ? 0 : Math.round(progress * 100 / tiles.size()),
+                    tiles.isEmpty() ? PRECISIONS[precisionIndex] : tiles.getFirst().step());
+        graphics.drawString(font, font.plainSubstrByWidth(status.getString(), Math.max(1, width - 8)), 4, mapBottom + 3, 0xFFFFFFFF);
+        if (!coverageEnabled) return;
+        Component details = text("details", pending, busy, invalid);
+        graphics.drawString(font, font.plainSubstrByWidth(details.getString(), Math.max(1, width - 8)), 4, mapBottom + 14, 0xFFBBBBBB);
+        if (mouseY >= mapBottom && mouseY < mapBottom + 24) {
+            graphics.setComponentTooltipForNextFrame(font, List.of(status, details, text("precision_hint")), mouseX, mouseY);
+        }
+        int slot = Math.max(1, width / 3);
+        for (int i = 0; i < LEGEND.length; i++) {
+            int x = (i % 3) * slot + 4, y = mapBottom + 25 + (i / 3) * 11;
+            graphics.fill(x, y, x + 6, y + 7, CoverageMapState.color(LEGEND[i]));
+            graphics.drawString(font, font.plainSubstrByWidth(text("legend_short." + LEGEND[i]).getString(), Math.max(1, slot - 16)), x + 9, y, 0xFFDDDDDD);
+            if (mouseX >= x && mouseX < x + slot - 4 && mouseY >= y && mouseY < y + 10) {
+                graphics.setComponentTooltipForNextFrame(font, List.of(text("legend." + LEGEND[i])), mouseX, mouseY);
+            }
+        }
     }
 
     @Override
     public boolean mouseClicked(MouseButtonEvent event, boolean doubleClick) {
-        if (event.button() == 0 || event.button() == 1) { // Left or Right click to drag
+        // Widgets (especially the Y editor) must consume clicks before map dragging.
+        if (super.mouseClicked(event, doubleClick)) return true;
+        if (!inMap(event.x(), event.y())) return false;
+        setFocused(null);
+        if (event.button() == 0 && coverageEnabled) {
+            for (MapNodeData node : nodes) {
+                if (node.type().equals("ANTENNA") && Math.abs(event.x() - screenX(node.pos().getX())) <= 5
+                        && Math.abs(event.y() - screenZ(node.pos().getZ())) <= 5) {
+                    String selected = Long.toString(node.pos().asLong());
+                    antenna = antenna.equals(selected) ? "all" : selected;
+                    viewChanged();
+                    return true;
+                }
+            }
+        }
+        if (event.button() == 0 || event.button() == 1) {
             isDragging = true;
             return true;
         }
-        return super.mouseClicked(event, doubleClick);
+        return false;
     }
 
     @Override
     public boolean mouseReleased(MouseButtonEvent event) {
-        if (event.button() == 0 || event.button() == 1) {
-            isDragging = false;
-            return true;
-        }
-        return super.mouseReleased(event);
+        boolean dragging = isDragging;
+        if (event.button() == 0 || event.button() == 1) isDragging = false;
+        return super.mouseReleased(event) || dragging;
     }
 
     @Override
@@ -136,34 +413,30 @@ public class NetworkMapScreen extends Screen {
         if (isDragging) {
             panX += dragX;
             panY += dragY;
+            clampPan();
+            viewChanged(true);
             return true;
         }
         return super.mouseDragged(event, dragX, dragY);
     }
 
+    private void clampPan() {
+        panX = Math.clamp(panX, -29_999_000 * zoom, 29_999_000 * zoom);
+        panY = Math.clamp(panY, -29_999_000 * zoom, 29_999_000 * zoom);
+    }
+
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+        if (super.mouseScrolled(mouseX, mouseY, scrollX, scrollY)) return true;
+        if (!inMap(mouseX, mouseY) || scrollY == 0) return false;
         double oldZoom = zoom;
-        if (scrollY > 0) {
-            zoom *= 1.2;
-        } else if (scrollY < 0) {
-            zoom /= 1.2;
-        }
-        
-        // Clamp zoom
-        if (zoom < 0.05) zoom = 0.05;
-        if (zoom > 5.0) zoom = 5.0;
-
-        // Keep centered on mouse pointer during zoom
-        int centerX = width / 2;
-        int centerY = height / 2;
-        
-        double worldX = (mouseX - centerX - panX) / oldZoom;
-        double worldY = (mouseY - centerY - panY) / oldZoom;
-
-        panX = (mouseX - centerX) - (worldX * zoom);
-        panY = (mouseY - centerY) - (worldY * zoom);
-
+        zoom = Math.clamp(scrollY > 0 ? zoom * 1.2 : zoom / 1.2,
+                CoverageMapState.minimumZoom(width, mapBottom - mapTop), 32.0);
+        double cx = width / 2.0, cy = (mapTop + mapBottom) / 2.0;
+        panX = mouseX - cx - (mouseX - cx - panX) / oldZoom * zoom;
+        panY = mouseY - cy - (mouseY - cy - panY) / oldZoom * zoom;
+        clampPan();
+        if (zoom != oldZoom) viewChanged(true);
         return true;
     }
 

@@ -506,6 +506,42 @@ class CoverageServiceTest {
     }
 
     @Test
+    void gameMapMatchesWebAndPhoneThroughWallPlacementRemovalAndMissingTerrain() {
+        BlockPos source = new BlockPos(-32, 64, 32);
+        antenna(source, G2_900);
+        var request = new com.florentdubut.telecom.network.packet.RequestCoverageTilePayload(
+                java.util.UUID.randomUUID(), "minecraft:overworld", 0, 0, 64, "64", "all", "2G", "G2_900", 0);
+        List<Float> powers = new ArrayList<>();
+        String previousModel = null;
+        for (int phase = 0; phase < 3; phase++) {
+            boolean wall = phase == 1;
+            when(chunk.getBlockState(any(BlockPos.class))).thenAnswer(invocation -> {
+                BlockPos pos = invocation.getArgument(0);
+                return (wall && pos.getX() == -8 ? Blocks.STONE : Blocks.AIR).defaultBlockState();
+            });
+            CoverageService.invalidateChunk(level, -1, 2);
+            JsonObject web = ready(request.request());
+            var game = com.florentdubut.telecom.network.packet.CoverageTilePayload.fromSnapshot(request, web.toString());
+            var cell = game.cells().getFirst();
+            assertEquals(firstCell(web).get("powerDbm").getAsFloat(), cell.powerDbm());
+            assertEquals(SignalPropagator.calculateSignal(level, source, new BlockPos(cell.x(), cell.y(), cell.z()), G2_900).powerDbm,
+                    cell.powerDbm(), 0.0001f);
+            assertEquals("unavailable", cell.service());
+            assertEquals("signal", cell.state());
+            assertNotEquals(previousModel, game.modelRevision());
+            previousModel = game.modelRevision();
+            powers.add(cell.powerDbm());
+        }
+        assertTrue(powers.get(1) < powers.getFirst());
+        assertEquals(powers.getFirst(), powers.get(2));
+        when(chunks.getChunkNow(-1, 2)).thenReturn(null);
+        CoverageService.invalidateChunk(level, -1, 2);
+        var unknown = com.florentdubut.telecom.network.packet.CoverageTilePayload.fromSnapshot(request, ready(request.request()).toString());
+        assertEquals("unknown", unknown.cells().getFirst().state());
+        assertEquals("unknown", unknown.cells().getFirst().service());
+    }
+
+    @Test
     void intermediateChunkInvalidationRecomputesTerrainButUnrelatedChunkKeepsRevision() {
         BlockPos source = new BlockPos(-32, 64, 32);
         antenna(source, G2_900);
@@ -713,7 +749,7 @@ class CoverageServiceTest {
         quanta.setAccessible(true);
         quanta.setInt(job, 32768);
         CoverageService.tickUntil(server, System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(2));
-        assertThrows(CoverageService.BusyException.class, () -> snapshot(request(0)));
+        assertFalse(assertThrows(CoverageService.BusyException.class, () -> snapshot(request(0))).retryable());
         assertThrows(CoverageService.BusyException.class, () -> snapshot(filtered("64", "all", "5G", "all")));
     }
 

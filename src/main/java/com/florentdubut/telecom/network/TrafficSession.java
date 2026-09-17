@@ -32,6 +32,7 @@ public class TrafficSession {
     // For mobile sessions: which antenna and frequencies are this session going through
     private BlockPos antennaPos = null;
     private int frequenciesMask = 0;
+    private String failureReason = "";
 
     public TrafficSession(BlockPos sourcePos, BlockPos destPos, String clientIp, int targetDownBw, int targetUpBw, int totalTicksPerPhase, boolean isPassive, String deviceId) {
         this.sessionId = UUID.randomUUID();
@@ -66,7 +67,20 @@ public class TrafficSession {
 
     public boolean isRouter() { return deviceId.startsWith("router:"); }
 
-    public void fail() { state = SessionState.FAILED; }
+    public void fail() { fail(""); }
+
+    public void fail(String reason) {
+        failureReason = reason;
+        state = SessionState.FAILED;
+    }
+
+    public String getFailureReason() { return failureReason; }
+
+    public String getServerId() { return Long.toString(destPos.asLong()); }
+
+    public String getServerName() {
+        return "Server (" + destPos.getX() + "," + destPos.getY() + "," + destPos.getZ() + ")";
+    }
 
     public boolean isTerminal() {
         return state == SessionState.FINISHED || state == SessionState.FAILED || state == SessionState.REJECTED;

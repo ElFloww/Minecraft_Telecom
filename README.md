@@ -2,7 +2,7 @@
 
 Simulation de reseaux de telecommunications dans Minecraft : cables cuivre/fibre, routeurs, serveurs, antennes multibandes, smartphone, tests de debit et supervision web.
 
-La [roadmap](ROADMAP_REALISME_ET_OPTIMISATION.md) se concentre sur la construction et l'utilisation du reseau, sans gestion electrique, tickets ou economie. Le premier lot de fiabilisation et la couverture calculee sur la carte web sont livres. Les faisceaux hertziens entre sites et la chaine FTTH detaillee restent a implementer.
+La [roadmap](ROADMAP_REALISME_ET_OPTIMISATION.md) se concentre sur la construction et l'utilisation du reseau, sans gestion electrique, tickets ou economie. La couverture calculee sur les cartes web et en jeu, les IP fixes stables et le choix du serveur de speedtest sont implementes. Les faisceaux hertziens entre sites et la chaine FTTH detaillee restent a implementer.
 
 ## Versions
 
@@ -57,9 +57,25 @@ Le test doit disposer d'un chemin jusqu'a un serveur. Les debits et l'identite r
 
 Les routeurs sont identifies par position, et non par IP ; le terminal mobile reste lie a l'UUID du joueur (plusieurs items smartphone du meme joueur representent donc le meme terminal logique). Chaque test dispose de son identifiant de session. Fermer un ecran n'annule pas les autres tests et leur suivi est restaure a la reouverture. Les liens communs partagent leur capacite. Le dashboard affiche l'etat et les resultats par routeur et ne bloque pas le demarrage sur un autre appareil.
 
-Le protocole de synchronisation des tests est passe en version 1.1. Le client et le serveur doivent utiliser le JAR actualise ; les sauvegardes du monde ne changent pas de format.
+Le protocole de synchronisation est passe en version **1.3**, avec les paquets de couverture en jeu et de selection du serveur de speedtest. Le client et le serveur doivent utiliser le JAR actualise.
 
-Les IP mobiles sont allouees par UUID, persistees par dimension dans une plage privee `172.16.0.0/12` et restent independantes de la position de l'antenne. L'adressage hierarchique du reseau fixe reste a remplacer par un IPAM stable.
+### Adresses stables
+
+Les IP fixes sont conservees dans les champs `IP`/`CIDR` existants du graphe, par dimension. Un recalcul, une coupure, une fusion de reseaux ou le retrait d'un serveur ne renumerote pas les autres equipements. Une adresse n'est rendue disponible que lorsque son noeud est supprime. Posseder une IP ne signifie pas avoir un chemin vers un serveur.
+
+Les adresses canoniques existantes du pool prive `10.0.0.0/8` sont preservees. Au chargement, les adresses absentes, invalides, hors pool et les doublons sont remplaces de facon deterministe ; les anciennes adresses de serveur `0.0.0.0` deviennent donc des adresses uniques. En cas de doublon, le noeud ayant la plus petite position encodee conserve l'adresse. Les allocations nouvelles ou reparees utilisent un CIDR d'hote `/32` ; les anciens CIDR non vides d'une adresse conservee restent presents a titre informatif, sans imposer une nouvelle hierarchie de routage.
+
+Les IP mobiles restent allouees par UUID et persistees par dimension dans la plage distincte `172.16.0.0/12`, independamment de la position de l'antenne. Le schema NBT du graphe reste en version 1. Sauvegarder le monde avant la premiere migration.
+
+### Choix du serveur de speedtest
+
+Le routeur et l'application speedtest du smartphone proposent un bouton **Serveur**. Dans le dashboard, le selecteur se trouve dans le panneau du routeur. Choisir **Auto** ou un serveur explicitement : chaque entree affiche son nom genere a partir des coordonnees, son identifiant, une latence estimee et sa disponibilite depuis l'appareil. Le catalogue web affiche aussi la capacite du chemin filaire. L'estimation n'est pas une mesure de latence en charge.
+
+Le serveur Minecraft revalide la destination au demarrage. Un serveur choisi qui a disparu ou est inaccessible provoque un refus explicite, sans repli automatique. Si le serveur ou le chemin disparait pendant le test, celui-ci echoue avec sa destination et sa raison d'echec. Le mode Auto reste disponible et choisit le serveur accessible au ping de chemin le plus faible. Les resultats et le suivi restent independants par appareil.
+
+La decouverte est limitee a 128 serveurs affiches, avec indication de troncature. Elle effectue un seul parcours du graphe ; au-dela de 8192 noeuds ou 16384 liens, le catalogue est refuse avec une erreur explicite plutot que lancer une recherche sans borne. Les requetes Minecraft sont limitees en frequence et correlees a l'appareil, a la dimension et a l'ecran courant. Aucun chunk n'est force pour constituer le catalogue.
+
+L'API expose `GET /api/speedtest/servers?pos=<position_du_routeur>`. `POST /api/speedtest` accepte un champ `serverId` optionnel, encode en chaine decimale ; absent ou vide, il conserve le mode Auto. Les instantanes et acquittements exposent la destination utilisee ; les erreurs portent un `errorCode` exploitable par l'interface.
 
 ## Dashboard et securite
 
@@ -95,7 +111,7 @@ Le fond represente donc volontairement le terrain au moment de sa premiere captu
 4. Choisir la surface ou une hauteur Y fixe pour examiner un etage ou un tunnel.
 5. Attendre le calcul progressif ; survoler une case pour lire signal, antenne, hauteur et acces au reseau.
 
-La couverture est calculee independamment pour la **2G, 3G, 4G et 5G**. Le filtre affiche les resultats propres a chaque technologie ; "Toutes (dominante)" est uniquement une vue de synthese. Changer de technologie reutilise les donnees deja recues, sans relancer les rayons ni retelecharger les tuiles pretes.
+La couverture est calculee independamment pour la **2G, 3G, 4G et 5G**. Le filtre affiche les resultats propres a chaque technologie ; "Toutes (dominante)" est uniquement une vue de synthese. Dans le dashboard, changer de technologie reutilise les donnees deja recues, sans relancer les rayons ni retelecharger les tuiles pretes.
 
 Les precisions proposees sont **1 bloc**, **8 blocs (demi-chunk)** et **16 blocs (chunk)**, plus un mode Auto. Le pas de 1 calcule chaque bloc de la grille, avec au plus 256 points par tuile. Les choix restent des precisions souhaitees : au grand dezoom, un apercu plus grossier preserve le viewport complet et les performances. Le pas reel est toujours affiche ; zoomer jusqu'a "precision demandee atteinte" pour obtenir exactement le pas choisi. Le zoom maximal permet le pas 1 sur un viewport 4K.
 
@@ -117,7 +133,11 @@ Le calcul reprend par petites tranches sur le thread serveur, avec un budget coo
 
 Le test `CoveragePerformanceTest` compare une grille de 16 x 16 blocs sur 14 bandes : 508 303 sondages terrain separes contre 38 600 partages, soit environ 13,17 fois moins de lectures dans ce scenario. Ce n'est pas une garantie du meme gain en temps total sur une ville : dimensions, obstacles et nombre d'antennes comptent encore.
 
-Ce calque concerne actuellement la carte web de l'Overworld. Son ajout a la carte dans Minecraft reste prevu.
+La carte web concerne l'Overworld. La carte reseau dans Minecraft propose aussi la couverture calculee, dans la dimension du joueur, sans connexion au dashboard. Elle reutilise les memes calculs et le meme cache serveur. Les reponses radio sont bornees a 256 cellules par tuile ; les requetes sont limitees cote serveur et les reponses d'une ancienne vue ou dimension sont ignorees. Le fond PNG du dashboard n'est pas affiche dans cette carte en jeu.
+
+Dans Minecraft, ouvrir l'item carte reseau et activer le calque de couverture. Les controles permettent de choisir technologie, bande, hauteur de reception et precision ; cliquer sur une antenne permet de l'isoler. Deplacer la carte par glissement et zoomer avec la molette. La legende distingue signal fort, moyen, faible, absent et donnees inconnues ; le survol precise la hauteur, la source radio et la disponibilite d'un chemin vers un serveur. Les filtres de la carte en jeu redemandent la selection au serveur, mais reutilisent les calculs physiques deja en cache.
+
+Le mode **Y mobile** utilise le meme point de reception que le smartphone (Y du bloc du joueur + 1). La carte conserve au plus 16 tuiles visibles, garde celles encore dans la vue lors d'un deplacement et masque les donnees non revalidees apres 100 ticks client. Un calcul depassant une limite s'arrete avec une indication au survol : choisir une antenne ou une precision plus grossiere, puis reactiver le calque si necessaire. Le fond et les controles de la carte en jeu restent a verifier visuellement en multijoueur.
 
 ### Travaux sur une zone
 
@@ -176,6 +196,13 @@ Pour executer seulement les tests HTTP :
 ```
 
 Tous les tests HTTP s'executent sans identifiants. Ils utilisent de vraies connexions locales et des objets Minecraft simules ; ils ne remplacent pas une recette interactive multijoueur. Les benchmarks Ville/Stress et la verification visuelle complete restent a realiser.
+
+Pour la recette visuelle de la carte en jeu :
+
+1. Activer une antenne, ouvrir la carte, choisir **Y mobile** et une grille de 1 bloc, puis zoomer jusqu'au pas effectif 1. Comparer la cellule aux coordonnees du joueur avec le smartphone, en tenant compte de son affichage arrondi en dBm.
+2. Poser puis retirer un mur sur le trajet ; attendre la revalidation et verifier le changement de signal. Un terrain jamais observe doit rester inconnu, pas devenir un signal absent certain.
+3. Choisir une technologie, une bande et une antenne ; se deplacer et zoomer. Les tuiles communes doivent rester affichees tant qu'elles sont valides ; les autres doivent indiquer un calcul en attente.
+4. Ouvrir la carte avec deux joueurs, fermer/rouvrir rapidement puis changer de dimension. Verifier l'independance des vues et l'absence d'anciennes donnees radio.
 
 ## References et licence
 

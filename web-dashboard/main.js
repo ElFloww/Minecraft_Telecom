@@ -11,6 +11,8 @@ let apiRetryAt = 0;
 const routeRetries = new Map();
 const speedtestPending = new Map();
 const speedtestSettings = new Map();
+let speedtestViewId = null;
+let speedtestViewGeneration = 0;
 let tilesPaused = false;
 const connectionStatus = document.getElementById('connection-status');
 
@@ -80,6 +82,10 @@ function apiFetch(path, options = {}) {
 function resetDashboardSession() {
     sessionGeneration++;
     speedtestPending.clear();
+    for (const settings of speedtestSettings.values()) {
+        settings.catalogPending = null;
+        settings.catalogNextAt = 0;
+    }
     if (apiRetryAt === Infinity) apiRetryAt = 0;
     routeRetries.clear();
     networkNextAt = nperfNextAt = playerNextAt = 0;
@@ -783,6 +789,11 @@ async function fetchNetworkData() {
                 if (upToDate) {
                     selectedNode = upToDate;
                     showNodeDetails(upToDate);
+                } else {
+                    selectedNode = null;
+                    speedtestViewId = null;
+                    speedtestViewGeneration++;
+                    detailsPanel.style.display = 'none';
                 }
             } else if (selectedEdge) {
                 const upToDate = networkData.edges.find(e => e.source === selectedEdge.source && e.target === selectedEdge.target);
@@ -875,27 +886,101 @@ canvas.addEventListener('click', e => {
     } else {
         selectedNode = null;
         selectedEdge = null;
+        speedtestViewId = null;
+        speedtestViewGeneration++;
         detailsPanel.style.display = 'none';
     }
 });
 
 detailsClose.addEventListener('click', () => {
+    speedtestViewId = null;
+    speedtestViewGeneration++;
     selectedNode = null;
     selectedEdge = null;
     detailsPanel.style.display = 'none';
 });
 
 function nodeSpeedtest(node) {
-    return typeof node.id === 'string' && node.speedtest?.deviceId === node.id ? node.speedtest : null;
+    return typeof node.id === 'string' && node.speedtest?.deviceId === `router:${node.id}` ? node.speedtest : null;
 }
 
 function routerSettings(id) {
     if (!speedtestSettings.has(id)) {
-        speedtestSettings.set(id, { duration: '300', error: '' });
+        speedtestSettings.set(id, { duration: '300', serverId: '', error: '', servers: [],
+            catalogLoaded: false, catalogError: '', catalogPending: null, catalogNextAt: 0, truncated: false });
         if (speedtestSettings.size > 128) speedtestSettings.delete(speedtestSettings.keys().next().value);
     }
     return speedtestSettings.get(id);
 }
+
+function speedtestError(code, fallback = 'Erreur Speedtest') {
+    return ({ invalid_request: 'Requête Speedtest invalide : vérifier le routeur et son adresse IP.',
+        device_busy: 'Un Speedtest est déjà actif sur ce routeur.',
+        session_limit: 'Limite de sessions atteinte, réessayer plus tard.',
+        server_unavailable: 'Serveur choisi disparu ou inaccessible. Aucun repli automatique.',
+        route_lost: 'Connexion au serveur perdue pendant le test. Aucun repli automatique.',
+        catalogue_limit: 'Réseau trop volumineux pour le catalogue (8192 équipements / 16384 liens maximum).',
+        no_server: 'Aucun serveur Speedtest accessible.' })[code] || fallback;
+}
+
+function speedtestServerLabel(server) {
+    return `${server.name || 'Serveur'} [${server.id}] · ${server.available
+        ? `${server.estimatedPingMs} ms estimés · ${formatSpeed(server.bandwidthMbps)}`
+        : speedtestError(server.reason, 'Indisponible')}`;
+}
+
+async function fetchSpeedtestServers() {
+    const id = selectedNode?.id;
+    if (selectedNode?.type !== 'ROUTER' || typeof id !== 'string' || document.hidden) return;
+    const settings = routerSettings(id);
+    if (settings.catalogPending || Date.now() < settings.catalogNextAt) return;
+    const generation = sessionGeneration, world = terrainGeneration, view = speedtestViewGeneration;
+    const pending = {};
+    settings.catalogPending = pending;
+    const isCurrent = () => generation === sessionGeneration && world === terrainGeneration
+        && view === speedtestViewGeneration && selectedNode?.id === id && selectedNode?.type === 'ROUTER'
+        && nodeMap.get(id)?.type === 'ROUTER' && speedtestSettings.get(id) === settings
+        && settings.catalogPending === pending;
+    try {
+        const response = await apiFetch(`/api/speedtest/servers?pos=${encodeURIComponent(id)}`, { isCurrent });
+        if (!isCurrent()) return;
+        if (response.status === 202) {
+            settings.catalogNextAt = Date.now() + retryDelay(response.headers?.get('Retry-After'), 1, Date.now());
+            settings.catalogError = 'Catalogue en attente du tick Minecraft.';
+            return;
+        }
+        if (response.status !== 200) {
+            const error = await response.json().catch(() => ({}));
+            if (!isCurrent()) return;
+            throw new Error(speedtestError(error.errorCode, error.error || `HTTP ${response.status}`));
+        }
+        const result = await response.json();
+        if (!isCurrent()) return;
+        if (result.pos !== id || !Array.isArray(result.servers) || result.servers.length > 128
+            || result.servers.some(server => typeof server.id !== 'string' || !/^-?\d{1,19}$/.test(server.id)
+                || typeof server.name !== 'string' || typeof server.available !== 'boolean'
+                || !Number.isInteger(server.estimatedPingMs) || !Number.isFinite(server.bandwidthMbps))) {
+            throw new Error('Réponse invalide');
+        }
+        settings.servers = result.servers;
+        settings.truncated = result.truncated === true;
+        settings.catalogLoaded = true;
+        settings.catalogError = '';
+        settings.catalogNextAt = Date.now() + 15000;
+    } catch (error) {
+        if (!isCurrent()) return;
+        settings.catalogNextAt = error.deferred ? error.retryAt : Date.now() + 5000;
+        settings.catalogError = error.deferred ? 'Lecture du catalogue différée. Réessayer ou reprendre les lectures.'
+            : `Catalogue indisponible : ${error.message || 'erreur de connexion'}. Réessayer.`;
+    } finally {
+        const current = isCurrent();
+        if (settings.catalogPending === pending) settings.catalogPending = null;
+        if (current) showNodeDetails(nodeMap.get(id));
+    }
+}
+
+// Catalogue reads share the HTTP queue/cooldowns, never the animation loop.
+setInterval(fetchSpeedtestServers, 200);
 
 async function startSpeedtest(deviceId) {
     const node = nodeMap.get(deviceId);
@@ -921,19 +1006,24 @@ async function startSpeedtest(deviceId) {
         const response = await apiFetch('/api/speedtest', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ pos: deviceId, duration: Number(settings.duration) }),
+            body: JSON.stringify({ pos: deviceId, duration: Number(settings.duration), serverId: settings.serverId }),
             isCurrent,
         });
         if (!isCurrent()) return;
-        if (!response.ok) throw new Error(`Erreur HTTP ${response.status}`);
+        if (!response.ok) {
+            const error = await response.json().catch(() => ({}));
+            throw new Error(speedtestError(error.errorCode, error.error || `Erreur HTTP ${response.status}`));
+        }
         const result = await response.json();
         if (!isCurrent()) return;
-        if (result.status !== 'started' || result.deviceId !== deviceId
+        if (result.status !== 'started' || result.deviceId !== `router:${deviceId}`
             || typeof result.sessionId !== 'string' || !result.sessionId) {
             throw new Error('Réponse Speedtest invalide');
         }
         // Keep the device locked until a network snapshot confirms this session.
         pending.sessionId = result.sessionId;
+        pending.serverId = result.serverId;
+        pending.serverName = result.serverName;
         const test = nodeSpeedtest(nodeMap.get(deviceId) || node);
         if (test && (test.active || test.sessionId === pending.sessionId)) speedtestPending.delete(deviceId);
         networkNextAt = 0;
@@ -947,6 +1037,11 @@ async function startSpeedtest(deviceId) {
 }
 
 function showNodeDetails(node) {
+    const viewId = node.type === 'ROUTER' ? node.id : null;
+    if (speedtestViewId !== viewId) {
+        speedtestViewId = viewId;
+        speedtestViewGeneration++;
+    }
     detailsPanel.style.display = 'flex';
     detailsTitle.innerText = `Équipement: ${node.type}`;
     detailsTitle.style.color = COLORS[node.type] || '#fff';
@@ -995,11 +1090,15 @@ function showNodeDetails(node) {
     
     if (node.type === 'ROUTER') {
         const test = nodeSpeedtest(node);
+        const settings = routerSettings(node.id);
+        const destination = speedtestPending.get(node.id)?.sessionId ? speedtestPending.get(node.id) : test;
         const progress = test && Number.isFinite(test.ticksElapsed) && test.totalTicksPerPhase > 0
             ? Math.max(0, Math.min(100, test.ticksElapsed / test.totalTicksPerPhase * 100)) : 0;
         const speed = value => Number.isFinite(value) && value >= 0 ? formatSpeed(value) : 'En attente';
         html += `
             <div class="section-title">Speedtest Distant</div>
+            ${destination?.serverId ? `<div class="info-row"><span class="label">Destination utilisée</span><span>${escapeHtml(destination.serverName || 'Serveur')} [${escapeHtml(destination.serverId)}]</span></div>` : ''}
+            ${test?.errorCode ? `<div role="status">${escapeHtml(speedtestError(test.errorCode))}</div>` : ''}
             ${test ? `
                 <div class="info-row"><span class="label">Phase</span><span>${escapeHtml(test.state)}</span></div>
                 <div class="info-row"><span class="label">Progression de phase</span><span>${Math.round(progress)} %</span></div>
@@ -1009,6 +1108,16 @@ function showNodeDetails(node) {
                 <div class="info-row"><span class="label">Téléchargement (Down)</span><span>${speed(test.downloadBandwidth)}</span></div>
                 <div class="info-row"><span class="label">Envoi (Up)</span><span>${speed(test.uploadBandwidth)}</span></div>
             ` : ''}
+            <label for="speedtest-server" class="label">Serveur de destination</label>
+            <select id="speedtest-server" class="duration-select">
+                <option value="">Auto (meilleur serveur accessible)</option>
+                ${settings.servers.map(server => `<option value="${escapeHtml(server.id)}" ${server.available ? '' : 'disabled'}>${escapeHtml(speedtestServerLabel(server))}</option>`).join('')}
+                ${settings.serverId && !settings.servers.some(server => server.id === settings.serverId)
+                    ? `<option value="${escapeHtml(settings.serverId)}" disabled>${escapeHtml(settings.serverId)} : absent du catalogue, aucun repli auto</option>` : ''}
+            </select>
+            <div class="speedtest-catalog-status" role="status">${escapeHtml(settings.catalogError || (!settings.catalogLoaded ? 'Chargement du catalogue...' : settings.truncated ? 'Liste limitée à 128 serveurs.' : settings.servers.length ? '' : 'Aucun serveur dans le catalogue.'))}</div>
+            <button id="speedtest-refresh" class="duration-select" type="button">Actualiser les serveurs</button>
+            <label for="speedtest-duration" class="label">Durée par phase</label>
             <select id="speedtest-duration" class="duration-select">
                 <option value="300">15 secondes</option>
                 <option value="600">30 secondes</option>
@@ -1030,6 +1139,17 @@ function showNodeDetails(node) {
         duration.addEventListener('change', () => { routerSettings(node.id).duration = duration.value; });
         const active = nodeSpeedtest(node)?.active === true;
         const pending = speedtestPending.get(node.id);
+        const server = document.getElementById('speedtest-server');
+        const settings = routerSettings(node.id);
+        server.value = settings.serverId;
+        server.disabled = active || !!pending;
+        server.addEventListener('change', () => { settings.serverId = server.value; settings.error = ''; });
+        const refresh = document.getElementById('speedtest-refresh');
+        refresh.disabled = !!settings.catalogPending;
+        refresh.addEventListener('click', () => {
+            settings.catalogNextAt = 0;
+            return fetchSpeedtestServers();
+        });
         btn.disabled = typeof node.id !== 'string' || active || !!pending;
         btn.innerText = active ? 'Speedtest en cours !' : pending
             ? (pending.sessionId ? 'Démarré, attente du statut...' : 'Démarrage...')
@@ -1039,6 +1159,8 @@ function showNodeDetails(node) {
 }
 
 function showEdgeDetails(edge) {
+    speedtestViewId = null;
+    speedtestViewGeneration++;
     detailsPanel.style.display = 'flex';
     detailsTitle.innerText = `Câble: ${edge.type}`;
     detailsTitle.style.color = '#fff';

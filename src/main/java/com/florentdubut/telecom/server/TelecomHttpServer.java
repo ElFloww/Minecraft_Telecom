@@ -203,7 +203,7 @@ public class TelecomHttpServer {
                     ? singleHeader(exchange, "Access-Control-Request-Method") : exchange.getRequestMethod();
             boolean mutation = path.equals("/api/speedtest") || path.equals("/api/zone-jobs/cancel")
                     || path.equals("/api/zone-jobs") && "POST".equals(intendedMethod);
-            if (api && !Set.of("/api/network", "/api/player", "/api/tile", "/api/terrain", "/api/map-image", "/api/nperf_map", "/api/speedtest", "/api/coverage", "/api/coverage/options", "/api/zone-jobs", "/api/zone-jobs/cancel").contains(path)) {
+            if (api && !Set.of("/api/network", "/api/player", "/api/tile", "/api/terrain", "/api/map-image", "/api/nperf_map", "/api/speedtest", "/api/speedtest/servers", "/api/coverage", "/api/coverage/options", "/api/zone-jobs", "/api/zone-jobs/cancel").contains(path)) {
                 throw new HttpFailure(404, "Unknown endpoint");
             }
             String allowedMethod = mutation ? "POST" : "GET";
@@ -251,6 +251,7 @@ public class TelecomHttpServer {
                 case "/api/coverage/options" -> sendJson(exchange, readOnServer("coverage-options", this::coverageOptions).value());
                 case "/api/coverage" -> sendCalculatedCoverage(exchange);
                 case "/api/speedtest" -> startSpeedtest(exchange);
+                case "/api/speedtest/servers" -> sendSpeedtestServers(exchange);
                 case "/api/zone-jobs" -> {
                     if (mutation) startZoneJob(exchange);
                     else sendJson(exchange, readOnServer("zone-jobs", (level, deadline) -> zoneManager().status()).value());
@@ -272,7 +273,10 @@ public class TelecomHttpServer {
             if (e.status == 202) {
                 error.addProperty("status", "pending");
                 error.addProperty("message", e.getMessage());
-            } else error.addProperty("error", e.getMessage());
+            } else {
+                error.addProperty("error", e.getMessage());
+                if (e.code != null) error.addProperty("errorCode", e.code);
+            }
             send(exchange, e.status, "application/json; charset=utf-8", error.toString().getBytes(StandardCharsets.UTF_8));
         } catch (IllegalArgumentException e) {
             send(exchange, 400, "application/json", "{\"error\":\"Invalid request\"}".getBytes(StandardCharsets.UTF_8));
@@ -525,6 +529,75 @@ public class TelecomHttpServer {
         sendJson(exchange, body.toString());
     }
 
+    private static long decimalLong(String value) {
+        if (!value.matches("-?[0-9]{1,19}")) throw new IllegalArgumentException();
+        long parsed = Long.parseLong(value);
+        if (!Long.toString(parsed).equals(value)) throw new IllegalArgumentException();
+        return parsed;
+    }
+
+    private void sendSpeedtestServers(HttpExchange exchange) throws IOException {
+        final long pos;
+        try {
+            String query = exchange.getRequestURI().getRawQuery();
+            if (query == null || query.length() > 128 || !query.startsWith("pos=") || query.contains("&")) {
+                throw new IllegalArgumentException();
+            }
+            pos = decimalLong(URLDecoder.decode(query.substring(4), StandardCharsets.UTF_8));
+        } catch (RuntimeException invalid) {
+            throw new HttpFailure(400, "Expected pos as a decimal long string", "invalid_request");
+        }
+        sendJson(exchange, readOnServer("speedtest-servers:" + pos, (level, deadline) -> {
+            TelecomNetworkGraph graph = TelecomNetworkGraph.get(level);
+            BlockPos position = BlockPos.of(pos);
+            NetworkNode router = graph.getNode(position);
+            if (router == null || router.getType() != NetworkNode.NodeType.ROUTER) {
+                throw new HttpFailure(404, "Router not found", "invalid_request");
+            }
+            checkBudget(deadline);
+            final java.util.List<com.florentdubut.telecom.network.SpeedtestServerOption> options;
+            try {
+                options = graph.getSpeedtestServers(position, 0);
+            } catch (TelecomNetworkGraph.SpeedtestCatalogueLimitException limit) {
+                throw new HttpFailure(503, "Network exceeds speedtest catalogue limits", "catalogue_limit");
+            }
+            JsonArray servers = new JsonArray();
+            for (var option : options) {
+                checkBudget(deadline);
+                if (servers.size() >= TelecomNetworkGraph.MAX_SPEEDTEST_SERVERS) break;
+                JsonObject item = new JsonObject();
+                item.addProperty("id", option.id());
+                item.addProperty("name", option.name());
+                item.addProperty("estimatedPingMs", option.estimatedPingMs());
+                item.addProperty("available", option.available());
+                item.addProperty("bandwidthMbps", option.bandwidthMbps());
+                item.addProperty("reason", option.reason());
+                servers.add(item);
+            }
+            int count = 0;
+            for (NetworkNode node : graph.getNodes()) {
+                checkBudget(deadline);
+                if (node.getType() == NetworkNode.NodeType.SERVER && ++count > TelecomNetworkGraph.MAX_SPEEDTEST_SERVERS) break;
+            }
+            JsonObject result = new JsonObject();
+            result.addProperty("pos", Long.toString(pos));
+            result.add("servers", servers);
+            result.addProperty("truncated", count > TelecomNetworkGraph.MAX_SPEEDTEST_SERVERS);
+            return result.toString();
+        }).value());
+    }
+
+    private static HttpFailure speedtestFailure(String code) {
+        String message = switch (code) {
+            case "device_busy" -> "Speedtest already active on this router";
+            case "session_limit" -> "Speedtest session limit reached";
+            case "server_unavailable" -> "Selected server disappeared or is unreachable; no automatic fallback";
+            case "no_server" -> "No reachable speedtest server";
+            default -> "Invalid speedtest request";
+        };
+        return new HttpFailure(code.equals("invalid_request") ? 400 : 409, message, code);
+    }
+
     private void startSpeedtest(HttpExchange exchange) throws IOException {
         String contentType = singleHeader(exchange, "Content-Type");
         if (contentType == null || !contentType.split(";", 2)[0].trim().equalsIgnoreCase("application/json")) {
@@ -534,32 +607,36 @@ public class TelecomHttpServer {
         if (body.length > MAX_BODY) throw new HttpFailure(413, "Body too large");
         final long pos;
         final int duration;
+        final String serverId;
         try {
             JsonObject payload = JsonParser.parseString(new String(body, StandardCharsets.UTF_8)).getAsJsonObject();
-            pos = Long.parseLong(payload.get("pos").getAsString());
+            if (!payload.get("pos").getAsJsonPrimitive().isString()) throw new IllegalArgumentException();
+            pos = decimalLong(payload.get("pos").getAsString());
+            if (payload.has("serverId") && !payload.get("serverId").getAsJsonPrimitive().isString()) throw new IllegalArgumentException();
+            serverId = payload.has("serverId") ? payload.get("serverId").getAsString() : "";
+            if (!serverId.isEmpty()) decimalLong(serverId);
             duration = Integer.parseInt(payload.get("duration").getAsString());
             if (!DURATIONS.contains(duration)) throw new IllegalArgumentException();
         } catch (RuntimeException e) {
-            throw new HttpFailure(400, "Expected pos as decimal string and duration in 300,600,1200,6000,12000");
+            throw new HttpFailure(400, "Expected pos and optional serverId as decimal long strings (empty serverId means auto), and duration in 300,600,1200,6000,12000", "invalid_request");
         }
         sendJson(exchange, onServer((level, deadline) -> {
             TelecomNetworkGraph graph = TelecomNetworkGraph.get(level);
             BlockPos position = BlockPos.of(pos);
             NetworkNode node = graph.getNode(position);
-            if (node == null || node.getType() != NetworkNode.NodeType.ROUTER) throw new HttpFailure(404, "Router not found");
+            if (node == null || node.getType() != NetworkNode.NodeType.ROUTER) throw new HttpFailure(404, "Router not found", "invalid_request");
             String ip = node.getIpAddress();
-            if (ip == null || ip.isBlank()) throw new HttpFailure(409, "Router has no IP");
-            String deviceId = com.florentdubut.telecom.network.TrafficSession.routerDeviceId(position);
-            var before = graph.getSessionByDeviceId(deviceId);
-            if (before != null && !before.isPassive()) throw new HttpFailure(409, "Speedtest already active");
+            if (ip == null || ip.isBlank()) throw new HttpFailure(409, "Router has no IP", "invalid_request");
             checkBudget(deadline);
-            graph.startSpeedtest(position, ip, node.getCapacityDown(), node.getCapacityUp(), 0, 0, duration, false, null);
-            var after = graph.getSessionByDeviceId(deviceId);
-            if (after == null || after == before || after.isPassive()) throw new HttpFailure(409, "Speedtest rejected: capacity, session limit or route unavailable");
+            var started = graph.startSpeedtest(position, ip, node.getCapacityDown(), node.getCapacityUp(), 0, 0, duration, false, null, serverId);
+            if (!started.accepted()) throw speedtestFailure(started.error());
+            var after = started.session();
             JsonObject result = new JsonObject();
             result.addProperty("status", "started");
             result.addProperty("deviceId", after.getDeviceId());
             result.addProperty("sessionId", after.getSessionId().toString());
+            result.addProperty("serverId", after.getServerId());
+            result.addProperty("serverName", after.getServerName());
             return result.toString();
         }));
     }
@@ -629,6 +706,9 @@ public class TelecomHttpServer {
         JsonObject value = new JsonObject();
         value.addProperty("deviceId", session.getDeviceId());
         value.addProperty("sessionId", session.getSessionId().toString());
+        value.addProperty("serverId", session.getServerId());
+        value.addProperty("serverName", session.getServerName());
+        value.addProperty("errorCode", session.getFailureReason());
         String state = session.getState().name();
         value.addProperty("state", state);
         value.addProperty("active", !state.equals("FINISHED") && !state.equals("FAILED"));
@@ -848,6 +928,8 @@ public class TelecomHttpServer {
 
     private static final class HttpFailure extends RuntimeException {
         final int status;
-        HttpFailure(int status, String message) { super(message); this.status = status; }
+        final String code;
+        HttpFailure(int status, String message) { this(status, message, null); }
+        HttpFailure(int status, String message, String code) { super(message); this.status = status; this.code = code; }
     }
 }

@@ -111,6 +111,7 @@ public class TelecomNetworkGraph extends SavedData {
             graph.mobileAddresses.put(owner, host);
             graph.nextMobileAddress = Math.max(graph.nextMobileAddress, host + 1);
         }
+        graph.ensureFixedAddresses();
         return graph;
     }
 
@@ -211,6 +212,57 @@ public class TelecomNetworkGraph extends SavedData {
         return "172." + (16 + (host >>> 16)) + "." + ((host >>> 8) & 255) + "." + (host & 255);
     }
 
+    /** Node IPs are the persisted leases. Connectivity never determines or releases an address. */
+    public void ensureFixedAddresses() {
+        List<NetworkNode> ordered = nodes.values().stream()
+                .sorted(java.util.Comparator.comparingLong(node -> node.getPosition().asLong())).toList();
+        java.util.Set<Integer> allocated = new java.util.HashSet<>();
+        List<NetworkNode> missing = new ArrayList<>();
+        for (NetworkNode node : ordered) {
+            int host = fixedHost(node.getIpAddress());
+            if (host < 1 || !allocated.add(host)) missing.add(node);
+        }
+        if ((long) allocated.size() + missing.size() > 0xFFFFFE) {
+            throw new IllegalStateException("Fixed IPv4 pool exhausted");
+        }
+        int next = 1;
+        boolean changed = false;
+        // Reserve every existing unique lease before filling holes, including disconnected nodes.
+        for (NetworkNode node : missing) {
+            while (allocated.contains(next)) next++;
+            allocated.add(next);
+            String address = "10." + (next >>> 16) + "." + ((next >>> 8) & 255) + "." + (next & 255);
+            node.setIpAddress(address);
+            node.setNetworkCidr(address + "/32");
+            next++;
+            changed = true;
+        }
+        for (NetworkNode node : ordered) {
+            if (node.getNetworkCidr() == null || node.getNetworkCidr().isBlank()) {
+                node.setNetworkCidr(node.getIpAddress() + "/32");
+                changed = true;
+            }
+        }
+        if (changed) setDirty();
+    }
+
+    private static int fixedHost(String address) {
+        if (address == null) return -1;
+        String[] parts = address.split("\\.", -1);
+        if (parts.length != 4 || !parts[0].equals("10")) return -1;
+        int host = 0;
+        try {
+            for (int i = 1; i < 4; i++) {
+                int octet = Integer.parseInt(parts[i]);
+                if (octet < 0 || octet > 255 || !Integer.toString(octet).equals(parts[i])) return -1;
+                host = (host << 8) | octet;
+            }
+        } catch (NumberFormatException invalid) {
+            return -1;
+        }
+        return host > 0 && host < 0xFFFFFF ? host : -1;
+    }
+
     private boolean needsRecalculation = false;
     private int delayedRecalculationTimer = -1;
 
@@ -240,6 +292,11 @@ public class TelecomNetworkGraph extends SavedData {
     }
 
     public void addNode(NetworkNode node) {
+        NetworkNode previous = nodes.get(node.getPosition());
+        if (previous != null && previous.getType() == node.getType() && node.getIpAddress() == null) {
+            node.setIpAddress(previous.getIpAddress());
+            node.setNetworkCidr(previous.getNetworkCidr());
+        }
         nodes.put(node.getPosition(), node);
         topologyRevision++;
         pathCache.clear();
@@ -300,40 +357,124 @@ public class TelecomNetworkGraph extends SavedData {
     private int totalBandwidthUp = 0;
     private int totalBandwidthDown = 0;
 
+    public static final int MAX_SPEEDTEST_SERVERS = 128;
+    private static final int MAX_SPEEDTEST_CATALOGUE_NODES = 8192;
+    private static final int MAX_SPEEDTEST_CATALOGUE_EDGES = 16384;
+
+    public static class SpeedtestCatalogueLimitException extends RuntimeException {
+        public SpeedtestCatalogueLimitException() {
+            super("Speedtest catalogue graph limit exceeded");
+        }
+    }
+
+    public record SpeedtestStartResult(TrafficSession session, String error) {
+        public boolean accepted() { return session != null; }
+    }
+
+    public List<SpeedtestServerOption> getSpeedtestServers(BlockPos sourcePos, int extraPing) {
+        if (nodes.size() > MAX_SPEEDTEST_CATALOGUE_NODES || edges.size() > MAX_SPEEDTEST_CATALOGUE_EDGES) {
+            throw new SpeedtestCatalogueLimitException();
+        }
+        if (sourcePos == null || !nodes.containsKey(sourcePos) || extraPing < 0 || extraPing > 60_000) return List.of();
+        // Preserve edge insertion order, matching findShortestPath's first-discovered BFS paths.
+        Map<BlockPos, List<NetworkEdge>> adjacency = new HashMap<>();
+        for (NetworkEdge edge : edges) {
+            BlockPos a = edge.getNodeA();
+            BlockPos b = edge.getNodeB();
+            adjacency.computeIfAbsent(a, key -> new ArrayList<>()).add(edge);
+            if (!a.equals(b)) adjacency.computeIfAbsent(b, key -> new ArrayList<>()).add(edge);
+        }
+        Map<BlockPos, PathMetrics> visited = new HashMap<>();
+        java.util.ArrayDeque<BlockPos> queue = new java.util.ArrayDeque<>();
+        visited.put(sourcePos, new PathMetrics(0, Integer.MAX_VALUE, 0));
+        queue.add(sourcePos);
+        while (!queue.isEmpty()) {
+            BlockPos current = queue.removeFirst();
+            PathMetrics metrics = visited.get(current);
+            for (NetworkEdge edge : adjacency.getOrDefault(current, List.of())) {
+                BlockPos neighbor = edge.getNodeA().equals(current) ? edge.getNodeB() : edge.getNodeA();
+                if (visited.containsKey(neighbor)) continue;
+                visited.put(neighbor, metrics.append(edge));
+                queue.addLast(neighbor);
+            }
+        }
+        List<SpeedtestServerOption> servers = new ArrayList<>();
+        for (NetworkNode node : nodes.values()) {
+            if (node.getType() != NetworkNode.NodeType.SERVER) continue;
+            BlockPos pos = node.getPosition();
+            PathMetrics metrics = visited.get(pos);
+            PathStats stats = metrics == null ? null : metrics.stats();
+            servers.add(new SpeedtestServerOption(Long.toString(pos.asLong()),
+                    "Server (" + pos.getX() + "," + pos.getY() + "," + pos.getZ() + ")",
+                    stats == null ? -1 : stats.pingMs() + extraPing, stats != null,
+                    stats == null ? 0 : stats.bandwidthMbps(), stats == null ? "server_unavailable" : ""));
+        }
+        servers.sort(java.util.Comparator.comparing((SpeedtestServerOption server) -> !server.available())
+                .thenComparingInt(SpeedtestServerOption::estimatedPingMs)
+                .thenComparingLong(server -> Long.parseLong(server.id())));
+        return List.copyOf(servers.subList(0, Math.min(servers.size(), MAX_SPEEDTEST_SERVERS)));
+    }
+
     public void startSpeedtest(BlockPos sourcePos, String clientIp, int targetDownBw, int targetUpBw, int extraPing, int frequenciesMask, int durationTicks, boolean isPassive, @org.jetbrains.annotations.Nullable net.minecraft.server.level.ServerPlayer player) {
+        SpeedtestStartResult result = startSpeedtest(sourcePos, clientIp, targetDownBw, targetUpBw, extraPing, frequenciesMask, durationTicks, isPassive, player, "");
+        if (result.accepted()) return;
         NetworkNode source = nodes.get(sourcePos);
         String deviceId = source != null && source.getType() == NetworkNode.NodeType.ROUTER
                 ? TrafficSession.routerDeviceId(sourcePos)
                 : player != null ? TrafficSession.mobileDeviceId(player.getUUID()) : "mobile-ip:" + clientIp;
-        if (!nodes.containsKey(sourcePos) || clientIp == null || clientIp.isBlank() || clientIp.length() > 45
+        String message = switch (result.error()) {
+            case "device_busy" -> "A speedtest is already running on this device.";
+            case "session_limit" -> "Speedtest rejected: session limit reached.";
+            case "no_server", "server_unavailable" -> "Failed to start Speedtest: No complete path to a Server was found.";
+            default -> "Speedtest rejected: invalid request.";
+        };
+        rejectSpeedtest(player, isPassive, clientIp, deviceId, message, result.error());
+    }
+
+    public SpeedtestStartResult startSpeedtest(BlockPos sourcePos, String clientIp, int targetDownBw, int targetUpBw, int extraPing, int frequenciesMask, int durationTicks, boolean isPassive, @org.jetbrains.annotations.Nullable net.minecraft.server.level.ServerPlayer player, String serverId) {
+        NetworkNode source = nodes.get(sourcePos);
+        String deviceId = source != null && source.getType() == NetworkNode.NodeType.ROUTER
+                ? TrafficSession.routerDeviceId(sourcePos)
+                : player != null ? TrafficSession.mobileDeviceId(player.getUUID()) : "mobile-ip:" + clientIp;
+        if (sourcePos == null || source == null || clientIp == null || clientIp.isBlank() || clientIp.length() > 45
+                || serverId == null || serverId.length() > 24
                 || targetDownBw < 1 || targetDownBw > 1_000_000 || targetUpBw < 1 || targetUpBw > 1_000_000
                 || extraPing < 0 || extraPing > 60_000 || durationTicks < 1 || durationTicks > 12_000
                 || (frequenciesMask & ~((1 << TelecomFrequency.values().length) - 1)) != 0) {
-            rejectSpeedtest(player, isPassive, clientIp, deviceId, "Speedtest rejected: invalid request.");
-            return;
+            return new SpeedtestStartResult(null, "invalid_request");
         }
         TrafficSession existing = getSessionByDeviceId(deviceId);
         if (existing != null && (isPassive || !existing.isPassive())) {
-            rejectSpeedtest(player, isPassive, clientIp, deviceId, "A speedtest is already running on this device.");
-            return;
+            return new SpeedtestStartResult(null, "device_busy");
         }
         if (existing == null && activeSessions.size() >= 256) {
-            rejectSpeedtest(player, isPassive, clientIp, deviceId, "Speedtest rejected: session limit reached.");
-            return;
+            return new SpeedtestStartResult(null, "session_limit");
         }
         
-        // Find the best server to connect to
+        // Resolve the destination before replacing any passive traffic on this device.
         NetworkNode bestServer = null;
         PathStats bestStats = null;
         
-        for (NetworkNode node : nodes.values()) {
-            if (node.getType() == NetworkNode.NodeType.SERVER) {
+        if (!serverId.isEmpty()) {
+            try {
+                long packedPos = Long.parseLong(serverId);
+                if (!Long.toString(packedPos).equals(serverId)) return new SpeedtestStartResult(null, "server_unavailable");
+                bestServer = nodes.get(BlockPos.of(packedPos));
+            } catch (NumberFormatException exception) {
+                return new SpeedtestStartResult(null, "server_unavailable");
+            }
+            if (bestServer == null || bestServer.getType() != NetworkNode.NodeType.SERVER) {
+                return new SpeedtestStartResult(null, "server_unavailable");
+            }
+            bestStats = calculatePathStats(sourcePos, bestServer.getPosition());
+        } else {
+            for (NetworkNode node : nodes.values()) {
+                if (node.getType() != NetworkNode.NodeType.SERVER) continue;
                 PathStats stats = calculatePathStats(sourcePos, node.getPosition());
-                if (stats != null) {
-                    if (bestStats == null || stats.pingMs() < bestStats.pingMs()) {
-                        bestStats = stats;
-                        bestServer = node;
-                    }
+                if (stats != null && (bestStats == null || stats.pingMs() < bestStats.pingMs()
+                        || (stats.pingMs() == bestStats.pingMs() && node.getPosition().asLong() < bestServer.getPosition().asLong()))) {
+                    bestStats = stats;
+                    bestServer = node;
                 }
             }
         }
@@ -347,18 +488,19 @@ public class TelecomNetworkGraph extends SavedData {
             session.setAntennaPos(sourcePos); // Used by mobile sessions to map back to antenna
             session.setFrequenciesMask(frequenciesMask);
             activeSessions.add(session);
+            return new SpeedtestStartResult(session, "");
         } else {
-            rejectSpeedtest(player, isPassive, clientIp, deviceId, "Failed to start Speedtest: No complete path to a Server or NRO was found.");
+            return new SpeedtestStartResult(null, serverId.isEmpty() ? "no_server" : "server_unavailable");
         }
     }
 
-    private void rejectSpeedtest(net.minecraft.server.level.ServerPlayer player, boolean passive, String ip, String deviceId, String message) {
+    private void rejectSpeedtest(net.minecraft.server.level.ServerPlayer player, boolean passive, String ip, String deviceId, String message, String errorCode) {
         if (player == null || passive) return;
         player.sendSystemMessage(net.minecraft.network.chat.Component.literal(message));
         net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(player, new SpeedtestUpdatePayload(
                 ip == null ? "" : ip.substring(0, Math.min(ip.length(), 45)), "REJECTED", 0, 0, 0, 0,
                 player.level().dimension().identifier().toString(), deviceId.substring(0, Math.min(deviceId.length(), 128)),
-                new java.util.UUID(0, 0), 0, 0));
+                new java.util.UUID(0, 0), 0, 0, "", "", errorCode));
     }
 
     private void sendSessionUpdate(ServerLevel level, TrafficSession session) {
@@ -366,7 +508,7 @@ public class TelecomNetworkGraph extends SavedData {
                 session.getClientIp(), session.getState().name(), session.getPingMs(),
                 session.isTerminal() ? 0 : session.getActualBandwidth(), session.getTicksElapsed(), session.getTotalTicksPerPhase(),
                 level.dimension().identifier().toString(), session.getDeviceId(), session.getSessionId(),
-                session.getFinalDownBw(), session.getFinalUpBw());
+                session.getFinalDownBw(), session.getFinalUpBw(), session.getServerId(), session.getServerName(), session.getFailureReason());
         if (!session.isPassive() && session.isTerminal()) {
             lastResults.remove(session.getDeviceId());
             lastResults.put(session.getDeviceId(), new CompletedSpeedtest(session, update));
@@ -491,14 +633,16 @@ public class TelecomNetworkGraph extends SavedData {
         for (TrafficSession session : activeSessions) {
             if (!session.isRouter() && session.getOwnerId() != null
                     && level.getServer().getPlayerList().getPlayer(session.getOwnerId()) == null) {
-                session.fail();
+                session.fail("device_unavailable");
                 sendSessionUpdate(level, session);
                 toRemove.add(session);
                 continue;
             }
-            PathStats stats = calculatePathStats(session.getSourcePos(), session.getDestPos());
+            NetworkNode server = nodes.get(session.getDestPos());
+            PathStats stats = server != null && server.getType() == NetworkNode.NodeType.SERVER && nodes.containsKey(session.getSourcePos())
+                    ? calculatePathStats(session.getSourcePos(), session.getDestPos()) : null;
             if (stats == null) {
-                session.fail();
+                session.fail("route_lost");
                 sendSessionUpdate(level, session);
                 toRemove.add(session);
                 continue;
@@ -829,12 +973,19 @@ public class TelecomNetworkGraph extends SavedData {
     public PathStats calculatePathStats(BlockPos sourcePos, BlockPos destPos) {
         List<NetworkEdge> path = findShortestPath(sourcePos, destPos);
         if (path == null) return null;
-        
-        float totalPing = 0;
-        int minBandwidth = Integer.MAX_VALUE;
-        int distanceCu = 0;
-        
+
+        PathMetrics metrics = new PathMetrics(0, Integer.MAX_VALUE, 0);
         for (NetworkEdge edge : path) {
+            metrics = metrics.append(edge);
+        }
+        return metrics.stats();
+    }
+
+    private record PathMetrics(float totalPing, int minBandwidth, int distanceCu) {
+        PathMetrics append(NetworkEdge edge) {
+            float totalPing = this.totalPing;
+            int minBandwidth = this.minBandwidth;
+            int distanceCu = this.distanceCu;
             int length = edge.getLength();
             if (edge.getType() == NetworkEdge.EdgeType.FIBER) {
                 totalPing += length * 0.05f;
@@ -852,13 +1003,11 @@ public class TelecomNetworkGraph extends SavedData {
                 int currentCuBw = Math.max(10, 1000 - (distanceCu * 2));
                 minBandwidth = Math.min(minBandwidth, currentCuBw);
             }
+            return new PathMetrics(totalPing, minBandwidth, distanceCu);
         }
-        
-        // Base latency
-        totalPing += 1.0f; 
-        
-        if (minBandwidth == Integer.MAX_VALUE) minBandwidth = 0;
-        
-        return new PathStats(Math.max(1, (int)totalPing), minBandwidth);
+
+        PathStats stats() {
+            return new PathStats(Math.max(1, (int)(totalPing + 1.0f)), minBandwidth == Integer.MAX_VALUE ? 0 : minBandwidth);
+        }
     }
 }

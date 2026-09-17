@@ -14,6 +14,9 @@ public class SmartphoneSpeedtestScreen extends Screen {
     private final ClientSpeedtestState.Key speedtestKey;
     private Button startButton;
     private boolean speedtestPending;
+    private String selectedServerId = "";
+    private String selectedServerName = "";
+    private String speedtestError = "";
     private boolean speedtestActive = false;
     private com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload currentSpeedtestData = null;
     
@@ -34,6 +37,8 @@ public class SmartphoneSpeedtestScreen extends Screen {
     
     public void updateSpeedtestProgress(com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload payload) {
         if (speedtestKey == null || !speedtestKey.matches(payload)) return;
+        if (!payload.errorCode().isEmpty()) speedtestError = payload.errorCode();
+        else if (currentSpeedtestData == null || !currentSpeedtestData.sessionId().equals(payload.sessionId())) speedtestError = "";
         restoreSpeedtest();
     }
 
@@ -42,6 +47,7 @@ public class SmartphoneSpeedtestScreen extends Screen {
         speedtestActive = state.active();
         speedtestPending = state.pending();
         currentSpeedtestData = state.pending() ? null : state.payload();
+        if (currentSpeedtestData != null && !currentSpeedtestData.errorCode().isEmpty()) speedtestError = currentSpeedtestData.errorCode();
         lastDownBw = currentSpeedtestData == null ? 0 : currentSpeedtestData.downloadBandwidth();
         lastUpBw = currentSpeedtestData == null ? 0 : currentSpeedtestData.uploadBandwidth();
         if (startButton != null) {
@@ -64,7 +70,7 @@ public class SmartphoneSpeedtestScreen extends Screen {
     @Override
     protected void init() {
         super.init();
-        int screenW = 160;
+        int screenW = 220;
         int screenH = 260;
         int startX = (this.width - screenW) / 2;
         int startY = (this.height - screenH) / 2;
@@ -79,35 +85,31 @@ public class SmartphoneSpeedtestScreen extends Screen {
             if (speedtestKey == null || this.speedtestActive) return;
             com.florentdubut.telecom.network.packet.NetworkScanResponsePayload scan = SmartphoneHUD.latestScan;
             if (scan != null && scan.found()) {
-                int extraPing = 0;
-                String tech = scan.tech();
-                if (tech.contains("5G")) {
-                    extraPing = 10 + (int)(Math.random() * 10);
-                } else if (tech.contains("4G")) {
-                    extraPing = 30 + (int)(Math.random() * 20);
-                } else if (tech.contains("3G")) {
-                    extraPing = 70 + (int)(Math.random() * 50);
-                } else if (tech.contains("2G")) {
-                    extraPing = 200 + (int)(Math.random() * 200);
-                }
-
                 if (!ClientSpeedtestState.markPending(speedtestKey)) return;
+                speedtestError = "";
                 ClientPacketDistributor.sendToServer(new com.florentdubut.telecom.network.packet.StartSpeedtestPayload(
                     scan.antennaPos(), 
                     scan.ipAddress(), 
                     scan.maxDown(),
                     scan.maxUp(),
-                    extraPing,
+                    0,
                     scan.frequenciesMask(),
-                    DURATION_TICKS[durationIndex]
+                    DURATION_TICKS[durationIndex], selectedServerId, speedtestKey.dimension()
                 ));
                 restoreSpeedtest();
             } else {
+                speedtestError = "no_server";
                 if (minecraft.player != null) {
                     minecraft.player.displayClientMessage(Component.literal("No Network Signal!"), false);
                 }
             }
         }).bounds(startX + 30, startY + 220, 100, 20).build());
+        this.addRenderableWidget(Button.builder(Component.translatable("gui.telecom.speedtest.servers"), button ->
+                minecraft.setScreen(new SpeedtestServerSelectionScreen(this, true, net.minecraft.core.BlockPos.ZERO,
+                        speedtestKey, selectedServerId, option -> {
+                    selectedServerId = option.id();
+                    selectedServerName = option.name();
+                }))).bounds(startX + 10, startY + 177, 200, 16).build());
         restoreSpeedtest();
         
         this.addRenderableWidget(Button.builder(Component.literal("< Back"), b -> {
@@ -119,7 +121,7 @@ public class SmartphoneSpeedtestScreen extends Screen {
     public void renderBackground(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
         super.renderBackground(guiGraphics, mouseX, mouseY, partialTick);
 
-        int screenW = 160;
+        int screenW = 220;
         int screenH = 260;
         int startX = (this.width - screenW) / 2;
         int startY = (this.height - screenH) / 2;
@@ -139,6 +141,15 @@ public class SmartphoneSpeedtestScreen extends Screen {
         }
 
         guiGraphics.drawCenteredString(this.font, "SPEEDTEST", startX + screenW / 2, startY + 45, 0xFFFFFFFF);
+        guiGraphics.drawString(font, font.plainSubstrByWidth(Component.translatable("gui.telecom.speedtest.selected",
+                SpeedtestServerSelectionScreen.destination(selectedServerId, selectedServerName)).getString(), 200), startX + 10, startY + 144, 0xFFCCCCCC);
+        if (currentSpeedtestData != null && !"REJECTED".equals(currentSpeedtestData.state()) && !currentSpeedtestData.serverId().isEmpty()) {
+            guiGraphics.drawString(font, font.plainSubstrByWidth(Component.translatable("gui.telecom.speedtest.used",
+                    SpeedtestServerSelectionScreen.destination(currentSpeedtestData.serverId(), currentSpeedtestData.serverName())).getString(), 200),
+                    startX + 10, startY + 155, 0xFF99DD99);
+        }
+        if (!speedtestError.isEmpty()) guiGraphics.drawString(font, font.plainSubstrByWidth(
+                SpeedtestServerSelectionScreen.error(speedtestError).getString(), 200), startX + 10, startY + 166, 0xFFFF8888);
         
         if (speedtestPending) {
             guiGraphics.drawCenteredString(this.font, "Waiting...", startX + screenW / 2, startY + 70, 0xFFAAAAAA);
@@ -158,4 +169,7 @@ public class SmartphoneSpeedtestScreen extends Screen {
     public void render(GuiGraphics guiGraphics, int mouseX, int mouseY, float partialTick) {
         super.render(guiGraphics, mouseX, mouseY, partialTick);
     }
+
+    @Override
+    public void onClose() { Minecraft.getInstance().setScreen(parentScreen); }
 }

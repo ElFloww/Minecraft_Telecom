@@ -372,6 +372,8 @@ async function dashboard({ fetcher, bitmap, offscreen, manualTimers = false } = 
                             this.html = value;
                             elements.delete('btn-speedtest');
                             elements.delete('speedtest-duration');
+                            elements.delete('speedtest-server');
+                            elements.delete('speedtest-refresh');
                         },
                     });
                 }
@@ -787,11 +789,12 @@ const routers = () => ['-9223372036854775808', '9223372036854775807'].map((id, x
     capacityDown: 100, capacityUp: 50, usageDown: 0, usageUp: 0,
 }));
 const speedtest = (deviceId, sessionId, active = true) => ({
-    deviceId, sessionId, active, state: active ? 'DOWNLOAD' : 'FINISHED', pingMs: 12,
+    deviceId: `router:${deviceId}`, sessionId, active, state: active ? 'DOWNLOAD' : 'FINISHED', pingMs: 12,
+    serverId: '0', serverName: 'Destination', errorCode: '',
     actualBandwidth: 80, ticksElapsed: 150, totalTicksPerPhase: 300, downloadBandwidth: 75, uploadBandwidth: 25,
 });
 const started = (deviceId, sessionId) => ({ ok: true, status: 200,
-    json: async () => ({ status: 'started', deviceId, sessionId }) });
+    json: async () => ({ status: 'started', deviceId: `router:${deviceId}`, sessionId, serverId: '0', serverName: 'Destination' }) });
 function selectRouter(run, index) {
     run(`selectedNode = networkData.nodes[${index}]; showNodeDetails(selectedNode)`);
 }
@@ -839,7 +842,7 @@ test('same-IP routers start independently, duplicates stay blocked through refre
     assert.equal(elements.get('speedtest-duration').value, '1200');
     const posts = requests.filter(r => r.path === '/api/speedtest');
     assert.deepEqual(posts.map(r => JSON.parse(r.options.body)), [
-        { pos: nodes[0].id, duration: 1200 }, { pos: nodes[1].id, duration: 300 },
+        { pos: nodes[0].id, duration: 1200, serverId: '' }, { pos: nodes[1].id, duration: 300, serverId: '' },
     ]);
     assert.ok(posts[1].at - posts[0].at >= 200);
 });
@@ -868,7 +871,8 @@ test('node snapshot is authoritative for active status, progress and per-device 
 });
 
 test('failure unlocks only its device and malformed or misrouted acknowledgements are rejected', async () => {
-    for (const response of [{ ok: false, status: 500 }, started('wrong-device', 'session-a'),
+    for (const response of [{ ok: false, status: 500, json: async () => ({}) }, started('wrong-device', 'session-a'),
+        { ok: true, status: 200, json: async () => ({ status: 'started', deviceId: routers()[0].id, sessionId: 'raw-id' }) },
         { ok: true, status: 200, json: async () => ({ status: 'started', deviceId: routers()[0].id }) }]) {
         const nodes = routers();
         const releases = [];
@@ -917,7 +921,7 @@ test('world changes and read resets invalidate late JSON callbacks; only world c
         assert.equal(elements.get('details-panel').style.display, reset === 'world' ? 'none' : 'flex');
         selectRouter(run, 0);
         const button = elements.get('btn-speedtest');
-        release({ status: 'started', deviceId: nodes[0].id, sessionId: 'stale' });
+        release({ status: 'started', deviceId: `router:${nodes[0].id}`, sessionId: 'stale' });
         await old;
         assert.equal(elements.get('btn-speedtest'), button);
         assert.equal(run('speedtestPending.size'), 0);
@@ -961,7 +965,7 @@ test('network refresh during POST body decoding keeps the device lock and its du
     nodes[0].speedtest = speedtest(nodes[0].id, 'session-a', false);
     await run('fetchNetworkData()');
     assert.equal(elements.get('btn-speedtest').disabled, true);
-    release({ status: 'started', deviceId: nodes[0].id, sessionId: 'session-a' });
+    release({ status: 'started', deviceId: `router:${nodes[0].id}`, sessionId: 'session-a' });
     await start;
     assert.equal(run('speedtestPending.size'), 0);
     assert.equal(elements.get('btn-speedtest').disabled, false);
@@ -984,6 +988,149 @@ test('queued starts are cancelled before transport on world changes or read rese
         assert.equal(requests.filter(r => r.path === '/api/speedtest').length, 0);
         assert.equal(run('speedtestPending.size'), 0);
     }
+});
+
+test('server choices preserve long strings, unavailable selections and router isolation without auto fallback', async () => {
+    const nodes = routers();
+    let servers = [{ id: '0', name: '<img src=x onerror=bad()>', estimatedPingMs: 2, available: true, bandwidthMbps: 1000, reason: '' },
+        { id: '-9223372036854775808', name: 'Distant', estimatedPingMs: 20, available: true, bandwidthMbps: 1000, reason: '' },
+        { id: '-1', name: 'Isolated', estimatedPingMs: -1, available: false, bandwidthMbps: 0, reason: 'server_unavailable' }];
+    const { run, elements, requests, advance } = await dashboard({ fetcher: async path => {
+        if (path === '/api/network') return { status: 200, json: async () => ({ nodes, edges: [] }) };
+        if (path.startsWith('/api/speedtest/servers?')) return { status: 200, json: async () => ({
+            pos: new URL(path, 'http://localhost').searchParams.get('pos'), servers, truncated: true }) };
+        return { status: 409, ok: false, json: async () => ({ errorCode: 'server_unavailable', error: '<bad>' }) };
+    } });
+    selectRouter(run, 0);
+    await run('fetchSpeedtestServers()');
+    assert.match(elements.get('details-content').innerHTML, /&lt;img/);
+    assert.doesNotMatch(elements.get('details-content').innerHTML, /<img/);
+    assert.match(elements.get('details-content').innerHTML, /128 serveurs|2 ms estimés/);
+    for (let i = 0; i < 100; i++) { selectRouter(run, 0); await run('fetchSpeedtestServers()'); }
+    assert.equal(requests.length, 1, 'renders and polling within cooldown do not fetch again');
+    for (const id of ['0', '-9223372036854775808']) {
+        elements.get('speedtest-server').value = id;
+        elements.get('speedtest-server').listeners.change();
+        await elements.get('btn-speedtest').listeners.click();
+        assert.equal(JSON.parse(requests.at(-1).options.body).serverId, id);
+        assert.match(elements.get('details-content').innerHTML, /Aucun repli automatique/);
+        assert.equal(elements.get('btn-speedtest').disabled, false);
+    }
+    servers = servers.map(server => ({ ...server, available: false, estimatedPingMs: -1, reason: 'server_unavailable' }));
+    advance(15000);
+    await run('fetchSpeedtestServers()');
+    assert.equal(elements.get('speedtest-server').value, '-9223372036854775808');
+    assert.match(elements.get('details-content').innerHTML, /value="-9223372036854775808" disabled/);
+    servers = [];
+    advance(15000);
+    await run('fetchSpeedtestServers()');
+    assert.equal(elements.get('speedtest-server').value, '-9223372036854775808');
+    assert.match(elements.get('details-content').innerHTML, /absent du catalogue, aucun repli auto/);
+    selectRouter(run, 1);
+    assert.equal(elements.get('speedtest-server').value, '');
+    selectRouter(run, 0);
+    assert.equal(elements.get('speedtest-server').value, '-9223372036854775808');
+    await elements.get('btn-speedtest').listeners.click();
+    assert.equal(JSON.parse(requests.at(-1).options.body).serverId, '-9223372036854775808');
+    nodes[0].speedtest = { ...speedtest(nodes[0].id, 'failed', false), state: 'FAILED', serverId: '-1',
+        serverName: '<script>bad</script>', errorCode: 'route_lost' };
+    await run('fetchNetworkData()');
+    assert.match(elements.get('details-content').innerHTML, /Destination utilisée.*&lt;script&gt;bad&lt;\/script&gt;.*\[-1\]/s);
+    assert.match(elements.get('details-content').innerHTML, /Aucun repli automatique/);
+    assert.match(elements.get('details-content').innerHTML, /Connexion au serveur perdue/);
+});
+
+test('catalogue reads respect pending and shared cooldowns, and expose retryable failures', async () => {
+    const nodes = routers();
+    let status = 202;
+    const { run, requests, elements, advance } = await dashboard({ fetcher: async path => {
+        if (path === '/api/network') return { status: 200, json: async () => ({ nodes, edges: [] }) };
+        if (status === 0) throw new Error('Network failed');
+        return { status, headers: { get: () => '2' }, json: async () => ({ pos: nodes[0].id, servers: [], truncated: false }) };
+    } });
+    selectRouter(run, 0);
+    await run('fetchSpeedtestServers()');
+    assert.match(elements.get('details-content').innerHTML, /attente du tick/);
+    await elements.get('speedtest-refresh').listeners.click();
+    assert.equal(requests.length, 1, 'manual refresh cannot bypass route Retry-After');
+    advance(2000);
+    status = 0;
+    await run('fetchSpeedtestServers()');
+    assert.match(elements.get('details-content').innerHTML, /Network failed/);
+    await run('fetchSpeedtestServers()');
+    assert.equal(requests.length, 2);
+    status = 200;
+    await elements.get('speedtest-refresh').listeners.click();
+    assert.equal(requests.length, 3);
+    assert.match(elements.get('details-content').innerHTML, /Aucun serveur dans le catalogue/);
+});
+
+test('late catalogue JSON cannot publish after world, read reset, router change or removal', async () => {
+    for (const reset of ['world', 'reads', 'router', 'removed', 'closed', 'type']) {
+        const nodes = routers();
+        let mapId = 'world-a', release;
+        const { run, elements } = await dashboard({ fetcher: async path => {
+            if (path === '/api/network') return { status: 200, json: async () => ({ mapId, nodes, edges: [] }) };
+            if (!path.startsWith('/api/speedtest/servers?')) return { status: 200, json: async () => [] };
+            return { status: 200, json: () => new Promise(resolve => { release = resolve; }) };
+        } });
+        selectRouter(run, 0);
+        const old = run('fetchSpeedtestServers()');
+        await run('requestQueue');
+        if (reset === 'world') { mapId = 'world-b'; await run('fetchNetworkData()'); }
+        if (reset === 'reads') { run('resetDashboardSession()'); await run('requestQueue'); }
+        if (reset === 'router') { selectRouter(run, 1); selectRouter(run, 0); }
+        if (reset === 'removed') { nodes.splice(0, 1); await run('fetchNetworkData()'); }
+        if (reset === 'closed') { elements.get('details-close').listeners.click(); selectRouter(run, 0); }
+        if (reset === 'type') { nodes[0].type = 'SERVER'; selectRouter(run, 0); nodes[0].type = 'ROUTER'; selectRouter(run, 0); }
+        release({ pos: routers()[0].id, servers: [{ id: '0', name: 'STALE', available: true, estimatedPingMs: 1, bandwidthMbps: 100 }] });
+        await old;
+        assert.equal(run('[...speedtestSettings.values()].some(s => s.servers.some(server => server.name === "STALE"))'), false, reset);
+        assert.doesNotMatch(elements.get('details-content').innerHTML, /STALE/, reset);
+    }
+});
+
+test('queued catalogue requests cancel before transport on selection and generation changes', async () => {
+    for (const reset of ['router', 'world', 'reads']) {
+        const nodes = routers();
+        const { run, requests, advance } = await dashboard({ manualTimers: true, fetcher: async () => ({ status: 200,
+            json: async () => ({ nodes, edges: [] }) }) });
+        selectRouter(run, 0);
+        await run('apiFetch("/api/budget")');
+        const pending = run('fetchSpeedtestServers()');
+        await flush();
+        if (reset === 'router') selectRouter(run, 1);
+        else run(reset === 'world' ? 'terrainGeneration++' : 'sessionGeneration++');
+        advance(200);
+        await pending;
+        assert.equal(requests.filter(r => r.path.startsWith('/api/speedtest/servers')).length, 0);
+    }
+});
+
+test('catalogue origin refusal is explicit and cannot be retried around the shared read pause', async () => {
+    const nodes = routers();
+    const { run, requests, elements, advance } = await dashboard({ fetcher: async path => path === '/api/network'
+        ? { status: 200, json: async () => ({ nodes, edges: [] }) }
+        : { status: 403, json: async () => { throw new SyntaxError('Not JSON'); } } });
+    selectRouter(run, 0);
+    await run('fetchSpeedtestServers()');
+    assert.match(elements.get('details-content').innerHTML, /HTTP 403.*Réessayer/);
+    assert.match(elements.get('connection-status').textContent, /Lectures suspendues/);
+    advance(5000);
+    await elements.get('speedtest-refresh').listeners.click();
+    await run('fetchSpeedtestServers()');
+    assert.equal(requests.length, 1);
+    assert.match(elements.get('details-content').innerHTML, /reprendre les lectures/);
+});
+
+test('catalogue computation limits explain the server refusal', async () => {
+    const nodes = routers();
+    const { run, elements } = await dashboard({ fetcher: async path => path === '/api/network'
+        ? { status: 200, json: async () => ({ nodes, edges: [] }) }
+        : { status: 503, json: async () => ({ errorCode: 'catalogue_limit' }) } });
+    selectRouter(run, 0);
+    await run('fetchSpeedtestServers()');
+    assert.match(elements.get('details-content').innerHTML, /Réseau trop volumineux/);
 });
 
 test('coverage is opt-in and sends no credentials', async () => {

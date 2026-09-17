@@ -5,6 +5,10 @@ import com.florentdubut.telecom.block.entity.AntennaBlockEntity;
 import com.florentdubut.telecom.block.entity.RouterBlockEntity;
 import com.florentdubut.telecom.network.packet.AntennaConfigPayload;
 import com.florentdubut.telecom.network.packet.NetworkScanResponsePayload;
+import com.florentdubut.telecom.network.packet.RequestCoverageTilePayload;
+import com.florentdubut.telecom.network.packet.CoverageTilePayload;
+import com.florentdubut.telecom.network.packet.RequestSpeedtestServersPayload;
+import com.florentdubut.telecom.network.packet.SpeedtestServersPayload;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -20,7 +24,7 @@ import net.neoforged.neoforge.network.PacketDistributor;
 public class ModNetworking {
 
     private enum RequestCategory {
-        ANTENNA_CONFIG, GUI_REFRESH, ANTENNA_REFRESH, TOOL_REFRESH, MAP, SPEEDTEST, NPERF, SCAN
+        ANTENNA_CONFIG, GUI_REFRESH, ANTENNA_REFRESH, TOOL_REFRESH, MAP, COVERAGE, SPEEDTEST, SPEEDTEST_SERVERS, NPERF, SCAN
     }
 
     // Server-thread only. Values never retain players; each player has a fixed-size table.
@@ -50,7 +54,17 @@ public class ModNetworking {
 
     @SubscribeEvent
     public static void register(final RegisterPayloadHandlersEvent event) {
-        final PayloadRegistrar registrar = event.registrar("1.1");
+        final PayloadRegistrar registrar = event.registrar("1.3");
+
+        registrar.playToServer(RequestSpeedtestServersPayload.TYPE, RequestSpeedtestServersPayload.STREAM_CODEC,
+                ModNetworking::handleRequestSpeedtestServers);
+        registrar.playToClient(SpeedtestServersPayload.TYPE, SpeedtestServersPayload.STREAM_CODEC,
+                ModNetworking::handleSpeedtestServers);
+
+        registrar.playToServer(RequestCoverageTilePayload.TYPE, RequestCoverageTilePayload.STREAM_CODEC,
+                ModNetworking::handleRequestCoverageTile);
+        registrar.playToClient(CoverageTilePayload.TYPE, CoverageTilePayload.STREAM_CODEC,
+                ModNetworking::handleCoverageTile);
 
         registrar.playToServer(
             com.florentdubut.telecom.network.packet.GuiRefreshRequestPayload.TYPE,
@@ -293,6 +307,8 @@ public class ModNetworking {
             net.minecraft.client.gui.screens.Screen current = net.minecraft.client.Minecraft.getInstance().screen;
             if (current instanceof com.florentdubut.telecom.client.gui.RouterScreen rs) {
                 rs.updatePayload(payload);
+            } else if (current instanceof com.florentdubut.telecom.client.gui.SpeedtestServerSelectionScreen selection) {
+                selection.updateRouter(payload);
             } else {
                 net.minecraft.client.Minecraft.getInstance().setScreen(new com.florentdubut.telecom.client.gui.RouterScreen(payload));
             }
@@ -314,7 +330,8 @@ public class ModNetworking {
         context.enqueueWork(() -> {
             if (context.player() instanceof ServerPlayer player
                     && acceptRequest(player, RequestCategory.GUI_REFRESH, 250)
-                    && isLoaded(player.level(), payload.pos())) {
+                    && isLoaded(player.level(), payload.pos())
+                    && player.isWithinBlockInteractionRange(payload.pos(), 0)) {
                 net.minecraft.world.level.block.state.BlockState state = player.level().getBlockState(payload.pos());
                 net.minecraft.world.phys.BlockHitResult hitResult = new net.minecraft.world.phys.BlockHitResult(
                     net.minecraft.world.phys.Vec3.atCenterOf(payload.pos()), 
@@ -479,49 +496,130 @@ public class ModNetworking {
         });
     }
 
+    private static void handleRequestSpeedtestServers(RequestSpeedtestServersPayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> {
+            if (!(context.player() instanceof ServerPlayer player)
+                    || !acceptRequest(player, RequestCategory.SPEEDTEST_SERVERS, 1000)) return;
+            ServerLevel level = player.level();
+            if (!level.dimension().identifier().toString().equals(payload.dimension())) return;
+            String deviceId = payload.mobile() ? TrafficSession.mobileDeviceId(player.getUUID())
+                    : TrafficSession.routerDeviceId(payload.sourcePos());
+            TelecomNetworkGraph graph = TelecomNetworkGraph.get(level);
+            BlockPos sourcePos = payload.sourcePos();
+            int extraPing = 0;
+            String error = "";
+            if (player.isSpectator()) {
+                error = "invalid_request";
+            } else if (payload.mobile()) {
+                if (!hasSmartphone(player)) {
+                    error = "invalid_request";
+                } else {
+                    NetworkScanResponsePayload scan = scanNetworkForPlayer(player);
+                    if (!scan.found()) error = "no_server";
+                    sourcePos = scan.antennaPos();
+                    extraPing = scan.tech().startsWith("5G") ? 15 : scan.tech().startsWith("4G") ? 40
+                            : scan.tech().startsWith("3G") ? 95 : 300;
+                }
+            } else if (!isLoaded(level, sourcePos) || !player.isWithinBlockInteractionRange(sourcePos, 0)
+                    || !(level.getBlockEntity(sourcePos) instanceof RouterBlockEntity)
+                    || graph.getNode(sourcePos) == null || graph.getNode(sourcePos).getType() != NetworkNode.NodeType.ROUTER) {
+                error = "invalid_request";
+            }
+            java.util.List<SpeedtestServerOption> servers = java.util.List.of();
+            if (error.isEmpty()) {
+                try {
+                    servers = graph.getSpeedtestServers(sourcePos, extraPing);
+                } catch (TelecomNetworkGraph.SpeedtestCatalogueLimitException exception) {
+                    error = "catalogue_limit";
+                }
+            }
+            boolean truncated = error.isEmpty() && graph.getNodes().stream()
+                    .filter(node -> node.getType() == NetworkNode.NodeType.SERVER)
+                    .limit(TelecomNetworkGraph.MAX_SPEEDTEST_SERVERS + 1L).count() > TelecomNetworkGraph.MAX_SPEEDTEST_SERVERS;
+            context.reply(new SpeedtestServersPayload(payload.requestId(), payload.dimension(), deviceId, servers, truncated, error));
+        });
+    }
+
+    private static void handleSpeedtestServers(SpeedtestServersPayload payload, IPayloadContext context) {
+        net.minecraft.network.Connection connection = context.connection();
+        context.enqueueWork(() -> {
+            var minecraft = net.minecraft.client.Minecraft.getInstance();
+            if (minecraft.getConnection() == null || minecraft.getConnection().getConnection() != connection
+                    || minecraft.level == null || !minecraft.level.dimension().identifier().toString().equals(payload.dimension())) return;
+            if (minecraft.screen instanceof com.florentdubut.telecom.client.gui.SpeedtestServerSelectionScreen screen) {
+                screen.receiveServers(connection, payload);
+            }
+        });
+    }
+
     private static void handleStartSpeedtest(final com.florentdubut.telecom.network.packet.StartSpeedtestPayload payload, final IPayloadContext context) {
         context.enqueueWork(() -> {
             if (!(context.player() instanceof ServerPlayer player)
-                    || !acceptRequest(player, RequestCategory.SPEEDTEST, 100)
-                    || player.isSpectator()) return;
-            if (payload.durationTicks() != 300 && payload.durationTicks() != 600 && payload.durationTicks() != 1200
-                    && payload.durationTicks() != 6000 && payload.durationTicks() != 12000) return;
-
+                    || !acceptRequest(player, RequestCategory.SPEEDTEST, 100)) return;
+            // Router requests have no radio bands. Mobile bands identify the context only;
+            // the actual antenna, address, bandwidth and bands are always rescanned server-side.
+            boolean mobile = payload.frequenciesMask() != 0;
+            String deviceId = mobile ? TrafficSession.mobileDeviceId(player.getUUID()) : TrafficSession.routerDeviceId(payload.sourcePos());
             ServerLevel level = player.level();
-            TelecomNetworkGraph graph = TelecomNetworkGraph.get(level);
-            NetworkNode source = graph.getNode(payload.sourcePos());
-            if (source != null && source.getType() == NetworkNode.NodeType.ROUTER) {
-                if (!isLoaded(level, payload.sourcePos()) || !player.isWithinBlockInteractionRange(payload.sourcePos(), 0)
-                        || source.getIpAddress() == null || source.getIpAddress().isBlank()
-                        || !(level.getBlockEntity(payload.sourcePos()) instanceof RouterBlockEntity router)) return;
-                int maxDown = router.getConfiguredMaxDown();
-                int maxUp = router.getConfiguredMaxUp();
-                if (maxDown <= 0 || maxUp <= 0) return;
-                graph.startSpeedtest(source.getPosition(), source.getIpAddress(), maxDown, maxUp, 0, 0,
-                    payload.durationTicks(), false, player);
-                String deviceId = TrafficSession.routerDeviceId(source.getPosition());
-                sendSpeedtestState(player, graph.getSessionByDeviceId(deviceId), deviceId, source.getIpAddress());
+            if (!level.dimension().identifier().toString().equals(payload.dimension())) {
+                // A delayed request belongs to its original dimension, never the new world's device at the same position.
+                context.reply(new com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload(
+                        "", "REJECTED", 0, 0, 0, 0, payload.dimension(), deviceId, new java.util.UUID(0, 0),
+                        0, 0, payload.serverId(), "", "invalid_request"));
+                return;
+            }
+            if (player.isSpectator() || (payload.frequenciesMask() & ~VALID_FREQUENCIES_MASK) != 0) {
+                sendSpeedtestState(player, null, deviceId, "", payload.serverId(), "invalid_request");
+                return;
+            }
+            if (payload.durationTicks() != 300 && payload.durationTicks() != 600 && payload.durationTicks() != 1200
+                    && payload.durationTicks() != 6000 && payload.durationTicks() != 12000) {
+                sendSpeedtestState(player, null, deviceId, "", payload.serverId(), "invalid_request");
                 return;
             }
 
-            if (!hasSmartphone(player)) return;
+            TelecomNetworkGraph graph = TelecomNetworkGraph.get(level);
+            NetworkNode source = graph.getNode(payload.sourcePos());
+            if (!mobile) {
+                if (source == null || source.getType() != NetworkNode.NodeType.ROUTER
+                        || !isLoaded(level, payload.sourcePos()) || !player.isWithinBlockInteractionRange(payload.sourcePos(), 0)
+                        || source.getIpAddress() == null || source.getIpAddress().isBlank()
+                        || !(level.getBlockEntity(payload.sourcePos()) instanceof RouterBlockEntity router)) {
+                    sendSpeedtestState(player, null, deviceId, "", payload.serverId(), "invalid_request");
+                    return;
+                }
+                int maxDown = router.getConfiguredMaxDown();
+                int maxUp = router.getConfiguredMaxUp();
+                var result = graph.startSpeedtest(source.getPosition(), source.getIpAddress(), maxDown, maxUp, 0, 0,
+                    payload.durationTicks(), false, player, payload.serverId());
+                sendSpeedtestState(player, result.session(), deviceId, source.getIpAddress(), payload.serverId(), result.error());
+                return;
+            }
+
+            if (!hasSmartphone(player)) {
+                sendSpeedtestState(player, null, deviceId, "", payload.serverId(), "invalid_request");
+                return;
+            }
             NetworkScanResponsePayload scan = scanNetworkForPlayer(player);
             if (!scan.found() || scan.maxDown() <= 0 || scan.maxUp() <= 0) {
-                sendSpeedtestState(player, null, TrafficSession.mobileDeviceId(player.getUUID()), "");
+                sendSpeedtestState(player, null, deviceId, "", payload.serverId(), payload.serverId().isEmpty() ? "no_server" : "server_unavailable");
                 return;
             }
             int extraPing = scan.tech().startsWith("5G") ? 10 + level.random.nextInt(10)
                 : scan.tech().startsWith("4G") ? 30 + level.random.nextInt(20)
                 : scan.tech().startsWith("3G") ? 70 + level.random.nextInt(50)
                 : 200 + level.random.nextInt(200);
-            graph.startSpeedtest(scan.antennaPos(), scan.ipAddress(), scan.maxDown(), scan.maxUp(), extraPing,
-                scan.frequenciesMask(), payload.durationTicks(), false, player);
-            String deviceId = TrafficSession.mobileDeviceId(player.getUUID());
-            sendSpeedtestState(player, graph.getSessionByDeviceId(deviceId), deviceId, scan.ipAddress());
+            var result = graph.startSpeedtest(scan.antennaPos(), scan.ipAddress(), scan.maxDown(), scan.maxUp(), extraPing,
+                scan.frequenciesMask(), payload.durationTicks(), false, player, payload.serverId());
+            sendSpeedtestState(player, result.session(), deviceId, scan.ipAddress(), payload.serverId(), result.error());
         });
     }
 
     private static void sendSpeedtestState(ServerPlayer player, TrafficSession session, String deviceId, String ip) {
+        sendSpeedtestState(player, session, deviceId, ip, "", "");
+    }
+
+    private static void sendSpeedtestState(ServerPlayer player, TrafficSession session, String deviceId, String ip, String requestedServer, String error) {
         boolean rejected = session == null || session.isPassive();
         PacketDistributor.sendToPlayer(player, new com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload(
                 ip == null ? "" : ip, rejected ? "REJECTED" : session.getState().name(),
@@ -529,7 +627,9 @@ public class ModNetworking {
                 rejected ? 0 : session.getTicksElapsed(), rejected ? 0 : session.getTotalTicksPerPhase(),
                 player.level().dimension().identifier().toString(), deviceId,
                 rejected ? new java.util.UUID(0, 0) : session.getSessionId(),
-                rejected ? 0 : session.getFinalDownBw(), rejected ? 0 : session.getFinalUpBw()));
+                rejected ? 0 : session.getFinalDownBw(), rejected ? 0 : session.getFinalUpBw(),
+                rejected ? requestedServer : session.getServerId(), rejected ? "" : session.getServerName(),
+                rejected ? error : session.getFailureReason()));
     }
 
     private static void handleSpeedtestUpdate(final com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload payload, final IPayloadContext context) {
@@ -541,6 +641,8 @@ public class ModNetworking {
                 routerScreen.updateSpeedtestProgress(payload);
             } else if (screen instanceof com.florentdubut.telecom.client.gui.SmartphoneSpeedtestScreen phoneScreen) {
                 phoneScreen.updateSpeedtestProgress(payload);
+            } else if (screen instanceof com.florentdubut.telecom.client.gui.SpeedtestServerSelectionScreen selection) {
+                selection.updateSpeedtestProgress(payload);
             }
         });
     }
@@ -550,6 +652,38 @@ public class ModNetworking {
             net.minecraft.client.gui.screens.Screen screen = net.minecraft.client.Minecraft.getInstance().screen;
             if (screen instanceof com.florentdubut.telecom.client.gui.ServerScreen serverScreen) {
                 serverScreen.updateBandwidth(payload.totalBandwidthDown(), payload.totalBandwidthUp());
+            }
+        });
+    }
+
+    private static void handleRequestCoverageTile(RequestCoverageTilePayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> {
+            if (!(context.player() instanceof ServerPlayer player)
+                    || !acceptRequest(player, RequestCategory.COVERAGE, 100)) return;
+            ServerLevel level = player.level();
+            if (!level.dimension().identifier().toString().equals(payload.dimension())) return;
+            try {
+                CoverageService.Request request = payload.request();
+                String snapshot = CoverageService.request(level, request,
+                        System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(2));
+                context.reply(CoverageTilePayload.fromSnapshot(payload, snapshot));
+            } catch (IllegalArgumentException exception) {
+                context.reply(CoverageTilePayload.unavailable(payload, "invalid"));
+            } catch (CoverageService.BusyException exception) {
+                context.reply(CoverageTilePayload.unavailable(payload, exception.retryable() ? "busy" : "limited"));
+            }
+        });
+    }
+
+    private static void handleCoverageTile(CoverageTilePayload payload, IPayloadContext context) {
+        net.minecraft.network.Connection connection = context.connection();
+        context.enqueueWork(() -> {
+            var minecraft = net.minecraft.client.Minecraft.getInstance();
+            if (minecraft.getConnection() == null || minecraft.getConnection().getConnection() != connection
+                    || minecraft.level == null
+                    || !minecraft.level.dimension().identifier().toString().equals(payload.dimension())) return;
+            if (minecraft.screen instanceof com.florentdubut.telecom.client.gui.NetworkMapScreen screen) {
+                screen.receiveCoverage(payload);
             }
         });
     }

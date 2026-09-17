@@ -1,6 +1,6 @@
 # Telecom Mod : construire et utiliser son reseau
 
-Mise a jour : 15 septembre 2026.
+Mise a jour : 17 septembre 2026.
 
 ## 1. Direction du projet
 
@@ -52,7 +52,7 @@ Minecraft fournit le terrain et les blocs ; le moteur radio du mod calcule leur 
 ### Affichage et comportement
 
 - [x] Ajouter un calque "Couverture calculee" sur la carte web.
-- [ ] Ajouter ce calque a la carte en jeu avec les memes donnees.
+- [x] Ajouter ce calque a la carte en jeu avec les memes donnees.
 - [x] Calculer la reception avec `SignalPropagator` partage entre smartphone et carte : distance, frequence, relief, blocs traverses, categories de materiaux et epaisseur des obstacles.
 - [x] Afficher les zones en signal fort, moyen, faible ou absent, avec legende ; proposer une antenne selectionnee ou l'ensemble du reseau, et des filtres par technologie/bande.
 - [x] Conserver des resultats independants 2G/3G/4G/5G et proposer les pas 1/8/16 blocs. Partager les parcours d'obstacles entre bandes et reutiliser les resultats au changement de technologie.
@@ -74,17 +74,21 @@ Minecraft fournit le terrain et les blocs ; le moteur radio du mod calcule leur 
 
 **Limites du lot actuel :** carte web de l'Overworld, pas souhaite 1/8/16 blocs avec apercu plus grossier au grand dezoom, portee maximale commune de 4 096 blocs, formes complexes simplifiees. Le pas effectif est affiche ; le mode bloc par bloc demande un zoom rapproche. Calcul fractionne (budget cooperatif de 2 ms/tick), 256 points maximum par tuile, parcours partages entre bandes et cache commun aux technologies. Les benchmarks a grande echelle restent a faire.
 
+**Lot carte en jeu :** calque radio disponible dans la dimension du joueur, filtres technologie/bande/antenne, hauteur surface/mobile/Y libre, legende, progression et survol signal/service. Au plus 16 tuiles visibles, une requete tous les quatre ticks et expiration des donnees non revalidees ; les tuiles encore visibles sont conservees pendant les deplacements. Paquets bornes, anciennes vues rejetees, limites de calcul distinguees d'un serveur temporairement occupe. Tests de cache, de codecs, de controles serveur et de concordance avec smartphone/web ajoutes. La recette visuelle et le multijoueur interactif restent a realiser.
+
 ## 5. Mise en place du reseau
 
 ### Reseau fixe
 
-- [ ] Stabiliser les IP fixes apres recalcul et redemarrage, sans collisions.
+- [x] Stabiliser les IP fixes apres recalcul et redemarrage, sans collisions.
 - [ ] Ajouter ports, brassage et fibres independantes dans un cable ; un croisement de cables ne doit pas tout connecter automatiquement.
 - [ ] Completer la chaine **NRO avec OLT -> PM -> PBO -> PTO -> ONT -> box**, avec des fonctions distinctes et une configuration simple.
 - [ ] Gerer GPON/XGS-PON, partage de capacite et pertes optiques, avec une explication claire quand une liaison ne fonctionne pas.
 - [ ] Ameliorer le cuivre : NRA/DSLAM, SR, ligne et modem ADSL/VDSL ; faire dependre le debit de la longueur et de la qualite de ligne.
 - [ ] Ajouter poteaux, fourreaux, boitiers et outils de pose assistee pour construire facilement en aerien, en sous-sol et dans les batiments.
 - [ ] Permettre des liaisons de collecte et de secours, par cable ou faisceau hertzien.
+
+**Lot IP fixes :** les champs IP/CIDR existants servent de baux persistants par dimension. Les adresses valides uniques du pool 10/8 sont reservees avant toute allocation ; les anciennes adresses nulles, invalides ou dupliquees sont reparees de facon deterministe au chargement. Les nouvelles adresses utilisent un CIDR /32, distinct du pool mobile 172.16/12. Recalculer, couper ou fusionner des chemins ne renumerote plus les equipements. Tests codec/disque, migration, collisions, retrait de serveur et GameTests de coupure/reparation ajoutes ; la recette de migration d'un ancien monde complet reste a faire.
 
 ### Liaisons hertziennes entre sites
 
@@ -115,8 +119,9 @@ Reseau filaire -> Site A [radio FH] ~~~ liaison sans fil ~~~ [radio FH] Site B -
 
 - [ ] Unifier les debits montants/descendants et le partage des liens : cables, ports, antennes et interfaces doivent annoncer les memes capacites que le moteur.
 - [ ] Refaire le speedtest sur telephone et routeur : interface plus lisible, courbes de debit, progression claire des phases et bilan final avec debits moyens, pics, ping, gigue et pertes mesures par le moteur.
-- [ ] Permettre de choisir le serveur de speedtest depuis le telephone, le routeur et le dashboard : liste des serveurs avec nom, identifiant, latence estimee et disponibilite, plus un mode automatique.
-- [ ] Tester reellement vers le serveur choisi : verifier le chemin cote serveur, afficher la destination utilisee, expliquer les limites du trajet et signaler une indisponibilite sans basculer silencieusement sur un autre serveur.
+- [x] Permettre de choisir le serveur de speedtest depuis le telephone, le routeur et le dashboard : liste des serveurs avec nom, identifiant, latence estimee et disponibilite, plus un mode automatique.
+- [x] Tester reellement vers le serveur choisi : verifier le chemin cote serveur, afficher la destination utilisee et signaler une indisponibilite sans basculer silencieusement sur un autre serveur.
+- [ ] Identifier et expliquer visuellement le maillon limitant du trajet, au-dela de sa capacite estimee et des erreurs de connexion.
 - [ ] Clarifier la duree totale du test, permettre son annulation et conserver un historique recent par appareil, sans perturber les tests simultanes sur les autres appareils.
 - [x] Autoriser plusieurs speedtests simultanes sur des appareils distincts, avec un test par appareil, un suivi independant et le partage des liens communs.
 - [ ] Implementer SMS, contacts et numeros entre joueurs, puis appels si une integration vocale adaptee est disponible.
@@ -124,6 +129,8 @@ Reseau filaire -> Site A [radio FH] ~~~ liaison sans fil ~~~ [radio FH] Site B -
 - [ ] Ajouter capteurs, affichages et commandes redstone a distance dont le fonctionnement depend du reseau.
 - [ ] Garder un outil simple pour voir le trajet d'une connexion et comprendre une coupure, un mauvais brassage ou une saturation, sans systeme de tickets.
 - [ ] Ameliorer la carte : recherche d'equipements, noms, liens physiques, debits et filtres lisibles.
+
+**Lot choix du serveur :** catalogue borne a 128 entrees, parcours unique et limites de 8192 noeuds / 16384 liens. La selection reste explicite en cas d'indisponibilite, la destination est reprise dans le suivi et les resultats, et les erreurs de perte de trajet sont traduites. Protocole Minecraft 1.3 avec validation de la dimension au demarrage ; API web avec serverId optionnel. Tests moteur, codecs, handlers, interfaces et HTTP ajoutes. Les noms du catalogue sont generes a partir des coordonnees ; le renommage et la recette visuelle multijoueur restent a realiser.
 
 ## 7. Qualite et optimisation a maintenir
 
@@ -135,4 +142,4 @@ Reseau filaire -> Site A [radio FH] ~~~ liaison sans fil ~~~ [radio FH] Site B -
 - [ ] Conserver les controles d'acces et validations serveur, avec une protection simple contre la modification du reseau d'un autre joueur.
 - [ ] Completer traductions, recettes et butin ; fournir des interfaces et un guide faciles a utiliser, sans imposer les reglages experts.
 
-**Une fonctionnalite est terminee lorsqu'elle fonctionne en jeu, utilise les memes regles que les outils de mesure, conserve ses donnees et reste fluide dans les scenarios testes.** La couverture web est maintenant disponible ; les autres cases ouvertes restent le travail a venir.
+**Une fonctionnalite est terminee lorsqu'elle fonctionne en jeu, utilise les memes regles que les outils de mesure, conserve ses donnees et reste fluide dans les scenarios testes.** Les cases cochees decrivent les implementations validees automatiquement ; les limites de recette visuelle, de migration de mondes complets et de charge restent explicitement suivies ci-dessus.

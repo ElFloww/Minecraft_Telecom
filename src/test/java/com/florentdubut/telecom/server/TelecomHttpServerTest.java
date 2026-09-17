@@ -265,7 +265,7 @@ class TelecomHttpServerTest {
         MinecraftServer minecraft = mock(MinecraftServer.class);
         var jobs = queueWorldServer(minecraft);
         for (String path : new String[]{"/api/network", "/api/player", "/api/nperf_map",
-                "/api/tile?cx=0&cz=0", "/api/coverage?tx=0&tz=0", "/api/coverage/options", "/api/map-image", "/api/zone-jobs"}) {
+                "/api/tile?cx=0&cz=0", "/api/coverage?tx=0&tz=0", "/api/coverage/options", "/api/map-image", "/api/zone-jobs", "/api/speedtest/servers?pos=0"}) {
             assertEquals(400, request("GET", path, "{}").statusCode(), path);
             assertEquals(413, request("GET", path, "x".repeat(4097)).statusCode(), path);
             var chunked = HttpRequest.newBuilder(URI.create(base + path)).timeout(Duration.ofSeconds(3))
@@ -489,7 +489,7 @@ class TelecomHttpServerTest {
         server.start(null);
         assertTrue(((HttpServer) field("server")).getAddress().getAddress().isAnyLocalAddress());
         for (String route : new String[]{"network", "player", "nperf_map", "tile?cx=0&cz=0", "map-image",
-                "coverage?tx=0&tz=0", "coverage/options", "zone-jobs"}) {
+                "coverage?tx=0&tz=0", "coverage/options", "zone-jobs", "speedtest/servers?pos=0"}) {
             assertEquals(503, request("GET", "/api/" + route, null).statusCode(), route);
             assertEquals(503, request("GET", "/api/" + route, null, "Origin", origin).statusCode(), route);
             assertEquals(403, request("GET", "/api/" + route, null, "Origin", "https://evil.example").statusCode(), route);
@@ -856,6 +856,224 @@ class TelecomHttpServerTest {
     }
 
     @Test
+    void speedtestDestinationFormatsAndCatalogueRoutesAreValidatedBeforeScheduling() throws Exception {
+        MinecraftServer minecraft = mock(MinecraftServer.class);
+        var jobs = queueWorldServer(minecraft);
+        for (String selection : new String[]{"0", "-1", "1.5", "true", "null", "[]", "{}",
+                "\"+1\"", "\"01\"", "\"-0\"", "\" 1\"", "\"1e2\"", "\"9223372036854775808\"", "\"-9223372036854775809\""}) {
+            var response = request("POST", "/api/speedtest", "{\"pos\":\"0\",\"duration\":300,\"serverId\":" + selection + "}",
+                    "Content-Type", "application/json");
+            assertEquals(400, response.statusCode(), selection);
+            assertEquals("invalid_request", JsonParser.parseString(response.body()).getAsJsonObject().get("errorCode").getAsString());
+        }
+        assertEquals(400, request("POST", "/api/speedtest", "{\"pos\":0,\"duration\":300}", "Content-Type", "application/json").statusCode());
+        for (String query : new String[]{"", "?pos=", "?pos=x", "?pos=1&pos=2", "?pos=0&unknown=1", "?pos=9223372036854775808", "?pos=%2B1"}) {
+            assertEquals(400, request("GET", "/api/speedtest/servers" + query, null).statusCode(), query);
+        }
+        assertEquals(405, request("POST", "/api/speedtest/servers?pos=0", "{}", "Content-Type", "application/json").statusCode());
+        assertEquals(204, request("OPTIONS", "/api/speedtest/servers?pos=0", null, "Origin", base,
+                "Access-Control-Request-Method", "GET").statusCode());
+        assertEquals(403, request("OPTIONS", "/api/speedtest/servers?pos=0", null, "Origin", base,
+                "Access-Control-Request-Method", "POST").statusCode());
+        verify(minecraft, never()).execute(any(Runnable.class));
+        assertTrue(jobs.isEmpty());
+        server.stop();
+        server.start(null);
+        for (String selection : new String[]{"", "0", "-1", "-9223372036854775808", "9223372036854775807"}) {
+            assertEquals(503, request("POST", "/api/speedtest", "{\"pos\":\"0\",\"duration\":300,\"serverId\":\"" + selection + "\"}",
+                    "Content-Type", "application/json").statusCode(), selection);
+        }
+    }
+
+    @Test
+    void speedtestCatalogueIsDetachedBoundedAndKeyedByRouterIncludingUnavailableServers() throws Exception {
+        MinecraftServer minecraft = mock(MinecraftServer.class);
+        ServerLevel level = mock(ServerLevel.class);
+        when(minecraft.overworld()).thenReturn(level);
+        var jobs = queueWorldServer(minecraft);
+        TelecomNetworkGraph graph = new TelecomNetworkGraph();
+        BlockPos a = new BlockPos(2, 64, 0), b = new BlockPos(4, 64, 0);
+        BlockPos negative = BlockPos.of(Long.MIN_VALUE);
+        graph.addNode(new NetworkNode(a, NetworkNode.NodeType.ROUTER));
+        graph.addNode(new NetworkNode(b, NetworkNode.NodeType.ROUTER));
+        graph.addNode(new NetworkNode(BlockPos.ZERO, NetworkNode.NodeType.SERVER));
+        graph.addNode(new NetworkNode(negative, NetworkNode.NodeType.SERVER));
+        graph.addEdge(new NetworkEdge(a, BlockPos.ZERO, 1000, 20, NetworkEdge.EdgeType.FIBER, java.util.List.of()));
+        String first = "/api/speedtest/servers?pos=" + a.asLong(), second = "/api/speedtest/servers?pos=" + b.asLong();
+        try (var graphs = mockStatic(TelecomNetworkGraph.class)) {
+            graphs.when(() -> TelecomNetworkGraph.get(level)).thenReturn(graph);
+            assertPending(request("GET", first, null));
+            assertPending(request("GET", second, null));
+            verify(minecraft, never()).overworld();
+            verify(minecraft, times(1)).execute(any(Runnable.class));
+            runQueuedJob(jobs);
+            // The completed first router must not change when the live graph changes.
+            graph.removeEdgeBetween(a, BlockPos.ZERO);
+            var json = JsonParser.parseString(request("GET", first, null).body()).getAsJsonObject();
+            assertEquals(Long.toString(a.asLong()), json.get("pos").getAsString());
+            assertFalse(json.get("truncated").getAsBoolean());
+            var options = json.getAsJsonArray("servers");
+            assertEquals(2, options.size());
+            assertEquals("0", options.get(0).getAsJsonObject().get("id").getAsString());
+            assertTrue(options.get(0).getAsJsonObject().get("available").getAsBoolean());
+            assertTrue(options.get(0).getAsJsonObject().get("estimatedPingMs").getAsInt() >= 0);
+            assertTrue(options.get(0).getAsJsonObject().get("bandwidthMbps").getAsInt() > 0);
+            var unavailable = options.get(1).getAsJsonObject();
+            assertTrue(unavailable.get("id").getAsJsonPrimitive().isString());
+            assertEquals(Long.toString(Long.MIN_VALUE), unavailable.get("id").getAsString());
+            assertEquals(-1, unavailable.get("estimatedPingMs").getAsInt());
+            assertEquals("server_unavailable", unavailable.get("reason").getAsString());
+            assertPending(request("GET", second, null));
+            runQueuedJob(jobs);
+            json = JsonParser.parseString(request("GET", second, null).body()).getAsJsonObject();
+            assertEquals(Long.toString(b.asLong()), json.get("pos").getAsString());
+            for (var option : json.getAsJsonArray("servers")) assertFalse(option.getAsJsonObject().get("available").getAsBoolean());
+            for (int i = 0; i < 129; i++) graph.addNode(new NetworkNode(new BlockPos(100 + i, 64, 0), NetworkNode.NodeType.SERVER));
+            assertPending(request("GET", first, null));
+            runQueuedJob(jobs);
+            json = JsonParser.parseString(request("GET", first, null).body()).getAsJsonObject();
+            assertEquals(128, json.getAsJsonArray("servers").size());
+            assertTrue(json.get("truncated").getAsBoolean());
+            assertNull(graph.getSessionByDeviceId(TrafficSession.routerDeviceId(a)));
+            String wrongType = "/api/speedtest/servers?pos=0";
+            assertPending(request("GET", wrongType, null));
+            runQueuedJob(jobs);
+            assertEquals(404, request("GET", wrongType, null).statusCode());
+        }
+    }
+
+    @Test
+    void catalogueWorkLimitReturnsExplicitServiceError() throws Exception {
+        MinecraftServer minecraft = mock(MinecraftServer.class);
+        ServerLevel level = mock(ServerLevel.class);
+        when(minecraft.overworld()).thenReturn(level);
+        var jobs = queueWorldServer(minecraft);
+        TelecomNetworkGraph graph = mock(TelecomNetworkGraph.class);
+        when(graph.getNode(BlockPos.ZERO)).thenReturn(new NetworkNode(BlockPos.ZERO, NetworkNode.NodeType.ROUTER));
+        when(graph.getSpeedtestServers(BlockPos.ZERO, 0)).thenThrow(new TelecomNetworkGraph.SpeedtestCatalogueLimitException());
+        try (var graphs = mockStatic(TelecomNetworkGraph.class)) {
+            graphs.when(() -> TelecomNetworkGraph.get(level)).thenReturn(graph);
+            String path = "/api/speedtest/servers?pos=0";
+            assertPending(request("GET", path, null));
+            runQueuedJob(jobs);
+            var response = request("GET", path, null);
+            assertEquals(503, response.statusCode());
+            assertEquals("catalogue_limit", JsonParser.parseString(response.body()).getAsJsonObject().get("errorCode").getAsString());
+        }
+    }
+
+    private HttpResponse<String> postSpeedtest(ArrayBlockingQueue<Runnable> jobs, BlockPos router, String serverId) throws Exception {
+        Thread.sleep(30); // Respect the mutation admission budget between independent assertions.
+        String body = "{\"pos\":\"" + router.asLong() + "\",\"duration\":300"
+                + (serverId == null ? "" : ",\"serverId\":\"" + serverId + "\"") + "}";
+        var response = client.sendAsync(HttpRequest.newBuilder(URI.create(base + "/api/speedtest"))
+                .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofString(body)).build(), HttpResponse.BodyHandlers.ofString());
+        runQueuedJob(jobs);
+        return response.get(2, TimeUnit.SECONDS);
+    }
+
+    @Test
+    void explicitZeroAndNegativeServersAreAuthoritativeAndTerminalSnapshotsRetainDestination() throws Exception {
+        MinecraftServer minecraft = mock(MinecraftServer.class);
+        ServerLevel level = mock(ServerLevel.class);
+        when(minecraft.overworld()).thenReturn(level);
+        when(level.dimension()).thenReturn(net.minecraft.world.level.Level.OVERWORLD);
+        var jobs = queueWorldServer(minecraft);
+        TelecomNetworkGraph graph = new TelecomNetworkGraph();
+        BlockPos a = new BlockPos(2, 64, 0), b = new BlockPos(4, 64, 0), isolated = new BlockPos(6, 64, 0);
+        BlockPos negative = BlockPos.of(Long.MIN_VALUE);
+        graph.addNode(new NetworkNode(BlockPos.ZERO, NetworkNode.NodeType.SERVER));
+        graph.addNode(new NetworkNode(negative, NetworkNode.NodeType.SERVER));
+        for (BlockPos pos : java.util.List.of(a, b, isolated)) {
+            NetworkNode router = new NetworkNode(pos, NetworkNode.NodeType.ROUTER);
+            router.setIpAddress("10.0.0.2");
+            graph.addNode(router);
+        }
+        graph.addEdge(new NetworkEdge(a, BlockPos.ZERO, 1000, 20, NetworkEdge.EdgeType.FIBER, java.util.List.of()));
+        graph.addEdge(new NetworkEdge(a, negative, 1000, 200, NetworkEdge.EdgeType.FIBER, java.util.List.of()));
+        graph.addEdge(new NetworkEdge(b, a, 1000, 20, NetworkEdge.EdgeType.FIBER, java.util.List.of()));
+        try (var graphs = mockStatic(TelecomNetworkGraph.class)) {
+            graphs.when(() -> TelecomNetworkGraph.get(level)).thenReturn(graph);
+            for (BlockPos router : java.util.List.of(a, b, isolated, a)) {
+                String destination = router.equals(a) ? Long.toString(Long.MIN_VALUE) : "0";
+                var response = postSpeedtest(jobs, router, destination);
+                var json = JsonParser.parseString(response.body()).getAsJsonObject();
+                if (router.equals(isolated)) {
+                    assertEquals(409, response.statusCode());
+                    assertEquals("server_unavailable", json.get("errorCode").getAsString());
+                } else if (router.equals(a) && graph.getSessionByDeviceId(TrafficSession.routerDeviceId(b)) != null) {
+                    assertEquals(409, response.statusCode());
+                    assertEquals("device_busy", json.get("errorCode").getAsString());
+                } else {
+                    assertEquals(200, response.statusCode(), response.body());
+                    assertEquals(destination, json.get("serverId").getAsString());
+                    var session = graph.getSessionByDeviceId(TrafficSession.routerDeviceId(router));
+                    assertEquals(session.getSessionId().toString(), json.get("sessionId").getAsString());
+                    assertEquals(session.getServerName(), json.get("serverName").getAsString());
+                }
+            }
+            graph.removeNode(negative);
+            graph.tickTraffic(level);
+            assertPending(request("GET", "/api/network", null));
+            runQueuedJob(jobs);
+            var snapshot = JsonParser.parseString(request("GET", "/api/network", null).body()).getAsJsonObject();
+            var failed = java.util.stream.StreamSupport.stream(snapshot.getAsJsonArray("nodes").spliterator(), false)
+                    .map(com.google.gson.JsonElement::getAsJsonObject)
+                    .filter(node -> node.get("id").getAsString().equals(Long.toString(a.asLong())))
+                    .findFirst().orElseThrow().getAsJsonObject("speedtest");
+            assertEquals("FAILED", failed.get("state").getAsString());
+            assertFalse(failed.get("active").getAsBoolean());
+            assertEquals(Long.toString(Long.MIN_VALUE), failed.get("serverId").getAsString());
+            assertEquals("route_lost", failed.get("errorCode").getAsString());
+            assertEquals(TrafficSession.routerDeviceId(a), failed.get("deviceId").getAsString());
+            assertNotNull(graph.getSessionByDeviceId(TrafficSession.routerDeviceId(b)));
+        }
+    }
+
+    @Test
+    void disappearedWrongTypeAndUnreachableServersNeverFallbackButOmittedSelectionRemainsAutomatic() throws Exception {
+        MinecraftServer minecraft = mock(MinecraftServer.class);
+        ServerLevel level = mock(ServerLevel.class);
+        when(minecraft.overworld()).thenReturn(level);
+        var jobs = queueWorldServer(minecraft);
+        TelecomNetworkGraph graph = new TelecomNetworkGraph();
+        BlockPos pos = new BlockPos(2, 64, 0), fallback = new BlockPos(-2, 64, 0);
+        NetworkNode router = new NetworkNode(pos, NetworkNode.NodeType.ROUTER);
+        router.setIpAddress("10.0.0.2");
+        graph.addNode(router);
+        for (BlockPos destination : java.util.List.of(BlockPos.ZERO, fallback)) {
+            graph.addNode(new NetworkNode(destination, NetworkNode.NodeType.SERVER));
+            graph.addEdge(new NetworkEdge(pos, destination, 1000, 20, NetworkEdge.EdgeType.FIBER, java.util.List.of()));
+        }
+        try (var graphs = mockStatic(TelecomNetworkGraph.class)) {
+            graphs.when(() -> TelecomNetworkGraph.get(level)).thenReturn(graph);
+            String path = "/api/speedtest/servers?pos=" + pos.asLong();
+            assertPending(request("GET", path, null));
+            runQueuedJob(jobs);
+            assertEquals(2, JsonParser.parseString(request("GET", path, null).body()).getAsJsonObject().getAsJsonArray("servers").size());
+            graph.removeNode(BlockPos.ZERO);
+            for (int stage = 0; stage < 3; stage++) {
+                if (stage == 1) graph.addNode(new NetworkNode(BlockPos.ZERO, NetworkNode.NodeType.NRO));
+                if (stage == 2) graph.addNode(new NetworkNode(BlockPos.ZERO, NetworkNode.NodeType.SERVER));
+                var response = postSpeedtest(jobs, pos, "0");
+                assertEquals(409, response.statusCode());
+                var json = JsonParser.parseString(response.body()).getAsJsonObject();
+                assertEquals("server_unavailable", json.get("errorCode").getAsString());
+                assertFalse(json.has("sessionId"));
+                assertNull(graph.getSessionByDeviceId(TrafficSession.routerDeviceId(pos)));
+            }
+            graph.removeEdgeBetween(pos, fallback);
+            var none = postSpeedtest(jobs, pos, "");
+            assertEquals(409, none.statusCode());
+            assertEquals("no_server", JsonParser.parseString(none.body()).getAsJsonObject().get("errorCode").getAsString());
+            graph.addEdge(new NetworkEdge(pos, fallback, 1000, 20, NetworkEdge.EdgeType.FIBER, java.util.List.of()));
+            var automatic = postSpeedtest(jobs, pos, null);
+            assertEquals(200, automatic.statusCode());
+            assertEquals(Long.toString(fallback.asLong()), JsonParser.parseString(automatic.body()).getAsJsonObject().get("serverId").getAsString());
+        }
+    }
+
+    @Test
     void publicSpeedtestUsesRouterAuthorityAndReportsOnlyConfirmedSessionsWithoutCredentials() throws Exception {
         MinecraftServer minecraft = mock(MinecraftServer.class);
         ServerLevel level = mock(ServerLevel.class);
@@ -869,9 +1087,13 @@ class TelecomHttpServerTest {
         when(graph.getNode(position)).thenReturn(node);
         TrafficSession session = mock(TrafficSession.class);
         String deviceId = TrafficSession.routerDeviceId(position);
-        when(graph.getSessionByDeviceId(deviceId)).thenReturn(null, session);
         when(session.getDeviceId()).thenReturn(deviceId);
         when(session.getSessionId()).thenReturn(new java.util.UUID(0, 1));
+        when(session.getServerId()).thenReturn("0");
+        when(session.getServerName()).thenReturn("Server (0,0,0)");
+        when(graph.startSpeedtest(position, "10.1.0.2", 1234, 567, 0, 0, 300, false, null, ""))
+                .thenReturn(new TelecomNetworkGraph.SpeedtestStartResult(session, ""),
+                        new TelecomNetworkGraph.SpeedtestStartResult(null, "session_limit"));
         ArrayBlockingQueue<Runnable> jobs = new ArrayBlockingQueue<>(1);
         doAnswer(invocation -> { jobs.add(invocation.getArgument(0)); return null; }).when(minecraft).execute(any(Runnable.class));
         System.setProperty("telecom.http.bind", "0.0.0.0");
@@ -897,14 +1119,17 @@ class TelecomHttpServerTest {
             var json = JsonParser.parseString(result.body()).getAsJsonObject();
             assertEquals(deviceId, json.get("deviceId").getAsString());
             assertEquals(new java.util.UUID(0, 1).toString(), json.get("sessionId").getAsString());
-            verify(graph).startSpeedtest(position, "10.1.0.2", 1234, 567, 0, 0, 300, false, null);
+            assertEquals("0", json.get("serverId").getAsString());
+            assertEquals("Server (0,0,0)", json.get("serverName").getAsString());
+            verify(graph).startSpeedtest(position, "10.1.0.2", 1234, 567, 0, 0, 300, false, null, "");
             Thread.sleep(30);
-            when(graph.getSessionByDeviceId(deviceId)).thenReturn(null);
             response = client.sendAsync(request, HttpResponse.BodyHandlers.ofString());
             job = jobs.poll(2, TimeUnit.SECONDS);
             assertNotNull(job);
             job.run();
-            assertEquals(409, response.get(2, TimeUnit.SECONDS).statusCode());
+            var rejected = response.get(2, TimeUnit.SECONDS);
+            assertEquals(409, rejected.statusCode());
+            assertEquals("session_limit", JsonParser.parseString(rejected.body()).getAsJsonObject().get("errorCode").getAsString());
         }
     }
 

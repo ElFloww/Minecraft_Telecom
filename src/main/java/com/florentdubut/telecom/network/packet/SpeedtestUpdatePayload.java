@@ -2,14 +2,20 @@ package com.florentdubut.telecom.network.packet;
 
 import com.florentdubut.telecom.TelecomMod;
 import net.minecraft.network.FriendlyByteBuf;
-import net.minecraft.network.codec.ByteBufCodecs;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.Identifier;
 
 public record SpeedtestUpdatePayload(String clientIp, String state, int pingMs, int actualBandwidth, int ticksElapsed, int totalTicksPerPhase,
                                      String dimension, String deviceId, java.util.UUID sessionId,
-                                     int downloadBandwidth, int uploadBandwidth) implements CustomPacketPayload {
+                                     int downloadBandwidth, int uploadBandwidth,
+                                     String serverId, String serverName, String errorCode) implements CustomPacketPayload {
+    public SpeedtestUpdatePayload(String clientIp, String state, int pingMs, int actualBandwidth, int ticksElapsed, int totalTicksPerPhase,
+                                  String dimension, String deviceId, java.util.UUID sessionId, int downloadBandwidth, int uploadBandwidth) {
+        this(clientIp, state, pingMs, actualBandwidth, ticksElapsed, totalTicksPerPhase, dimension, deviceId, sessionId,
+                downloadBandwidth, uploadBandwidth, "", "", "");
+    }
+
     public static final Type<SpeedtestUpdatePayload> TYPE = new Type<>(Identifier.fromNamespaceAndPath(TelecomMod.MODID, "speedtest_update"));
     
     public static final StreamCodec<FriendlyByteBuf, SpeedtestUpdatePayload> STREAM_CODEC = StreamCodec.of(
@@ -25,6 +31,9 @@ public record SpeedtestUpdatePayload(String clientIp, String state, int pingMs, 
             buf.writeUUID(payload.sessionId());
             buf.writeInt(payload.downloadBandwidth());
             buf.writeInt(payload.uploadBandwidth());
+            buf.writeUtf(payload.serverId(), 24);
+            buf.writeUtf(payload.serverName(), 128);
+            buf.writeUtf(payload.errorCode(), 64);
         },
         buf -> new SpeedtestUpdatePayload(
             buf.readUtf(64),
@@ -37,7 +46,10 @@ public record SpeedtestUpdatePayload(String clientIp, String state, int pingMs, 
             buf.readUtf(128),
             buf.readUUID(),
             buf.readInt(),
-            buf.readInt()
+            buf.readInt(),
+            buf.readUtf(24),
+            buf.readUtf(128),
+            buf.readUtf(64)
         )
     );
 

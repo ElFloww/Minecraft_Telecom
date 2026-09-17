@@ -15,6 +15,9 @@ public class RouterScreen extends Screen {
     private Button startButton;
     private boolean speedtestPending;
     private int refreshTick = 0;
+    private String selectedServerId = "";
+    private String selectedServerName = "";
+    private String speedtestError = "";
     
     public void updatePayload(RouterGuiSyncPayload newPayload) {
         if (!payload.pos().equals(newPayload.pos())) return;
@@ -25,6 +28,12 @@ public class RouterScreen extends Screen {
     @Override
     public void tick() {
         super.tick();
+        if (minecraft != null && minecraft.player != null && (minecraft.level == null
+                || !speedtestKey.dimension().equals(ClientSpeedtestState.currentDimension())
+                || !minecraft.player.isWithinBlockInteractionRange(payload.pos(), 0))) {
+            minecraft.setScreen(null);
+            return;
+        }
         restoreSpeedtest();
         refreshTick++;
         if (refreshTick >= 20) {
@@ -44,6 +53,8 @@ public class RouterScreen extends Screen {
 
     public void updateSpeedtestProgress(com.florentdubut.telecom.network.packet.SpeedtestUpdatePayload payload) {
         if (!speedtestKey.matches(payload)) return;
+        if (!payload.errorCode().isEmpty()) speedtestError = payload.errorCode();
+        else if (currentSpeedtestData == null || !currentSpeedtestData.sessionId().equals(payload.sessionId())) speedtestError = "";
         // Networking has already accepted or discarded this packet. Never bypass its session guard.
         restoreSpeedtest();
     }
@@ -53,6 +64,7 @@ public class RouterScreen extends Screen {
         speedtestActive = state.active();
         speedtestPending = state.pending();
         currentSpeedtestData = state.pending() ? null : state.payload();
+        if (currentSpeedtestData != null && !currentSpeedtestData.errorCode().isEmpty()) speedtestError = currentSpeedtestData.errorCode();
         lastDownBw = currentSpeedtestData != null ? currentSpeedtestData.downloadBandwidth() : payload.lastDownBw();
         lastUpBw = currentSpeedtestData != null ? currentSpeedtestData.uploadBandwidth() : payload.lastUpBw();
         if (startButton != null) {
@@ -84,8 +96,8 @@ public class RouterScreen extends Screen {
 
         int centerX = this.width / 2;
         int centerY = this.height / 2;
-        int startX = centerX - 260 / 2;
-        int startY = centerY - 180 / 2;
+        int startX = centerX - 360 / 2;
+        int startY = centerY - 240 / 2;
 
         this.addRenderableWidget(net.minecraft.client.gui.components.Button.builder(Component.literal("Durée: " + DURATION_LABELS[durationIndex]), button -> {
             durationIndex = (durationIndex + 1) % DURATION_TICKS.length;
@@ -99,15 +111,22 @@ public class RouterScreen extends Screen {
             if (this.speedtestActive) return;
             if (payload.isConnected() && confDown > 0 && confUp > 0) {
                 if (!ClientSpeedtestState.markPending(speedtestKey)) return;
-                ClientPacketDistributor.sendToServer(new com.florentdubut.telecom.network.packet.StartSpeedtestPayload(payload.pos(), payload.ipAddress(), confDown, confUp, 0, 0, DURATION_TICKS[durationIndex]));
+                speedtestError = "";
+                ClientPacketDistributor.sendToServer(new com.florentdubut.telecom.network.packet.StartSpeedtestPayload(payload.pos(), payload.ipAddress(), confDown, confUp, 0, 0, DURATION_TICKS[durationIndex], selectedServerId, speedtestKey.dimension()));
                 restoreSpeedtest();
             } else {
+                speedtestError = "no_server";
                 String reason = !payload.isConnected() ? "No network connection!" : "Bandwidth not configured!";
                 if (minecraft.player != null) {
                     minecraft.player.displayClientMessage(Component.literal("Failed to start: " + reason), false);
                 }
             }
         }).bounds(startX + 20, startY + 145, 100, 20).build());
+        this.addRenderableWidget(Button.builder(Component.translatable("gui.telecom.speedtest.servers"), button ->
+                minecraft.setScreen(new SpeedtestServerSelectionScreen(this, false, payload.pos(), speedtestKey, selectedServerId, option -> {
+                    selectedServerId = option.id();
+                    selectedServerName = option.name();
+                }))).bounds(startX + 140, startY + 145, 200, 20).build());
         restoreSpeedtest();
     }
 
@@ -124,8 +143,8 @@ public class RouterScreen extends Screen {
         int centerX = this.width / 2;
         int centerY = this.height / 2;
 
-        int boxWidth = 260;
-        int boxHeight = 180;
+        int boxWidth = 360;
+        int boxHeight = 240;
         int startX = centerX - boxWidth / 2;
         int startY = centerY - boxHeight / 2;
 
@@ -153,13 +172,21 @@ public class RouterScreen extends Screen {
         guiGraphics.drawString(this.font, "Plan Down: " + payload.configuredMaxDown() + " Mbps", startX + 20, startY + 90, 0xFF00FFFF);
         guiGraphics.drawString(this.font, "Plan Up: " + payload.configuredMaxUp() + " Mbps", startX + 20, startY + 110, 0xFFFF8800);
 
-        guiGraphics.drawString(this.font, "Press ESC to save and close", startX + 130, startY + 150, 0xFF555555);
+        guiGraphics.drawString(font, font.plainSubstrByWidth(Component.translatable("gui.telecom.speedtest.selected",
+                SpeedtestServerSelectionScreen.destination(selectedServerId, selectedServerName)).getString(), 320), startX + 20, startY + 180, 0xFFCCCCCC);
+        if (currentSpeedtestData != null && !"REJECTED".equals(currentSpeedtestData.state()) && !currentSpeedtestData.serverId().isEmpty()) {
+            guiGraphics.drawString(font, font.plainSubstrByWidth(Component.translatable("gui.telecom.speedtest.used",
+                    SpeedtestServerSelectionScreen.destination(currentSpeedtestData.serverId(), currentSpeedtestData.serverName())).getString(), 320),
+                    startX + 20, startY + 195, 0xFF99DD99);
+        }
+        if (!speedtestError.isEmpty()) guiGraphics.drawString(font, font.plainSubstrByWidth(
+                SpeedtestServerSelectionScreen.error(speedtestError).getString(), 320), startX + 20, startY + 215, 0xFFFF8888);
 
         // Speedtest overlay logic (shifted right)
-        int stX = startX + 265;
-        int stY = startY + 30;
+        int stX = startX + 215;
+        int stY = startY + 75;
         int stW = 120;
-        int stH = 100;
+        int stH = 65;
         
         if (currentSpeedtestData != null || speedtestPending || payload.lastPing() > 0) {
             guiGraphics.fill(stX, stY, stX + stW, stY + stH, 0xFF111111);
@@ -169,9 +196,9 @@ public class RouterScreen extends Screen {
             guiGraphics.drawString(this.font, speedtestActive && !speedtestPending ? "TESTING: " + state : state, stX + 10, stY + 10, 0xFFFFFFFF);
             if (!speedtestPending) {
                 int ping = currentSpeedtestData == null ? payload.lastPing() : currentSpeedtestData.pingMs();
-                guiGraphics.drawString(this.font, "Ping: " + ping + " ms", stX + 10, stY + 30, 0xFF00FF00);
-                guiGraphics.drawString(this.font, "Down: " + this.lastDownBw + " Mbps", stX + 10, stY + 50, 0xFF00FFFF);
-                guiGraphics.drawString(this.font, "Up: " + this.lastUpBw + " Mbps", stX + 10, stY + 70, 0xFFFF8800);
+                guiGraphics.drawString(this.font, "Ping: " + ping + " ms", stX + 10, stY + 25, 0xFF00FF00);
+                guiGraphics.drawString(this.font, "Down: " + this.lastDownBw + " Mbps", stX + 10, stY + 40, 0xFF00FFFF);
+                guiGraphics.drawString(this.font, "Up: " + this.lastUpBw + " Mbps", stX + 10, stY + 53, 0xFFFF8800);
             }
         }
 

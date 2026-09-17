@@ -74,7 +74,14 @@ public final class CoverageService {
     }
 
     public static final class BusyException extends RuntimeException {
-        public BusyException(String message) { super(message); }
+        private final boolean retryable;
+
+        public BusyException(String message) { this(message, true); }
+        public BusyException(String message, boolean retryable) {
+            super(message);
+            this.retryable = retryable;
+        }
+        public boolean retryable() { return retryable; }
     }
 
     private record Source(BlockPos position, int mask, boolean service, List<TelecomFrequency> frequencies) {
@@ -214,7 +221,7 @@ public final class CoverageService {
         }
 
         String snapshot(Request originalRequest, String modelRevision) {
-            if (failure != null) throw new BusyException(failure);
+            if (failure != null) throw new BusyException(failure, false);
             JsonObject result = new JsonObject();
             result.addProperty("status", done() ? "ready" : "pending");
             result.addProperty("revision", Long.toString(revision));
@@ -282,7 +289,7 @@ public final class CoverageService {
                 if (dx * dx + dz * dz > (double) SignalPropagator.MAX_RANGE * SignalPropagator.MAX_RANGE) continue;
                 if (!source.frequencies().isEmpty()) candidates.add(source);
             }
-            if (candidates.size() > 64) throw new BusyException("Too many antennas; select a single antenna");
+            if (candidates.size() > 64) throw new BusyException("Too many antennas; select a single antenna", false);
             candidates.sort(java.util.Comparator.comparingLong(source -> source.position().asLong()));
             if (state.entries.size() >= MAX_ENTRIES) {
                 Iterator<Job> entries = state.entries.values().iterator();
@@ -299,7 +306,7 @@ public final class CoverageService {
 
     private static void refresh(State state, TelecomNetworkGraph graph, long deadline) {
         invalidateModel(state);
-        if (graph.getNodes().size() > 8192 || graph.getEdges().size() > 16384) throw new BusyException("Coverage topology limit exceeded");
+        if (graph.getNodes().size() > 8192 || graph.getEdges().size() > 16384) throw new BusyException("Coverage topology limit exceeded", false);
         Map<BlockPos, List<BlockPos>> adjacency = new HashMap<>();
         for (NetworkEdge edge : graph.getEdges()) {
             checkBudget(deadline);
