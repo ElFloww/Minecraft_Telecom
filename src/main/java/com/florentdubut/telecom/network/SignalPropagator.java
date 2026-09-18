@@ -268,15 +268,14 @@ public class SignalPropagator {
 
         private Material sample(Level level, BlockPos pos) {
             if (pos.getY() < level.getMinY() || pos.getY() > level.getMaxY()) return Material.UNKNOWN;
+            if (pos.equals(source) || pos.equals(target)) return Material.AIR;
             BlockState state;
             if (level instanceof ServerLevel server) {
                 LevelChunk chunk = server.getChunkSource().getChunkNow(pos.getX() >> 4, pos.getZ() >> 4);
                 if (chunk == null) return RadioTerrainCache.sample(server, pos);
-                if (pos.equals(source) || pos.equals(target)) return Material.AIR;
                 state = chunk.getBlockState(pos);
             } else {
                 if (!level.hasChunkAt(pos)) return Material.UNKNOWN;
-                if (pos.equals(source) || pos.equals(target)) return Material.AIR;
                 state = level.getBlockState(pos);
             }
 

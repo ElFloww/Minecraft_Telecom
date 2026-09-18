@@ -704,7 +704,7 @@ class CoverageServiceTest {
 
     @Test
     void bandStoppedBelowFloorRemainsNoneWhenAnotherBandReachesMissingTerrain() {
-        antenna(new BlockPos(-128, 64, 32), G2_900, G5_26000);
+        antenna(new BlockPos(-512, 64, 32), G2_900, G5_26000);
         when(chunks.getChunkNow(-1, 2)).thenReturn(null);
         JsonObject tile = ready(request(0));
         JsonObject technologies = firstCell(tile).getAsJsonObject("technologies");

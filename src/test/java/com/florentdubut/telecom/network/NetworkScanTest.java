@@ -141,6 +141,20 @@ class NetworkScanTest {
         verify(level, never()).getChunk(anyInt(), anyInt());
     }
 
+    @Test
+    void unloadedAdjacentSourceDoesNotNeedCacheForEndpoint() throws Exception {
+        when(player.blockPosition()).thenReturn(new BlockPos(47, 65, 32));
+        BlockPos source = new BlockPos(48, 66, 32);
+        addAntenna(source, TelecomFrequency.G4_700, false);
+
+        NetworkScanResponsePayload scan = scan();
+
+        assertTrue(scan.found());
+        assertEquals(source, scan.antennaPos());
+        assertTrue(scan.signalStrength() > -120);
+        verify(level, never()).getBlockEntity(source);
+    }
+
     private void addAntenna(BlockPos position, TelecomFrequency frequency, boolean loaded) {
         NetworkNode node = new NetworkNode(position, NetworkNode.NodeType.ANTENNA);
         node.setFrequenciesMask(1 << frequency.ordinal());

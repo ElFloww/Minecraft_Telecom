@@ -261,7 +261,7 @@ class SignalPropagatorTest {
         when(chunk.getBlockState(any(BlockPos.class))).thenReturn(Blocks.AIR.defaultBlockState());
         assertTrue(calculateSignal(level, SOURCE, SOURCE.east(4), FREQUENCY).known);
         verify(chunk, times(3)).getBlockState(any(BlockPos.class));
-        verify(cache, times(5)).getChunkNow(0, 0);
+        verify(cache, times(3)).getChunkNow(0, 0);
         verifyNoMoreInteractions(cache);
         verify(level, never()).hasChunkAt(any(BlockPos.class));
         verify(level, never()).getBlockState(any(BlockPos.class));
@@ -313,8 +313,8 @@ class SignalPropagatorTest {
             verify(state, never()).getCollisionShape(any(BlockGetter.class), any(BlockPos.class));
             verify(level, times(6)).getMinY();
             verify(level, times(6)).getMaxY();
-            verify(level, times(6)).getChunkSource();
-            verify(cache, times(6)).getChunkNow(0, 0);
+            verify(level, times(2)).getChunkSource();
+            verify(cache, times(2)).getChunkNow(0, 0);
             verify(loaded, times(2)).getBlockState(middle);
             // Also rejects every getChunk overload and any Level.getBlockState/neighbor access.
             verifyNoMoreInteractions(level, cache, loaded);
@@ -322,19 +322,19 @@ class SignalPropagatorTest {
     }
 
     @Test
-    void unavailableServerEndpointsCannotBeHiddenByFreeSpaceEarlyStop() {
-        for (BlockPos missing : List.of(SOURCE, SOURCE.east(MAX_RANGE))) {
-            ServerLevel level = mock(ServerLevel.class);
-            overworldBounds(level);
-            ServerChunkCache cache = mock(ServerChunkCache.class);
-            when(level.getChunkSource()).thenReturn(cache);
-            when(cache.getChunkNow(anyInt(), anyInt())).thenReturn(mock(LevelChunk.class));
-            when(cache.getChunkNow(missing.getX() >> 4, missing.getZ() >> 4)).thenReturn(null);
-            Trace trace = new Trace(SOURCE, SOURCE.east(MAX_RANGE), G5_26000);
-            assertTrue(trace.advance(level, 2, Long.MAX_VALUE));
-            assertAbsent(trace.result(), false);
-            assertEquals(Set.of(chunk(SOURCE), chunk(SOURCE.east(MAX_RANGE))), trace.visitedChunks());
-        }
+    void unavailableServerInteriorCannotBeHiddenByFreeSpaceEarlyStop() {
+        ServerLevel level = mock(ServerLevel.class);
+        overworldBounds(level);
+        ServerChunkCache cache = mock(ServerChunkCache.class);
+        LevelChunk loaded = mock(LevelChunk.class);
+        when(level.getChunkSource()).thenReturn(cache);
+        when(cache.getChunkNow(anyInt(), anyInt())).thenReturn(loaded);
+        when(loaded.getBlockState(any(BlockPos.class))).thenReturn(Blocks.AIR.defaultBlockState());
+        when(cache.getChunkNow(1, 0)).thenReturn(null);
+        Trace trace = new Trace(SOURCE, SOURCE.east(32), G5_26000);
+        assertTrue(trace.advance(level, 20, Long.MAX_VALUE));
+        assertAbsent(trace.result(), false);
+        assertTrue(trace.visitedChunks().contains(ChunkPos.asLong(1, 0)));
     }
 
     @Test
@@ -507,10 +507,9 @@ class SignalPropagatorTest {
                     assertEquals(Set.of(chunk(inside), chunk(outside)), trace.visitedChunks());
                     verify(level, never()).getBlockState(any(BlockPos.class));
                 }
-                verify(cache, times(2)).getChunkNow(0, 0);
-                verifyNoMoreInteractions(cache);
+                verifyNoInteractions(cache);
                 verifyNoInteractions(loaded);
-                verify(client, times(2)).hasChunkAt(inside);
+                verify(client, never()).hasChunkAt(inside);
                 verify(client, never()).hasChunkAt(outside);
             }
         }
@@ -745,7 +744,7 @@ class SignalPropagatorTest {
             assertTrue(trace.advance(server, 100, Long.MAX_VALUE));
             cache.verify(() -> RadioTerrainCache.prefetch(server, SOURCE, target), times(1));
             cache.verifyNoMoreInteractions();
-            verify(chunks, times(5)).getChunkNow(0, 0);
+            verify(chunks, times(3)).getChunkNow(0, 0);
             verifyNoMoreInteractions(chunks);
             verify(loaded, times(3)).getBlockState(any(BlockPos.class));
             verify(loaded, never()).getBlockState(SOURCE);
@@ -757,7 +756,7 @@ class SignalPropagatorTest {
             cache.when(() -> RadioTerrainCache.sample(eq(server), any(BlockPos.class))).thenReturn(WATER);
             MultiTrace cached = new MultiTrace(SOURCE, target, List.of(TelecomFrequency.values()));
             assertTrue(cached.advance(server, 5, Long.MAX_VALUE));
-            cache.verify(() -> RadioTerrainCache.sample(eq(server), any(BlockPos.class)), times(5));
+            cache.verify(() -> RadioTerrainCache.sample(eq(server), any(BlockPos.class)), times(3));
             for (int i = 0; i < trace.results().size(); i++) {
                 assertTrue(cached.results().get(i).known);
                 assertEquals(trace.results().get(i).powerDbm, cached.results().get(i).powerDbm);
@@ -766,7 +765,7 @@ class SignalPropagatorTest {
         Level client = client(Blocks.WATER.defaultBlockState());
         MultiTrace trace = new MultiTrace(SOURCE, target, List.of(TelecomFrequency.values()));
         assertTrue(trace.advance(client, 5, Long.MAX_VALUE));
-        verify(client, times(5)).hasChunkAt(any(BlockPos.class));
+        verify(client, times(3)).hasChunkAt(any(BlockPos.class));
         verify(client, times(3)).getBlockState(any(BlockPos.class));
     }
 
