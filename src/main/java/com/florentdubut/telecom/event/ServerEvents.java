@@ -1,6 +1,9 @@
 package com.florentdubut.telecom.event;
 
 import com.florentdubut.telecom.TelecomMod;
+import com.florentdubut.telecom.network.NetworkDiagnostics;
+import com.florentdubut.telecom.network.TelecomNetworkGraph;
+import net.neoforged.bus.api.EventPriority;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.tick.ServerTickEvent;
@@ -15,7 +18,21 @@ public class ServerEvents {
         if (!event.getEntity().level().isClientSide() && event.getEntity() instanceof net.minecraft.server.level.ServerPlayer player) {
             com.florentdubut.telecom.network.TelecomNetworkGraph graph = com.florentdubut.telecom.network.TelecomNetworkGraph.get(player.level());
             // Delay by 100 ticks (5 seconds) to ensure chunks are fully loaded and ticking
-            graph.scheduleDelayedRecalculation(100);
+            graph.scheduleDelayedRecalculation(100, NetworkDiagnostics.Cause.PLAYER_LOGIN);
+        }
+    }
+
+    @SubscribeEvent(priority = EventPriority.HIGHEST)
+    public static void onTickStart(ServerTickEvent.Pre event) {
+        for (var level : event.getServer().getAllLevels()) {
+            TelecomNetworkGraph.get(level).getDiagnostics().startServerTick();
+        }
+    }
+
+    @SubscribeEvent(priority = EventPriority.LOWEST)
+    public static void onTickEnd(ServerTickEvent.Post event) {
+        for (var level : event.getServer().getAllLevels()) {
+            TelecomNetworkGraph.get(level).getDiagnostics().finishServerTick();
         }
     }
 

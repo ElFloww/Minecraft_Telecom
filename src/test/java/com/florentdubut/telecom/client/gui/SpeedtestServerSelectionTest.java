@@ -173,7 +173,7 @@ class SpeedtestServerSelectionTest {
                 try (var reader = new java.io.InputStreamReader(stream, java.nio.charset.StandardCharsets.UTF_8)) {
                     var translations = com.google.gson.JsonParser.parseReader(reader).getAsJsonObject();
                     for (String code : List.of("invalid_request", "device_busy", "session_limit", "server_unavailable", "no_server",
-                            "timeout", "route_lost", "device_unavailable", "catalogue_limit")) {
+                            "timeout", "route_lost", "device_unavailable", "catalogue_limit", "radio_lost", "radio_unknown", "radio_limit")) {
                         String key = "gui.telecom.speedtest.error." + code;
                         assertTrue(translations.has(key), locale + ": " + key);
                         assertFalse(translations.get(key).getAsString().isBlank(), locale + ": " + key);

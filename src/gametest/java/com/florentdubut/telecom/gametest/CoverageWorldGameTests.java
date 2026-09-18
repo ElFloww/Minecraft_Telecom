@@ -3,6 +3,7 @@ package com.florentdubut.telecom.gametest;
 import com.florentdubut.telecom.TelecomMod;
 import com.florentdubut.telecom.block.entity.AntennaBlockEntity;
 import com.florentdubut.telecom.network.CoverageService;
+import com.florentdubut.telecom.network.AntennaRadioConfig;
 import com.florentdubut.telecom.network.SignalPropagator;
 import com.florentdubut.telecom.network.TelecomFrequency;
 import com.florentdubut.telecom.network.TelecomNetworkGraph;
@@ -33,6 +34,7 @@ import java.util.concurrent.atomic.AtomicReference;
 public final class CoverageWorldGameTests {
     private static final Identifier TEST = id("coverage_wall_removal");
     private static final Identifier RELOAD_TEST = id("coverage_unchanged_antenna_load");
+    private static final Identifier RADIO_CONFIG_TEST = id("coverage_radio_configuration");
     private static final Identifier STRUCTURE = id("coverage_test_space");
     private static final TelecomFrequency FREQUENCY = TelecomFrequency.G2_900;
 
@@ -41,6 +43,7 @@ public final class CoverageWorldGameTests {
         event.register(Registries.TEST_FUNCTION, registry -> {
             registry.register(TEST, CoverageWorldGameTests::wallRemoval);
             registry.register(RELOAD_TEST, CoverageWorldGameTests::unchangedAntennaLoad);
+            registry.register(RADIO_CONFIG_TEST, CoverageWorldGameTests::radioConfiguration);
         });
     }
 
@@ -55,6 +58,10 @@ public final class CoverageWorldGameTests {
         event.registerTest(RELOAD_TEST, data -> new FunctionGameTestInstance(
                 ResourceKey.create(Registries.TEST_FUNCTION, RELOAD_TEST), data),
                 new TestData<>(reloadEnvironment, STRUCTURE, 200, 0, true));
+        var radioEnvironment = event.registerEnvironment(id("coverage_radio_environment"));
+        event.registerTest(RADIO_CONFIG_TEST, data -> new FunctionGameTestInstance(
+                ResourceKey.create(Registries.TEST_FUNCTION, RADIO_CONFIG_TEST), data),
+                new TestData<>(radioEnvironment, STRUCTURE, 200, 0, true));
     }
 
     @SubscribeEvent
@@ -174,6 +181,48 @@ public final class CoverageWorldGameTests {
                 .thenSucceed();
     }
 
+    private static void radioConfiguration(GameTestHelper helper) {
+        var level = helper.getLevel();
+        BlockPos origin = helper.absolutePos(BlockPos.ZERO);
+        BlockPos receiverRelative = new BlockPos(8 + Math.floorMod(-origin.getX(), 16), 2,
+                8 + Math.floorMod(-origin.getZ(), 16));
+        BlockPos sourceRelative = receiverRelative.west(6);
+        BlockPos receiver = helper.absolutePos(receiverRelative);
+        BlockPos source = helper.absolutePos(sourceRelative);
+        var request = new CoverageService.Request(Math.floorDiv(receiver.getX(), 128),
+                Math.floorDiv(receiver.getZ(), 128), 16, Integer.toString(receiver.getY()),
+                Long.toString(source.asLong()), FREQUENCY.getTechnology(), FREQUENCY.name());
+        AtomicReference<JsonObject> forward = new AtomicReference<>();
+        helper.setBlock(sourceRelative, ModBlocks.ANTENNA.get());
+        helper.startSequence()
+                .thenWaitUntil(() -> helper.assertTrue(TelecomNetworkGraph.get(level).getNode(source) != null,
+                        "Placed antenna must enter the actual graph"))
+                .thenExecute(() -> {
+                    var antenna = helper.getBlockEntity(sourceRelative, AntennaBlockEntity.class);
+                    antenna.setEnabledFrequenciesMask(1 << FREQUENCY.ordinal());
+                    antenna.setRadioConfig(new AntennaRadioConfig(1, 270, 0, 30, 100));
+                })
+                .thenIdle(5)
+                .thenWaitUntil(() -> forward.set(ready(helper, request)))
+                .thenExecute(() -> {
+                    assertPointMatchesPropagator(helper, forward.get(), source, receiver);
+                    var config = new AntennaRadioConfig(1, 90, 0, 30, 50);
+                    helper.getBlockEntity(sourceRelative, AntennaBlockEntity.class).setRadioConfig(config);
+                    helper.assertValueEqual(TelecomNetworkGraph.get(level).getNode(source).getRadioConfig(), config,
+                            "Graph must receive the complete antenna configuration");
+                    assertInvalidated(helper, request, forward.get());
+                })
+                .thenWaitUntil(() -> {
+                    JsonObject backward = ready(helper, request);
+                    assertPointMatchesPropagator(helper, backward, source, receiver);
+                    helper.assertTrue(cell(backward, receiver).get("powerDbm").getAsFloat()
+                                    < cell(forward.get(), receiver).get("powerDbm").getAsFloat() - 20,
+                            "Rotating a real sector away must attenuate the map signal");
+                })
+                .thenExecute(() -> helper.destroyBlock(sourceRelative))
+                .thenSucceed();
+    }
+
     private static void setStrict(GameTestHelper helper, BlockPos relative, String block) {
         BlockPos pos = helper.absolutePos(relative);
         var server = helper.getLevel().getServer();
@@ -200,7 +249,10 @@ public final class CoverageWorldGameTests {
 
     private static void assertPointMatchesPropagator(GameTestHelper helper, JsonObject tile, BlockPos source, BlockPos receiver) {
         JsonObject cell = cell(tile, receiver);
-        var direct = SignalPropagator.calculateSignal(helper.getLevel(), source, receiver, FREQUENCY);
+        var trace = new SignalPropagator.MultiTrace(source, receiver, java.util.List.of(FREQUENCY),
+                TelecomNetworkGraph.get(helper.getLevel()).getNode(source).getRadioConfig());
+        while (!trace.advance(helper.getLevel(), 256, Long.MAX_VALUE)) { }
+        var direct = trace.results().getFirst();
         helper.assertTrue(direct.known, "The real source, receiver and wall chunks must be loaded");
         helper.assertTrue(cell.get("state").getAsString().equals("signal"), "Selected map point must receive signal");
         helper.assertTrue(cell.get("antenna").getAsString().equals(Long.toString(source.asLong())), "Selected antenna must match");

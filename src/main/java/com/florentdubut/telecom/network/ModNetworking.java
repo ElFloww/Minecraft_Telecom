@@ -11,6 +11,8 @@ import com.florentdubut.telecom.network.packet.RequestSpeedtestServersPayload;
 import com.florentdubut.telecom.network.packet.SpeedtestServersPayload;
 import com.florentdubut.telecom.network.packet.RequestServerRefreshPayload;
 import com.florentdubut.telecom.network.packet.ServerGuiSyncPayload;
+import com.florentdubut.telecom.network.packet.NetworkMapResponsePayload;
+import com.florentdubut.telecom.network.packet.MapMicrowaveData;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
@@ -56,7 +58,7 @@ public class ModNetworking {
 
     @SubscribeEvent
     public static void register(final RegisterPayloadHandlersEvent event) {
-        final PayloadRegistrar registrar = event.registrar("1.4");
+        final PayloadRegistrar registrar = event.registrar("1.6");
 
         registrar.playToServer(RequestServerRefreshPayload.TYPE, RequestServerRefreshPayload.STREAM_CODEC,
                 ModNetworking::handleServerRefreshRequest);
@@ -192,112 +194,7 @@ public class ModNetworking {
 
     // Shared authoritative calculation; only a first-time mobile address lease is persisted.
     private static NetworkScanResponsePayload scanNetworkForPlayer(ServerPlayer player) {
-        ServerLevel level = player.level();
-        TelecomNetworkGraph graph = TelecomNetworkGraph.get(level);
-
-        // Discover candidates first; aggregate only on the selected serving antenna.
-        record FreqHit(BlockPos position, String name, TelecomFrequency freq, float signal) {}
-        java.util.List<FreqHit> hits = new java.util.ArrayList<>();
-        boolean incompleteTerrain = false;
-        BlockPos receiver = player.blockPosition().above();
-
-        for (NetworkNode node : graph.getNodes()) {
-            if (node.getType() != NetworkNode.NodeType.ANTENNA) continue;
-            if (node.getFrequenciesMask() == 0 || node.getPosition().distSqr(receiver) > (double) SignalPropagator.MAX_RANGE * SignalPropagator.MAX_RANGE) continue;
-            BlockPos position = node.getPosition();
-            AntennaBlockEntity antenna = null;
-            if (isLoaded(level, position)) {
-                BlockEntity be = level.getBlockEntity(position);
-                if (!(be instanceof AntennaBlockEntity loaded)) continue;
-                antenna = loaded;
-            }
-            String name = antenna == null ? "Antenna (" + position.getX() + ", " + position.getY() + ", " + position.getZ() + ")"
-                    : antenna.getAntennaName();
-
-            java.util.List<TelecomFrequency> frequencies = new java.util.ArrayList<>();
-            for (TelecomFrequency freq : TelecomFrequency.values()) {
-                if (antenna != null ? antenna.isFrequencyEnabled(freq) : (node.getFrequenciesMask() & (1 << freq.ordinal())) != 0) frequencies.add(freq);
-            }
-            if (frequencies.isEmpty()) continue;
-            var trace = new SignalPropagator.MultiTrace(position, receiver, frequencies);
-            while (!trace.advance(level, 256, Long.MAX_VALUE)) { }
-            for (SignalPropagator.SignalResult result : trace.results()) {
-                incompleteTerrain |= !result.known;
-                float signal = result.powerDbm;
-                if (result.known && signal > SignalPropagator.MIN_SIGNAL) {
-                    hits.add(new FreqHit(position, name, result.frequency, signal));
-                }
-            }
-        }
-
-        // An unknown alternative must not discard an independently verified radio link.
-        if (hits.isEmpty()) {
-            return new NetworkScanResponsePayload(false, incompleteTerrain ? "Terrain unavailable" : "No Service", -120, "", "", BlockPos.ZERO, 0, 0, 0);
-        }
-
-        FreqHit serving = hits.stream().max((left, right) -> RadioSelection.compare(left.freq(), left.signal(), left.position(),
-                right.freq(), right.signal(), right.position())).orElseThrow();
-        final String activeTech = serving.freq().getTechnology();
-
-        // Filter to only the best tech (phones aggregate within one tech family at a time)
-        java.util.List<FreqHit> activeHits = hits.stream()
-            .filter(h -> h.freq().getTechnology().equals(activeTech))
-            .toList();
-
-        // Aggregate: sum up max speeds per frequency, weighted by signal quality per hit
-        int totalMaxDown = 0;
-        int totalMaxUp = 0;
-
-        // Best signal across all active hits (for display)
-        float bestSignal = serving.signal();
-
-        // Best antenna (the one with the best signal, used as "source" for routing)
-        BlockPos primaryAntenna = serving.position();
-
-        // Multi-site aggregation requires independent routed resources, not free extra capacity.
-        activeHits = activeHits.stream().filter(hit -> hit.position().equals(primaryAntenna)).toList();
-
-        // Build label listing all frequencies used
-        java.util.List<String> bandLabels = new java.util.ArrayList<>();
-        for (FreqHit hit : activeHits) {
-            // Signal quality per frequency (affects its contribution)
-            float signalQuality = Math.max(0.01f, Math.min(1.0f, (hit.signal() + 120) / 70.0f));
-            int freqDown = (int)(hit.freq().getMaxSpeedMb() * signalQuality);
-            int freqUp;
-            switch (activeTech) {
-                case "5G"  -> freqUp = (int)(hit.freq().getMaxSpeedMb() * 0.50f * signalQuality);
-                case "4G"  -> freqUp = (int)(hit.freq().getMaxSpeedMb() * 0.30f * signalQuality);
-                case "3G"  -> freqUp = (int)(hit.freq().getMaxSpeedMb() * 0.15f * signalQuality);
-                default    -> freqUp = (int)(hit.freq().getMaxSpeedMb() * 0.05f * signalQuality);
-            }
-            totalMaxDown += freqDown;
-            totalMaxUp   += Math.max(1, freqUp);
-            if (!bandLabels.contains(hit.freq().getFrequencyLabel())) {
-                bandLabels.add(hit.freq().getFrequencyLabel());
-            }
-        }
-
-        String techLabel = activeTech + (activeHits.size() > 1 ? "+" : "")
-            + " (" + String.join(", ", bandLabels) + ")";
-
-        String mobileIp = graph.getMobileIp(player.getUUID());
-        int frequenciesMask = 0;
-
-        for (FreqHit hit : activeHits) {
-            frequenciesMask |= (1 << hit.freq().ordinal());
-        }
-
-        return new NetworkScanResponsePayload(
-            true,
-            serving.name(),
-            (int) bestSignal,
-            techLabel,
-            mobileIp,
-            primaryAntenna,
-            totalMaxDown,
-            Math.max(1, totalMaxUp),
-            frequenciesMask
-        );
+        return RadioAccessService.scan(player).payload();
     }
 
     private static void handleNetworkScanResponse(final NetworkScanResponsePayload payload, final IPayloadContext context) {
@@ -474,6 +371,10 @@ public class ModNetworking {
      * Gathers utilization data and sends AntennaGuiSyncPayload to that player.
      */
     public static void openAntennaGuiForPlayer(ServerPlayer player, AntennaBlockEntity antenna) {
+        sendAntennaGui(player, antenna, java.util.UUID.randomUUID(), true);
+    }
+
+    private static void sendAntennaGui(ServerPlayer player, AntennaBlockEntity antenna, java.util.UUID viewId, boolean opening) {
         ServerLevel level = player.level();
         if (antenna.getLevel() != level || !isLoaded(level, antenna.getBlockPos())) return;
         TelecomNetworkGraph graph = TelecomNetworkGraph.get(level);
@@ -488,7 +389,7 @@ public class ModNetworking {
             if (antenna.isFrequencyEnabled(freq)) {
                 TelecomNetworkGraph.AntennaFreqStats stats = utilization.get(freq);
                 int actual = stats != null ? stats.actualMbps() : 0;
-                int max = freq.getMaxSpeedMb();
+                int max = antenna.getRadioConfig().capacityMbps(freq);
                 utilMap.put(freq.ordinal(), new int[]{actual, max});
             }
         }
@@ -497,20 +398,26 @@ public class ModNetworking {
             antenna.getBlockPos(),
             antenna.getAntennaName(),
             antenna.getEnabledFrequenciesMask(),
-            utilMap
+            utilMap,
+            antenna.getRadioConfig(),
+            level.dimension().identifier().toString(),
+            viewId,
+            opening
         ));
     }
 
     private static void handleAntennaGuiSync(final com.florentdubut.telecom.network.packet.AntennaGuiSyncPayload payload, final IPayloadContext context) {
+        var connection = context.connection();
         context.enqueueWork(() -> {
-            net.minecraft.client.gui.screens.Screen current = net.minecraft.client.Minecraft.getInstance().screen;
-            if (current instanceof com.florentdubut.telecom.client.gui.AntennaScreen existing) {
-                // Refresh the live data without reopening the screen
-                existing.receiveUpdate(payload);
-            } else {
-                net.minecraft.client.Minecraft.getInstance().setScreen(
+            var minecraft = net.minecraft.client.Minecraft.getInstance();
+            if (minecraft.getConnection() == null || minecraft.getConnection().getConnection() != connection
+                    || minecraft.level == null || !minecraft.level.dimension().identifier().toString().equals(payload.dimension())) return;
+            if (payload.opening()) {
+                minecraft.setScreen(
                     new com.florentdubut.telecom.client.gui.AntennaScreen(payload)
                 );
+            } else if (minecraft.screen instanceof com.florentdubut.telecom.client.gui.AntennaScreen existing) {
+                existing.receiveUpdate(payload);
             }
         });
     }
@@ -522,6 +429,7 @@ public class ModNetworking {
                     || player.isSpectator()) return;
             ServerLevel level = player.level();
             BlockPos pos = payload.pos();
+            if (!level.dimension().identifier().toString().equals(payload.dimension())) return;
             if (!isLoaded(level, pos) || !player.isWithinBlockInteractionRange(pos, 0) || !level.mayInteract(player, pos)
                     || payload.name().length() > 32 || payload.name().codePoints().anyMatch(Character::isISOControl)
                     || (payload.enabledFrequenciesMask() & ~VALID_FREQUENCIES_MASK) != 0) return;
@@ -530,6 +438,7 @@ public class ModNetworking {
                 if (antenna.getEnabledFrequenciesMask() != payload.enabledFrequenciesMask()) {
                     antenna.setEnabledFrequenciesMask(payload.enabledFrequenciesMask());
                 }
+                antenna.setRadioConfig(payload.radioConfig());
             }
         });
     }
@@ -545,10 +454,12 @@ public class ModNetworking {
             if (context.player() instanceof ServerPlayer serverPlayer
                     && acceptRequest(serverPlayer, RequestCategory.ANTENNA_REFRESH, 250)) {
                 ServerLevel level = serverPlayer.level();
-                if (!isLoaded(level, payload.pos())) return;
+                if (!level.dimension().identifier().toString().equals(payload.dimension())) return;
+                if (!isLoaded(level, payload.pos()) || serverPlayer.isSpectator()
+                        || !serverPlayer.isWithinBlockInteractionRange(payload.pos(), 0)) return;
                 net.minecraft.world.level.block.entity.BlockEntity be = level.getBlockEntity(payload.pos());
                 if (be instanceof AntennaBlockEntity antenna) {
-                    openAntennaGuiForPlayer(serverPlayer, antenna);
+                    sendAntennaGui(serverPlayer, antenna, payload.viewId(), false);
                 }
             }
         });
@@ -573,7 +484,7 @@ public class ModNetworking {
                     error = "invalid_request";
                 } else {
                     NetworkScanResponsePayload scan = scanNetworkForPlayer(player);
-                    if (!scan.found()) error = "no_server";
+                    if (!scan.found()) error = RadioAccessService.unavailableReason(scan);
                     sourcePos = scan.antennaPos();
                     extraPing = scan.tech().startsWith("5G") ? 15 : scan.tech().startsWith("4G") ? 40
                             : scan.tech().startsWith("3G") ? 95 : 300;
@@ -658,9 +569,10 @@ public class ModNetworking {
                 sendSpeedtestState(player, null, deviceId, "", payload.serverId(), "invalid_request");
                 return;
             }
-            NetworkScanResponsePayload scan = scanNetworkForPlayer(player);
+            RadioAccessService.Snapshot radio = RadioAccessService.scan(player);
+            NetworkScanResponsePayload scan = radio.payload();
             if (!scan.found() || scan.maxDown() <= 0 || scan.maxUp() <= 0) {
-                sendSpeedtestState(player, null, deviceId, "", payload.serverId(), payload.serverId().isEmpty() ? "no_server" : "server_unavailable");
+                sendSpeedtestState(player, null, deviceId, "", payload.serverId(), RadioAccessService.unavailableReason(scan));
                 return;
             }
             int extraPing = scan.tech().startsWith("5G") ? 10 + level.random.nextInt(10)
@@ -669,6 +581,9 @@ public class ModNetworking {
                 : 200 + level.random.nextInt(200);
             var result = graph.startSpeedtest(scan.antennaPos(), scan.ipAddress(), scan.maxDown(), scan.maxUp(), extraPing,
                 scan.frequenciesMask(), payload.durationTicks(), false, player, payload.serverId());
+            if (result.session() != null && result.error().isEmpty()) {
+                result.session().updateRadioAttachment(scan.antennaPos(), scan.frequenciesMask(), radio.downCaps(), radio.upCaps());
+            }
             sendSpeedtestState(player, result.session(), deviceId, scan.ipAddress(), payload.serverId(), result.error());
         });
     }
@@ -745,12 +660,14 @@ public class ModNetworking {
     private static void handleRequestNetworkMap(final com.florentdubut.telecom.network.packet.RequestNetworkMapPayload payload, final IPayloadContext context) {
         context.enqueueWork(() -> {
             if (!(context.player() instanceof ServerPlayer player)
-                    || !acceptRequest(player, RequestCategory.MAP, 1000)) return;
+                    || !player.level().dimension().identifier().toString().equals(payload.dimension())
+                    || !acceptRequest(player, RequestCategory.MAP, 2000)) return;
             ServerLevel level = player.level();
             TelecomNetworkGraph graph = TelecomNetworkGraph.get(level);
             if (graph != null) {
                 java.util.List<com.florentdubut.telecom.network.packet.MapNodeData> nodesData = new java.util.ArrayList<>();
                 for (com.florentdubut.telecom.network.NetworkNode node : graph.getNodes()) {
+                    if (nodesData.size() >= NetworkMapResponsePayload.MAX_NODES) break;
                     String extraInfo = "";
                     if (node.getType() == com.florentdubut.telecom.network.NetworkNode.NodeType.ANTENNA
                             && isLoaded(level, node.getPosition())) {
@@ -766,23 +683,37 @@ public class ModNetworking {
                             extraInfo = String.join(", ", techs.stream().distinct().toList());
                         }
                     }
+                    if (node.getType() == NetworkNode.NodeType.MICROWAVE_DISH) {
+                        var config = node.getMicrowaveConfig();
+                        extraInfo = "CH " + config.channel() + " / " + config.frequencyGhz() + " GHz / "
+                                + config.azimuthDegrees() + " / " + config.elevationDegrees();
+                    }
+                    String ip = node.getIpAddress() == null ? "" : node.getIpAddress();
                     nodesData.add(new com.florentdubut.telecom.network.packet.MapNodeData(
                         node.getPosition(),
                         node.getType().name(),
-                        node.getIpAddress() != null ? node.getIpAddress() : "",
+                        ip.substring(0, Math.min(ip.length(), NetworkMapResponsePayload.MAX_TEXT_LENGTH)),
                         extraInfo
                     ));
                 }
-                context.reply(new com.florentdubut.telecom.network.packet.NetworkMapResponsePayload(nodesData));
+                var links = MicrowaveLinkService.links(level).stream().limit(NetworkMapResponsePayload.MAX_LINKS)
+                        .map(link -> new MapMicrowaveData(link.source(), link.target(), link.state(), link.capacityMbps(),
+                                link.nominalCapacityMbps(), link.latencyMs(), link.blocker())).toList();
+                context.reply(new NetworkMapResponsePayload(payload.viewId(), payload.dimension(), nodesData, links));
             }
         });
     }
 
     private static void handleNetworkMapResponse(final com.florentdubut.telecom.network.packet.NetworkMapResponsePayload payload, final IPayloadContext context) {
+        net.minecraft.network.Connection connection = context.connection();
         context.enqueueWork(() -> {
-            net.minecraft.client.gui.screens.Screen screen = net.minecraft.client.Minecraft.getInstance().screen;
+            var minecraft = net.minecraft.client.Minecraft.getInstance();
+            if (minecraft.getConnection() == null || minecraft.getConnection().getConnection() != connection
+                    || minecraft.level == null
+                    || !minecraft.level.dimension().identifier().toString().equals(payload.dimension())) return;
+            net.minecraft.client.gui.screens.Screen screen = minecraft.screen;
             if (screen instanceof com.florentdubut.telecom.client.gui.NetworkMapScreen mapScreen) {
-                mapScreen.receiveData(payload.nodes());
+                mapScreen.receiveData(payload);
             }
         });
     }

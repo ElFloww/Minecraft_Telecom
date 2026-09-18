@@ -800,6 +800,41 @@ class CoverageServiceTest {
         return node;
     }
 
+    @Test
+    void entityRadioChangesInvalidateReadyAndPendingCoverageAndUseUpdatedTraceConfig() {
+        BlockPos pos = new BlockPos(32, 64, 0);
+        NetworkNode node = antenna(pos, G4_700);
+        var entity = new com.florentdubut.telecom.block.entity.AntennaBlockEntity(pos,
+                com.florentdubut.telecom.registry.ModBlocks.ANTENNA.get().defaultBlockState());
+        entity.setEnabledFrequenciesMask(node.getFrequenciesMask());
+        entity.setLevel(level);
+        JsonObject old = ready(request(0));
+        JsonObject pending = snapshot(request(1));
+        String model = CoverageService.modelRevision(level);
+        graph.setDirty(false);
+        var config = new AntennaRadioConfig(1, 0, 0, 50, 50);
+        entity.setRadioConfig(config);
+        assertEquals(config, node.getRadioConfig());
+        assertTrue(graph.isDirty());
+        assertNotEquals(model, CoverageService.modelRevision(level));
+        assertNotEquals(revision(pending), revision(snapshot(request(1))));
+        JsonObject updated = ready(request(0));
+        assertNotEquals(revision(old), revision(updated));
+        float expected = SignalPropagator.calculateSignal(p -> SignalPropagator.Material.AIR, pos,
+                new BlockPos(32, 64, 32), G4_700, config).powerDbm;
+        assertEquals(expected, firstCell(updated).get("powerDbm").getAsFloat(), 1e-5);
+        assertEquals(firstCell(old).get("powerDbm").getAsFloat() + 20, expected, 1e-5);
+        verify(level).sendBlockUpdated(pos, entity.getBlockState(), entity.getBlockState(), 3);
+
+        graph.setDirty(false);
+        entity.setRadioConfig(config);
+        assertFalse(graph.isDirty());
+        assertEquals(revision(updated), revision(snapshot(request(0))));
+        // Bandwidth is part of the source snapshot even though it does not change RF power.
+        entity.setRadioConfig(new AntennaRadioConfig(1, 0, 0, 50, 25));
+        assertNotEquals(revision(updated), revision(snapshot(request(0))));
+    }
+
     private static CoverageService.Request request(int tileX) {
         return new CoverageService.Request(tileX, 0, 64, "64", "all", "all", "all");
     }

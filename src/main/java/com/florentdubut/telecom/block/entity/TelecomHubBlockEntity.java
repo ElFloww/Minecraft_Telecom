@@ -1,5 +1,7 @@
 package com.florentdubut.telecom.block.entity;
 
+import com.florentdubut.telecom.network.NetworkDiagnostics;
+
 import com.florentdubut.telecom.network.NetworkNode;
 import com.florentdubut.telecom.network.TelecomNetworkGraph;
 import net.minecraft.core.BlockPos;
@@ -43,7 +45,7 @@ public class TelecomHubBlockEntity extends BlockEntity {
             TelecomNetworkGraph graph = TelecomNetworkGraph.get(serverLevel);
             if (graph.getNode(worldPosition) == null) {
                 graph.addNode(new NetworkNode(worldPosition, hubType));
-                com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel);
+                com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel, NetworkDiagnostics.Cause.NODE_LOAD);
             }
         }
     }
@@ -52,7 +54,7 @@ public class TelecomHubBlockEntity extends BlockEntity {
         if (level instanceof net.minecraft.server.level.ServerLevel serverLevel) {
             TelecomNetworkGraph graph = TelecomNetworkGraph.get(serverLevel);
             graph.removeNode(worldPosition);
-            com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel);
+            com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel, NetworkDiagnostics.Cause.NODE_REMOVE);
         }
     }
 }

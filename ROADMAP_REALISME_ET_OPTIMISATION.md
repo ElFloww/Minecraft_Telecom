@@ -1,6 +1,6 @@
 # Telecom Mod : construire et utiliser son reseau
 
-Mise a jour : 17 septembre 2026.
+Mise a jour : 18 septembre 2026.
 
 ## 1. Direction du projet
 
@@ -25,17 +25,25 @@ Derniere validation du lot initial : 48 tests JUnit, 4 tests dashboard et 4 Game
 
 ## 3. Ordre de realisation
 
+La couverture calculee, les IP fixes stables et la coherence des debits filaires constituent le socle deja implemente. L'ordre des prochains lots est le suivant :
+
 | Priorite | Objectif | Resultat attendu |
 | --- | --- | --- |
-| 1 | Carte de couverture calculee | Voir ou une antenne couvre reellement le terrain et les zones masquees par les obstacles. |
-| 2 | Fiabilite et debits | Conserver les IP fixes et obtenir des debits coherents, y compris avec plusieurs utilisateurs. |
-| 3 | Construction du reseau fixe | Raccorder une habitation par une chaine fibre complete et des ports identifiables. |
-| 4 | Mobile et Wi-Fi | Configurer ses antennes et points d'acces, puis se deplacer entre leurs couvertures. |
-| 5 | Utilisation | Echanger des messages, utiliser des services internes et commander des equipements distants. |
+| 1 | Antennes configurables et partage radio | Regler secteurs, orientation, inclinaison, puissance et largeur de bande ; repercuter ces reglages sur le smartphone et les cartes, partager la capacite radio et stabiliser le passage entre cellules. |
+| 2 | Faisceaux hertziens entre sites | Relier des sites par des paraboles directionnelles, avec alignement, obstacles, zone de Fresnel simplifiee, capacite partagee, latence, relais et affichage sur la carte. |
+| 3 | Optimisation des reseaux monumentaux | Remplacer les recalculs globaux a chaque modification par des mises a jour locales, regroupees et progressives, sans chargement force de chunks ni interruption du trafic non concerne. |
+| 4 | Ports, brassage et fibres independantes | Identifier les ports et choisir les raccordements ; transporter plusieurs fibres independantes sans connexion automatique aux croisements. |
+| 5 | Chaine FTTH complete | Raccorder une habitation par NRO/OLT -> PM -> PBO -> PTO -> ONT -> box, avec GPON/XGS-PON, partage de capacite et pertes optiques. |
+
+Les lots antennes et faisceaux hertziens s'appuient sur le graphe et les connexions filaires existants, sans attendre les ports independants ni la chaine FTTH. Les ports et le brassage precederont ensuite la chaine FTTH.
+
+**Avancement :** les socles des lots 1 (antennes et partage radio) et 2 (faisceaux hertziens) sont implementes et valides automatiquement. Le prochain lot principal est le **lot 3 : optimisation des reseaux monumentaux**, prioritaire avant les pylones mobiles 3D et les ports independants. Les ports et le brassage restent places avant la chaine FTTH. La recette interactive, les benchmarks et les complements explicites ci-dessous restent ouverts.
+
+Les autres fonctionnalites ouvertes ci-dessous (Wi-Fi, cuivre, services internes, complements des speedtests et outils) restent au programme, sans passer devant ces cinq lots. Les sections suivantes sont organisees par theme ; le tableau ci-dessus definit leur priorite de realisation.
 
 La securite, les tests et l'optimisation accompagnent chaque priorite ; ils ne sont pas repousses a la fin.
 
-## 4. Priorite : couverture calculee sur la carte
+## 4. Couverture calculee sur la carte
 
 ### Fond de carte
 
@@ -59,7 +67,7 @@ Minecraft fournit le terrain et les blocs ; le moteur radio du mod calcule leur 
 - [x] Calculer par defaut a hauteur de reception au-dessus du sol ; permettre une hauteur Y choisie pour examiner un etage, un tunnel ou une zone interieure. Indiquer cette hauteur et la precision de la grille.
 - [x] Au survol, afficher le signal estime, la technologie et l'antenne retenue. Distinguer reception radio et presence d'un chemin vers un serveur si l'antenne n'est plus raccordee.
 - [x] Invalider les calculs concernes apres pose/retrait d'une antenne, modification de ses bandes ou construction/destruction d'obstacles, y compris sans notification des voisins.
-- [ ] Integrer orientation et puissance dans la couverture quand ces reglages seront disponibles.
+- [x] Integrer orientation et puissance dans la couverture quand ces reglages seront disponibles.
 - [ ] Conserver le calque des releves smartphone separement, avec leur date, pour comparer mesures et couverture calculee.
 
 ### Calcul sans ralentir le jeu
@@ -70,7 +78,7 @@ Minecraft fournit le terrain et les blocs ; le moteur radio du mod calcule leur 
 - [x] Conserver le terrain radio 3D observe dans un cache borne et persistant pour calculer aussi a travers les chunks decharges ; garder les donnees chargees prioritaires et les trajets jamais observes inconnus.
 - [ ] Lire le monde uniquement sur le thread serveur ; effectuer les calculs lourds sur des donnees detachees, avec files et caches limites.
 
-**Validation :** un mur ou une montagne modifie la couverture derriere l'obstacle ; retirer le mur actualise la zone ; le smartphone et la carte concordent au meme point, a la meme hauteur et avec les memes reglages. Dezoomer ne doit pas bloquer le serveur.
+**Validation :** un mur ou une montagne modifie la couverture derriere l'obstacle ; retirer le mur actualise la zone ; le smartphone et la carte concordent au meme point, a la meme hauteur et avec les memes reglages et la meme antenne selectionnee. La carte predit la meilleure cellule sans historique ; le telephone applique aussi une hysteresis lors des deplacements. Dezoomer ne doit pas bloquer le serveur.
 
 **Limites du lot actuel :** carte web de l'Overworld, pas souhaite 1/8/16 blocs avec apercu plus grossier au grand dezoom, portee maximale commune de 4 096 blocs, formes complexes simplifiees. Le pas effectif est affiche ; le mode bloc par bloc demande un zoom rapproche. Calcul fractionne (budget cooperatif de 2 ms/tick), 256 points maximum par tuile, parcours partages entre bandes et cache commun aux technologies. Les benchmarks a grande echelle restent a faire.
 
@@ -98,27 +106,55 @@ Un faisceau hertzien est une liaison radio directionnelle point a point, utilise
 Reseau filaire -> Site A [radio FH] ~~~ liaison sans fil ~~~ [radio FH] Site B -> Antenne mobile B
 ```
 
-- [ ] Ajouter une paire de radios/paraboles directionnelles, distinctes des antennes mobiles, a installer et orienter sur les sites A et B. Seuls les raccordements locaux aux equipements restent necessaires.
-- [ ] Permettre l'association des deux extremites et le choix d'un canal compatible ; calculer la qualite selon distance, alignement, frequence et obstacles du monde. Verifier aussi le degagement autour du trajet (zone de Fresnel simplifiee), pas seulement une ligne sans bloc.
-- [ ] Integrer la liaison au graphe avec capacite partagee, latence et etat reel : les utilisateurs de B restent limites par le debit du faisceau et par le reseau en amont de A.
-- [ ] Permettre des relais A -> B -> C pour contourner un obstacle, sans creer de connexion independante au reseau : chaque saut ajoute ses limites et dependances.
-- [ ] Afficher le faisceau sur la carte avec ses extremites, son debit et les obstacles bloquants ; reutiliser les donnees de terrain du moteur radio avec un profil adapte aux liaisons directionnelles.
+- [x] Ajouter une paire de radios/paraboles directionnelles, distinctes des antennes mobiles, a installer et orienter sur les sites A et B. Seuls les raccordements locaux aux equipements restent necessaires.
+- [x] Permettre l'association des deux extremites et le choix d'un canal compatible ; calculer la qualite selon distance, alignement, frequence et obstacles du monde. Verifier aussi le degagement autour du trajet (zone de Fresnel simplifiee), pas seulement une ligne sans bloc.
+- [x] Integrer la liaison au graphe avec capacite partagee, latence et etat reel : les utilisateurs de B restent limites par le debit du faisceau et par le reseau en amont de A.
+- [x] Permettre des relais A -> B -> C pour contourner un obstacle, sans creer de connexion independante au reseau : chaque saut ajoute ses limites et dependances.
+- [x] Afficher le faisceau sur la carte avec ses extremites, son debit et les obstacles bloquants ; reutiliser les donnees de terrain du moteur radio avec un profil adapte aux liaisons directionnelles.
 
 **Validation :** B fournit un service sans cable entre A et B lorsque le faisceau et le chemin amont fonctionnent. Un obstacle ou un desalignement suffisant degrade ou coupe la liaison. Si le faisceau est coupe, B peut encore emettre un signal mobile, mais les services dependants de cette collecte deviennent indisponibles, sauf chemin de secours.
 
+**Lot FH implemente :** bloc `microwave_dish`, recette, modele directionnel et configuration persistante. Association reciproque, 16 canaux, profils 6/11/18/38 GHz (300/600/1000/2000 Mbps nominaux), azimut et elevation avec aide a la visee. Budget radio dependant de la distance et de l'alignement aux deux extremites ; controle conservateur du volume a 60 % de la premiere zone de Fresnel, sans trous entre quelques sondages sur des anneaux. Les obstacles et donnees inconnues interdisent la mise en service du lien.
+
+**Integration :** capacite FH partagee DOWN + UP, latence par saut, contraintes filaires et de collecte conservees. Relais avec deux paraboles interconnectees au site intermediaire. Les recalculs de cables conservent les FH valides ; leurs edges derives ne sont pas sauvegardes comme une preuve de terrain libre. Les trajets longs reprennent au point inconnu au lieu de recommencer a chaque chargement de cache. Un dechargement de chunk correctement capture ne coupe pas une liaison valide ; les mutations reelles invalident les liens concernes. Diagnostics coherents et liens coupes visibles sur les cartes web et en jeu.
+
+**Bornes et securite :** 4096 blocs de portee, 8192 noeuds, 256 paraboles et 128 liaisons/diagnostics par dimension ; budget de propagation de 2 ms par tick et 1048576 operations candidates par trajet, sans chargement force de chunks. Protocole **1.6**. Configurations controlees cote serveur, vues liees a la dimension et a l'entite ouverte, paquets bornes et rafraichissements correles. Les mises a jour ne remplacent pas les brouillons ni une parabole remplacee au meme emplacement.
+
+**Validation du lot :** 704 tests Java, 163 tests JavaScript et 11 GameTests reussis ; build du mod et ressources web reconstruits. Les tests couvrent le transport reel, les supports solides, le mur pose en mode strict, les relais, les coupures de collecte, les voxels interieurs de Fresnel, le dechargement et une liaison de 4096 blocs sur 257 chunks relus depuis le disque avec un cache RAM de 256 entrees. La recette visuelle et multijoueur interactive, la migration d'un monde complet et les benchmarks restent a effectuer. La meteo, les interferences entre FH et la gestion dynamique de canaux ne sont pas simulees.
+
 ### Mobile et reseau local
 
-- [ ] Ajouter secteurs d'antenne, orientation, inclinaison, puissance et largeur de bande ; ces reglages doivent agir sur la reception et sur la carte.
-- [ ] Partager correctement la capacite radio entre les telephones et tenir compte des interferences et de la liaison de collecte.
-- [ ] Ameliorer le choix de l'antenne et le passage entre cellules en mouvement, sans basculements permanents ; distinguer 4G, 5G NSA et SA de facon accessible.
+- [x] Ajouter secteurs d'antenne, orientation, inclinaison, puissance et largeur de bande ; ces reglages doivent agir sur la reception et sur la carte.
+- [x] Partager correctement la capacite radio entre les telephones et tenir compte des interferences et de la liaison de collecte.
+- [x] Ameliorer le choix de l'antenne et le passage entre cellules en mouvement, sans basculements permanents.
+- [ ] Distinguer 4G, 5G NSA et SA de facon accessible.
 - [ ] Permettre des reseaux mobiles nommes et une association simple du telephone a son reseau, sans abonnement payant ni gestion commerciale.
 - [ ] Ajouter switches, ports Ethernet et points d'acces Wi-Fi avec SSID, mot de passe, canaux et attenuation par les murs.
 - [ ] Fournir une configuration IP automatique fonctionnelle, puis des reglages manuels optionnels : DHCP, DNS, IPv6, VLAN et routage simple.
 
+**Lot antennes et partage radio :** reglages persistants (omnidirectionnel ou 1/2/3 secteurs, azimut, inclinaison, puissance et largeur relative), valeurs par defaut compatibles avec les anciennes antennes et propagation commune au smartphone et aux cartes. Allocation par bande avec capacites additives, budget DOWN/UP normalise et contraintes de collecte conservees ; les credits d'arrondi reserves avant allocation evitent la famine du scenario de concurrence ponderee teste. Interferences simplifiees selon les spectres et puissances recus. Scan commun au trafic passif, au telephone et aux tests actifs ; hysteresis de 3 dB / 40 ticks, reselection sur perte de cellule, adaptation des debits et du ping sans changer la session ni le serveur choisi.
+
+**Bornes et limites :** cache de 256 telephones par dimension, scan borne a 8192 noeuds, 128 antennes et 65536 sondages ; depassements explicites, aucune generation forcee de chunks. Repartition proportionnelle fixe entre porteuses, capacite partagee entre secteurs d'un site, emetteurs supposes actifs et granularite d'un Mbps. Pas de modelisation NSA/SA ni de configuration independante par secteur. Les cartes restent des predictions de puissance sans historique d'attachement, pas des cartes de debit garanti. Protocole Minecraft **1.5**, configurations liees a la dimension et actualisations d'antenne correlees a la vue ; le suivi ne remplace pas les modifications en attente.
+
+**Validation du lot :** 596 tests Java, 158 tests JavaScript et 9 GameTests reussis, build du mod et ressources web reconstruits. Tests de persistance, de codecs, de controles serveur, de rotation en monde reel, de partage multibande et d'equite sous 256 flux ajoutes. La recette visuelle, le multijoueur interactif, la migration d'un monde complet et les benchmarks de charge restent a realiser.
+
+### Pylones mobiles modulaires en 3D
+
+Construire un pylone fonctionnel avec deux blocs distincts : un emetteur mobile en haut et des elements de support empilables qui transportent aussi la fibre. Ce lot concerne les antennes relais mobiles, pas les paraboles FH.
+
+- [ ] Donner au bloc emetteur un modele 3D realiste : panneaux verticaux autour d'un chassis central, brides, boitiers et petits cables visibles. Faire correspondre son aspect aux secteurs et a l'orientation configures, tout en conservant les fonctions et reglages des antennes existantes.
+- [ ] Ajouter un bloc pilier/support metallique empilable, plus fin qu'un cube plein, avec raccords visuels continus et gaine ou chemin de cables integre. Le pied utilise ce meme bloc de support, sans imposer un troisieme type de bloc.
+- [ ] Faire fonctionner chaque support comme un segment de fibre standard dans le graphe : raccordement de la fibre au pied, continuite entre les supports et connexion a l'emetteur au sommet, sans colonne de cables supplementaire. Appliquer les memes limites et regles de partage que la fibre standard, sans emission radio par les supports.
+- [ ] Utiliser la position et la hauteur reelles du bloc emetteur pour la couverture du smartphone et des cartes. La rupture d'un support doit couper la collecte qui le traverse ; un signal mobile peut rester present, mais les services deviennent indisponibles sans autre chemin amont.
+- [ ] Ajouter recettes, butin et traductions ; verifier les modeles en jeu, les raccordements, les debits, la conservation des reglages et des IP, ainsi que la sauvegarde et le rechargement du pylone.
+
+**Validation :** construire un pylone de plusieurs supports, raccorder uniquement son pied au reseau et obtenir du service depuis l'emetteur au sommet. Modifier sa hauteur doit agir sur la couverture. Casser puis replacer un support doit interrompre puis retablir la collecte, sans creer de liaison fictive ni renumeroter les equipements restes en place.
+
 ## 6. Utilisation du reseau
 
 - [x] Unifier les debits montants/descendants du modele filaire existant : cables, equipements, collecte des antennes, outils et dashboard utilisent les capacites appliquees par le moteur et les memes compteurs.
-- [ ] Etendre cette coherence aux futurs ports independants et au partage radio par bande, avec les lots de construction et de reseau mobile.
+- [x] Etendre cette coherence au partage radio par bande, avec le lot de reseau mobile.
+- [ ] Etendre cette coherence aux futurs ports independants, avec le lot de construction.
 - [x] Refaire l'interface du speedtest sur telephone, routeur et dashboard : compteur anime, courbes de mesures, progression des phases et bilan avec debits moyens calcules par le moteur.
 - [ ] Completer les statistiques du speedtest : pics globaux, echantillonnage du ping, gigue et pertes mesures par le moteur, au-dela du ping actuel et du maximum observe par chaque interface.
 - [x] Permettre de choisir le serveur de speedtest depuis le telephone, le routeur et le dashboard : liste des serveurs avec nom, identifiant, latence estimee et disponibilite, plus un mode automatique.
@@ -142,6 +178,34 @@ Reseau filaire -> Site A [radio FH] ~~~ liaison sans fil ~~~ [radio FH] Site B -
 **Lot presentation et fluctuations des speedtests :** montee en charge d'une seconde puis variations lentes de demande entre 94 et 100 % du plafond, avant allocation et uniquement pour les tests manuels. Courbes des mesures recues, moyennes des allocations par phase incluant les zeros, maintien des budgets et du partage existant. Les pauses de recalcul ne deviennent pas des mesures nulles ; les resultats manuels ne sont plus remplaces par le trafic passif. Courbes glissantes bornees a 120 points par phase et 256 appareils, duree totale explicite, gel sur donnees anciennes et progression d'echec inconnue si aucune phase n'a ete observee. Le protocole reste en 1.4. Validation : 497 tests Java, 157 tests JavaScript et 8 GameTests reussis ; recette visuelle en jeu et navigateur non effectuee.
 
 ## 7. Qualite et optimisation a maintenir
+
+### Lot prioritaire : optimisation des reseaux monumentaux
+
+**Besoin :** le reseau utilisateur compte deja environ 200 routeurs et 20 antennes et doit pouvoir grandir fortement. Une pose ou une casse locale ne doit plus reconstruire systematiquement tout le reseau.
+
+**Constat dans le code :** `NetworkTracer.recalculateNetwork` repart de chaque equipement pour chaque type de cable, demande des chunks complets avec chargement/generation possible et copie les chemins a chaque progression. Le recalcul est execute en une seule fois sur le thread serveur, avec une pause de l'allocation du trafic pour ce tick. Les modifications d'un meme tick sont deja regroupees, mais pas celles d'une construction continue sur plusieurs ticks. Le poids de chaque cout reste a mesurer.
+
+- [x] Instrumenter les declenchements et mesurer une reference avant optimisation : temps de tick (dont p95/p99), duree des recalculs, blocs parcourus, allocations memoire, chunks demandes et delai avant disponibilite d'une nouvelle liaison. Inclure les recalculs declenches a la connexion d'un joueur.
+- [ ] Enregistrer la position et la nature de chaque pose, casse ou remplacement, plutot qu'un simple indicateur global de recalcul ; couvrir aussi les modifications sans notification des voisins.
+- [ ] Maintenir un index du cablage par chunk et des dependances entre blocs physiques, troncons, jonctions et equipements, afin de retrouver directement les liaisons touchees.
+- [ ] Compresser les chaines sans embranchement en troncons entre points utiles. Conserver longueur, type, capacites, attenuation et dependances physiques pour preserver les debits partages ; eviter les copies completes de chemins a chaque pas de parcours.
+- [ ] Mettre a jour uniquement les troncons et composantes affectes par une extension, une fusion ou une coupure. Ne pas reconstruire les quartiers independants ; invalider les caches de chemins concernes, y compris lorsqu'une nouvelle liaison cree un meilleur trajet.
+- [ ] Regrouper les poses rapprochees dans une file dedupliquee, avec un delai maximal de traitement pour ne pas repousser indefiniment les mises a jour pendant une construction continue.
+- [ ] Decouper les travaux en operations reprenables, avec limites de file, budget de temps et quota d'operations par tick. Viser initialement 1 a 2 ms par tick pour cette tache, a ajuster apres mesures, sans promettre une garantie de temps reel strict.
+- [ ] Retirer immediatement les connexions cassees, maintenir le trafic et les resultats non concernes, puis publier atomiquement les nouveaux raccordements valides. Rejeter les resultats calcules sur une revision devenue obsolete et conserver les IP et les FH non affectes.
+- [ ] Persister le cablage connu et le verifier localement au chargement des chunks, sans les charger ou les generer pour retracer le reseau. Garder les lectures du monde sur le thread serveur ; reserver un eventuel calcul en arriere-plan a des instantanes immuables.
+- [ ] Reserver la reconstruction complete a la migration, a la recuperation ou a une commande explicite, elle aussi progressive ; ne pas relancer tout le reseau a chaque connexion de joueur sans changement de topologie.
+- [ ] Ajouter des benchmarks reproductibles a l'echelle actuelle (200 routeurs, 20 antennes), puis a 1000 et 5000 routeurs : longues lignes, embranchements, boucles, poses en rafale, coupures de dorsale, chunks decharges, cartes ouvertes et trafic simultane. Reevaluer les plafonds existants apres mesures, pas par simple augmentation des limites.
+
+**Etape instrumentation implementee :** `/telecom diagnostics start|status|stop`, admin et par dimension, collecte desactivee par defaut, 1200 ticks / 128 recalculs maximum en memoire. Causes fusionnees sans confondre le timer de connexion avec les demandes immediates, comptage des lectures/demandes de chunks/copies de chemins, allocations du thread si disponibles et delai jusqu'a publication. Les commandes de mesure ne changent pas les demandes en attente, les IP, les FH ni la pause historique du trafic. La prochaine etape est l'enregistrement des positions et de la nature des mutations, avant l'index local du cablage.
+
+**Premiere reference mesuree :** `./gradlew runGameTestServer -PnetworkBaseline=true`, fixture de 200 routeurs / 20 antennes / 20 serveurs / 860 cables, 8 passages de chauffe, 40 coupures/reparations locales et un timer de connexion. Dernier passage du 18 septembre 2026 sur macOS ARM64 / Java 21.0.11 : 222 ticks, p95/p99 12,679/14,511 ms ; 41 recalculs, p95/p99 14,160/59,667 ms. Une coupure locale lit encore 57090 blocs, demande 57330 fois un chunk et alloue environ 6,3 a 6,4 Mo. Les temps varient entre passages, sans garantie de fluidite. Le timer de connexion attend 101 ticks ; GameTest accelere le temps et ce n'est pas une mesure de login multijoueur reel. Details, limites et reproduction dans le README, echantillons dans les logs `NETWORK_BASELINE_SAMPLE`.
+
+**Validation et perimetre :** 18 nouveaux tests Java de diagnostics/ordonnancement, build complet de 722 tests Java et 12 GameTests avec benchmark reussis. Deux tests HTTP ont echoue au premier passage, puis ont reussi seuls et dans le second build complet, sans modification HTTP. Cette etape mesure mais n'optimise pas encore le traceur ; les lectures du monde restent sur le thread serveur. La fixture ne couvre ni trafic/cartes simultanes, ni chunks decharges, ni 1000/5000 routeurs ; le benchmark etendu et les mesures du monde utilisateur restent ouverts.
+
+**Validation :** une modification locale sur une branche ne parcourt pas les quartiers independants et ne suspend pas leur trafic. Les coupures, fusions, debits partages et chemins obtenus restent coherents avec une reconstruction de reference. Une modification de dorsale peut toucher de nombreuses routes : son cout doit etre reparti entre plusieurs ticks, avec progression visible et files bornees. Publier les mesures avant/apres et les limites observees, sans garantir une capacite monumentale sur la seule base du nombre d'equipements.
+
+### Suivi transversal
 
 - [ ] Remplacer les recalculs globaux par des mises a jour locales ; compresser les longs chemins de cables et rechercher seulement les antennes proches.
 - [ ] Conserver le reseau logique lorsque les chunks se dechargent, sans maintenir tout le monde charge ; distinguer cet etat des donnees de terrain indisponibles pour la couverture.

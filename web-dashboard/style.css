@@ -124,6 +124,10 @@ h1 {
 .server { color: var(--color-server); background: var(--color-server); }
 .router { color: var(--color-router); background: var(--color-router); }
 .antenna { color: var(--color-antenna); background: var(--color-antenna); }
+.microwave-dish { flex-shrink: 0; border-radius: 0; transform: rotate(45deg); color: #a78bfa; background: #a78bfa; }
+.microwave-beam { flex-shrink: 0; width: 24px; border-top: 2px dashed #38bdf8; }
+.microwave-details { border-left: 2px dashed #a78bfa; padding-left: 8px; margin: 8px 0; overflow-wrap: anywhere; }
+.microwave-details .info-row { gap: 8px; flex-wrap: wrap; }
 .nro { color: var(--color-nro); background: var(--color-nro); }
 .nra { color: var(--color-nra); background: var(--color-nra); }
 .pm { color: var(--color-pm); background: var(--color-pm); }

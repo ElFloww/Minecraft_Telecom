@@ -39,6 +39,9 @@ public record NetworkScanResponsePayload(boolean found, String name, int signalS
 
     public net.minecraft.network.chat.Component displayName() {
         if (!found) {
+            if (name.equals("Radio scan limit")) {
+                return net.minecraft.network.chat.Component.translatable("message.telecom.radio_limit");
+            }
             if (name.equals("Terrain unavailable")) {
                 return net.minecraft.network.chat.Component.translatable("message.telecom.terrain_unavailable");
             }

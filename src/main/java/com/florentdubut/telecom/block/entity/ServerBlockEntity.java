@@ -1,5 +1,7 @@
 package com.florentdubut.telecom.block.entity;
 
+import com.florentdubut.telecom.network.NetworkDiagnostics;
+
 import com.florentdubut.telecom.registry.ModBlockEntities;
 import com.florentdubut.telecom.network.NetworkNode;
 import com.florentdubut.telecom.network.TelecomNetworkGraph;
@@ -37,7 +39,7 @@ public class ServerBlockEntity extends BlockEntity {
                 // Servers have the root IP
                 node.setIpAddress("192.168.0.1");
                 graph.addNode(node);
-                com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel);
+                com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel, NetworkDiagnostics.Cause.NODE_LOAD);
             }
         }
     }
@@ -46,7 +48,7 @@ public class ServerBlockEntity extends BlockEntity {
         if (level instanceof ServerLevel serverLevel) {
             TelecomNetworkGraph graph = TelecomNetworkGraph.get(serverLevel);
             graph.removeNode(worldPosition);
-            com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel);
+            com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel, NetworkDiagnostics.Cause.NODE_REMOVE);
         }
     }
 }

@@ -66,6 +66,12 @@ class TelecomEphemeralServerTest {
             assertTrue(server.getTickCount() > 0);
             assertNotNull(server.getCommands().getDispatcher().getRoot()
                     .getChild("telecom").getChild("recalculate"));
+            var diagnostics = server.getCommands().getDispatcher().getRoot()
+                    .getChild("telecom").getChild("diagnostics");
+            assertNotNull(diagnostics);
+            for (String action : java.util.List.of("start", "stop", "status")) {
+                assertNotNull(diagnostics.getChild(action));
+            }
             assertTrue(TelecomMod.TELECOM_TAB.get().getIconItem().is(ModItems.SMARTPHONE.get()));
             // 21.11.42 deliberately loads no levels: this is not a world-placement test.
             assertNull(server.overworld());
@@ -83,6 +89,7 @@ class TelecomEphemeralServerTest {
                     Map.entry("router", "router"), Map.entry("router_lite", "router"),
                     Map.entry("router_max", "router"), Map.entry("router_pro", "router"),
                     Map.entry("server", "server"), Map.entry("antenna", "antenna"),
+                    Map.entry("microwave_dish", "microwave_dish"),
                     Map.entry("nro", "telecom_hub"), Map.entry("nra", "telecom_hub"),
                     Map.entry("pm", "telecom_hub"), Map.entry("sr", "telecom_hub"));
             assertEquals(expectedTypes.size(), ModBlocks.BLOCKS.getEntries().size());

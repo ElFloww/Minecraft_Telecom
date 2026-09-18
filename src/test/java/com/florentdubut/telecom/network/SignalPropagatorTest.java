@@ -34,6 +34,72 @@ class SignalPropagatorTest {
     private static final TelecomFrequency FREQUENCY = G2_900;
 
     @Test
+    void defaultConfigurationPreservesEveryBandAndSharedTraceResults() {
+        for (Material material : List.of(AIR, SOLID, WATER, TRANSPARENT, UNKNOWN)) {
+            BlockPos target = SOURCE.offset(12, -3, 4);
+            TerrainSampler sampler = pos -> material;
+            MultiTrace legacy = new MultiTrace(SOURCE, target, List.of(TelecomFrequency.values()));
+            MultiTrace configured = new MultiTrace(SOURCE, target, List.of(TelecomFrequency.values()), AntennaRadioConfig.DEFAULT);
+            while (!legacy.advance(sampler, 2, Long.MAX_VALUE)) { }
+            while (!configured.advance(sampler, 2, Long.MAX_VALUE)) { }
+            for (TelecomFrequency frequency : TelecomFrequency.values()) {
+                SignalResult old = calculateSignal(sampler, SOURCE, target, frequency);
+                SignalResult result = calculateSignal(sampler, SOURCE, target, frequency, AntennaRadioConfig.DEFAULT);
+                assertEquals(old.powerDbm, result.powerDbm);
+                assertEquals(old.known, result.known);
+                assertEquals(old.powerDbm, configured.results().get(frequency.ordinal()).powerDbm);
+                assertEquals(old.known, configured.results().get(frequency.ordinal()).known);
+                assertEquals(legacy.results().get(frequency.ordinal()).powerDbm,
+                        configured.results().get(frequency.ordinal()).powerDbm);
+            }
+            assertEquals(legacy.visitedChunks(), configured.visitedChunks());
+        }
+        Level level = client(Blocks.AIR.defaultBlockState());
+        assertEquals(calculateSignal(level, SOURCE, SOURCE.south(10), G4_700).powerDbm,
+                calculateSignal(level, SOURCE, SOURCE.south(10), G4_700, AntennaRadioConfig.DEFAULT).powerDbm);
+    }
+
+    @Test
+    void configurationAppliesBeforeFloorAndEarlyStopsWithoutChangingUnknownOrRangeRules() {
+        var boosted = new AntennaRadioConfig(0, 0, 0, 50, 100);
+        BlockPos distant = SOURCE.south(4000);
+        TerrainSampler unknownInterior = pos -> pos.equals(SOURCE) || pos.equals(distant) ? AIR : UNKNOWN;
+        assertTrue(calculateSignal(unknownInterior, SOURCE, distant, G5_26000).known);
+        assertFalse(calculateSignal(unknownInterior, SOURCE, distant, G5_26000, boosted).known,
+                "Boost must be applied before a weak free-space band is stopped");
+
+        BlockPos target = SOURCE.south(1000);
+        TerrainSampler missing = pos -> pos.equals(SOURCE) || pos.equals(target) ? AIR : UNKNOWN;
+        var backwards = new AntennaRadioConfig(1, 180, 0, 30, 100);
+        assertFalse(calculateSignal(missing, SOURCE, target, G2_900).known);
+        assertTrue(calculateSignal(missing, SOURCE, target, G2_900, backwards).known);
+        assertEquals(MIN_SIGNAL, calculateSignal(missing, SOURCE, target, G2_900, backwards).powerDbm);
+        assertFalse(calculateSignal(pos -> UNKNOWN, SOURCE, target, G2_900, backwards).known);
+        assertEquals(MIN_SIGNAL, calculateSignal(pos -> SOLID, SOURCE, SOURCE.south(100), G2_900, boosted).powerDbm,
+                "Boost cannot resurrect a floored result after tracing");
+        SignalResult outside = calculateSignal(pos -> fail("Out-of-range terrain read"), SOURCE,
+                SOURCE.south(MAX_RANGE + 1), G2_900, boosted);
+        assertTrue(outside.known);
+        assertEquals(MIN_SIGNAL, outside.powerDbm);
+        float baseline = calculateSignal(pos -> AIR, SOURCE, SOURCE.south(10), G4_700).powerDbm;
+        assertEquals(baseline + 20, calculateSignal(pos -> AIR, SOURCE, SOURCE.south(10), G4_700, boosted).powerDbm, 1e-5);
+    }
+
+    @Test
+    void configuredMultiTraceStillSamplesTerrainOnceForAllBands() {
+        var config = new AntennaRadioConfig(3, 25, 10, 45, 50);
+        BlockPos target = SOURCE.south(12);
+        AtomicInteger probes = new AtomicInteger();
+        MultiTrace trace = new MultiTrace(SOURCE, target, List.of(TelecomFrequency.values()), config);
+        while (!trace.advance(pos -> { probes.incrementAndGet(); return AIR; }, 1, Long.MAX_VALUE)) { }
+        assertEquals(13, probes.get());
+        for (TelecomFrequency frequency : TelecomFrequency.values()) {
+            assertEquals(calculateSignal(pos -> AIR, SOURCE, target, frequency, config).powerDbm,
+                    trace.results().get(frequency.ordinal()).powerDbm);
+        }
+    }
+
+    @Test
     void classifiesAirStoneWaterGlassLeavesAndPermeableBlocks() {
         float air = signal(client(Blocks.AIR.defaultBlockState()), SOURCE.east(4));
         float stone = signal(client(Blocks.STONE.defaultBlockState()), SOURCE.east(4));

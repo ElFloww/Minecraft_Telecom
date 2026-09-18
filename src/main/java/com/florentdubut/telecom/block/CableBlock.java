@@ -1,5 +1,7 @@
 package com.florentdubut.telecom.block;
 
+import com.florentdubut.telecom.network.NetworkDiagnostics;
+
 import com.florentdubut.telecom.block.entity.CableBlockEntity;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.Level;
@@ -86,6 +88,7 @@ public class CableBlock extends Block implements EntityBlock {
             if (neighborState.getBlock() instanceof com.florentdubut.telecom.block.RouterBlock)        nodeType = com.florentdubut.telecom.network.NetworkNode.NodeType.ROUTER;
             else if (neighborState.getBlock() instanceof com.florentdubut.telecom.block.ServerBlock)   nodeType = com.florentdubut.telecom.network.NetworkNode.NodeType.SERVER;
             else if (neighborState.getBlock() instanceof com.florentdubut.telecom.block.AntennaBlock)  nodeType = com.florentdubut.telecom.network.NetworkNode.NodeType.ANTENNA;
+            else if (neighborState.getBlock() instanceof com.florentdubut.telecom.block.MicrowaveDishBlock) nodeType = com.florentdubut.telecom.network.NetworkNode.NodeType.MICROWAVE_DISH;
             else if (neighborState.getBlock() instanceof com.florentdubut.telecom.block.TelecomHubBlock hub) nodeType = hub.getHubType();
             if (nodeType == null) return true;
 
@@ -136,7 +139,7 @@ public class CableBlock extends Block implements EntityBlock {
         super.onPlace(state, level, pos, oldState, isMoving);
         // onPlace precedes block entity creation; schedule from the actual topology change, not onLoad.
         if (!oldState.is(state.getBlock()) && level instanceof net.minecraft.server.level.ServerLevel serverLevel) {
-            com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel);
+            com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel, NetworkDiagnostics.Cause.CABLE_PLACE);
         }
     }
 

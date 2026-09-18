@@ -30,7 +30,8 @@ public class NetworkToolItem extends Item {
         if (state.is(ModBlocks.COPPER_CABLE.get()) || state.is(ModBlocks.FIBER_CABLE.get()) ||
             state.is(ModBlocks.MEDIUM_FIBER_CABLE.get()) || state.is(ModBlocks.BIG_FIBER_CABLE.get()) ||
             state.getBlock() instanceof com.florentdubut.telecom.block.TelecomHubBlock ||
-            state.getBlock() instanceof com.florentdubut.telecom.block.RouterBlock || state.is(ModBlocks.SERVER.get()) || state.is(ModBlocks.ANTENNA.get())) {
+            state.getBlock() instanceof com.florentdubut.telecom.block.RouterBlock || state.is(ModBlocks.SERVER.get()) || state.is(ModBlocks.ANTENNA.get()) ||
+            state.is(ModBlocks.MICROWAVE_DISH.get())) {
             
             ServerLevel serverLevel = (ServerLevel) level;
             TelecomNetworkGraph graph = TelecomNetworkGraph.get(serverLevel);

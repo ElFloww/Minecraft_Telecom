@@ -58,7 +58,12 @@ public class SignalPropagator {
     }
 
     public static SignalResult calculateSignal(Level level, BlockPos source, BlockPos target, TelecomFrequency freq) {
-        Trace trace = new Trace(source, target, freq);
+        return calculateSignal(level, source, target, freq, AntennaRadioConfig.DEFAULT);
+    }
+
+    public static SignalResult calculateSignal(Level level, BlockPos source, BlockPos target,
+                                               TelecomFrequency freq, AntennaRadioConfig config) {
+        Trace trace = new Trace(source, target, freq, config);
         while (!trace.advance(level, 256, Long.MAX_VALUE)) {
             // Synchronous callers use exactly the same bounded steps as progressive callers.
         }
@@ -67,7 +72,12 @@ public class SignalPropagator {
 
     public static SignalResult calculateSignal(TerrainSampler sampler, BlockPos source, BlockPos target,
                                                TelecomFrequency freq) {
-        Trace trace = new Trace(source, target, freq);
+        return calculateSignal(sampler, source, target, freq, AntennaRadioConfig.DEFAULT);
+    }
+
+    public static SignalResult calculateSignal(TerrainSampler sampler, BlockPos source, BlockPos target,
+                                               TelecomFrequency freq, AntennaRadioConfig config) {
+        Trace trace = new Trace(source, target, freq, config);
         while (!trace.advance(sampler, 256, Long.MAX_VALUE)) {
         }
         return trace.result();
@@ -78,7 +88,11 @@ public class SignalPropagator {
         private final MultiTrace trace;
 
         public Trace(BlockPos source, BlockPos target, TelecomFrequency frequency) {
-            trace = new MultiTrace(source, target, List.of(frequency));
+            this(source, target, frequency, AntennaRadioConfig.DEFAULT);
+        }
+
+        public Trace(BlockPos source, BlockPos target, TelecomFrequency frequency, AntennaRadioConfig config) {
+            trace = new MultiTrace(source, target, List.of(frequency), config);
         }
 
         public boolean advance(Level level, int maxSamples, long deadlineNanos) {
@@ -126,6 +140,12 @@ public class SignalPropagator {
         private List<SignalResult> results;
 
         public MultiTrace(BlockPos source, BlockPos target, List<TelecomFrequency> frequencies) {
+            this(source, target, frequencies, AntennaRadioConfig.DEFAULT);
+        }
+
+        public MultiTrace(BlockPos source, BlockPos target, List<TelecomFrequency> frequencies,
+                          AntennaRadioConfig config) {
+            Objects.requireNonNull(config);
             this.source = source.immutable();
             this.target = target.immutable();
             this.frequencies = List.copyOf(frequencies);
@@ -147,9 +167,10 @@ public class SignalPropagator {
             x = source.getX();
             y = source.getY();
             z = source.getZ();
+            double adjustment = config.signalAdjustmentDb(this.source, this.target);
             for (int i = 0; i < power.length; i++) {
                 power[i] = distance > MAX_RANGE ? MIN_SIGNAL
-                        : -(20 * Math.log10(Math.max(1, distance))
+                        : adjustment - (20 * Math.log10(Math.max(1, distance))
                         + 20 * Math.log10(this.frequencies.get(i).getFrequencyMhz()) - 27.55);
             }
             if (distance > MAX_RANGE) {

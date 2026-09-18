@@ -16,7 +16,7 @@ import static org.mockito.Mockito.*;
 class CapacityModelTest {
     @Test
     void edgeNominalsAndEffectiveCopperAreBoundedWithoutOverflowOrInflation() {
-        int[] nominals = {1000, 10_000, 100_000, 1_000_000};
+        int[] nominals = {1000, 10_000, 100_000, 1_000_000, 2000};
         for (NetworkEdge.EdgeType type : NetworkEdge.EdgeType.values()) {
             assertEquals(nominals[type.ordinal()], type.nominalBandwidthMbps());
             assertEquals(100, edge(type, 100, 0).getBandwidthMax());
@@ -39,7 +39,7 @@ class CapacityModelTest {
             int expected = switch (type) {
                 case SERVER, NRO, ANTENNA -> 1_000_000;
                 case NRA, PM -> 100_000;
-                case SR -> 10_000;
+                case SR, MICROWAVE_DISH -> 10_000;
                 case ROUTER, PHONE -> 1000;
             };
             NetworkNode node = new NetworkNode(BlockPos.ZERO, type);
@@ -162,6 +162,8 @@ class CapacityModelTest {
         graph.addNode(new NetworkNode(BlockPos.ZERO, NetworkNode.NodeType.NRO));
         graph.addNode(new NetworkNode(BlockPos.ZERO.east(), NetworkNode.NodeType.SERVER));
         graph.addEdge(edge(NetworkEdge.EdgeType.FIBER, 100, 1));
+        NetworkEdge microwave = NetworkEdge.microwave(BlockPos.ZERO, BlockPos.ZERO.east(), 2000, 500, 1, 2);
+        graph.setMicrowaveEdges(List.of(microwave));
         graph.ensureFixedAddresses();
         String address = graph.getNode(BlockPos.ZERO).getIpAddress();
         ServerLevel level = mock(ServerLevel.class);
@@ -172,10 +174,13 @@ class CapacityModelTest {
                     .thenReturn(true);
             tracer.when(() -> NetworkTracer.recalculateNetwork(level)).thenCallRealMethod();
             NetworkTracer.recalculateNetwork(level);
+            tracer.verify(() -> NetworkTracer.isCableCompatibleWithNodes(eq(NetworkEdge.EdgeType.MICROWAVE), any(), any()), never());
         }
-        assertEquals(1, graph.getEdges().size());
-        assertEquals(100, graph.getEdges().getFirst().getBandwidthMax());
-        assertTrue(graph.getEdges().getFirst().getPathBlocks().isEmpty());
+        assertEquals(2, graph.getEdges().size());
+        assertTrue(graph.getEdges().contains(microwave));
+        NetworkEdge cable = graph.getEdges().stream().filter(e -> e.getType() == NetworkEdge.EdgeType.FIBER).findFirst().orElseThrow();
+        assertEquals(100, cable.getBandwidthMax());
+        assertTrue(cable.getPathBlocks().isEmpty());
         assertEquals(address, graph.getNode(BlockPos.ZERO).getIpAddress());
     }
 

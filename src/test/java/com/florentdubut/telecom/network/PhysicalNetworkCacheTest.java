@@ -99,12 +99,17 @@ class PhysicalNetworkCacheTest {
     @Test
     void overQuotaDuringTrafficFailsExplicitlyAndClearsInstantaneousNotResults() {
         graph.addEdge(edge(List.of(CABLE)));
-        var session = graph.startSpeedtest(SOURCE, "one", 100, 100, 0, 1, 1000, false, null, "").session();
+        // Keep radio enabled but above the 100-Mbps wired ceiling under test.
+        int mask = 1 << TelecomFrequency.G5_3500.ordinal();
+        graph.getNode(SOURCE).setFrequenciesMask(mask);
+        var session = graph.startSpeedtest(SOURCE, "one", 100, 100, 0, mask, 1000, false, null, "").session();
         assertNotNull(session);
         for (int i = 0; i < 60; i++) session.tick();
         graph.tickTraffic(level);
         int allocated = session.getActualBandwidth();
+        assertTrue(allocated > 0);
         assertEquals(session.getRequestedBandwidth(100), allocated);
+        assertEquals(allocated, graph.getAntennaUtilization(SOURCE).get(TelecomFrequency.G5_3500).actualMbps());
         graph.addEdge(edge(Collections.nCopies(TelecomNetworkGraph.MAX_PHYSICAL_PATH_REFERENCES, CABLE)));
         assertDoesNotThrow(() -> graph.tickTraffic(level));
         assertEquals("network_limit", session.getFailureReason());
@@ -113,7 +118,7 @@ class PhysicalNetworkCacheTest {
         assertEquals(allocated, session.getFinalDownBw());
         assertEquals(0, graph.getTotalBandwidthDown());
         assertEquals(0, graph.getActualBlockUsageDown(CABLE));
-        assertTrue(graph.getAntennaUtilization(SOURCE).isEmpty());
+        assertEquals(0, graph.getAntennaUtilization(SOURCE).get(TelecomFrequency.G5_3500).actualMbps());
         assertNull(graph.getSessionByDeviceId(session.getDeviceId()));
     }
 

@@ -10,6 +10,8 @@ public class NetworkNode {
     private int currentUsageDown = 0;
     private int currentUsageUp = 0;
     private int frequenciesMask = 0;
+    private AntennaRadioConfig radioConfig = AntennaRadioConfig.DEFAULT;
+    private MicrowaveConfig microwaveConfig = MicrowaveConfig.DEFAULT;
     private int capacityDown;
     private int capacityUp;
     private boolean capacitySyncRequired;
@@ -27,6 +29,18 @@ public class NetworkNode {
         return frequenciesMask;
     }
 
+    public AntennaRadioConfig getRadioConfig() { return radioConfig; }
+
+    public void setRadioConfig(AntennaRadioConfig config) {
+        radioConfig = java.util.Objects.requireNonNull(config);
+    }
+
+    public MicrowaveConfig getMicrowaveConfig() { return microwaveConfig; }
+
+    public void setMicrowaveConfig(MicrowaveConfig config) {
+        microwaveConfig = java.util.Objects.requireNonNull(config);
+    }
+
     public void setFrequenciesMask(int frequenciesMask) {
         this.frequenciesMask = frequenciesMask;
     }
@@ -39,13 +53,14 @@ public class NetworkNode {
         NRO,
         NRA,
         PM,
-        SR;
+        SR,
+        MICROWAVE_DISH;
 
         public int defaultCapacityMbps() {
             return switch (this) {
                 case SERVER, NRO, ANTENNA -> 1_000_000;
                 case NRA, PM -> 100_000;
-                case SR -> 10_000;
+                case SR, MICROWAVE_DISH -> 10_000;
                 case ROUTER, PHONE -> 1_000;
             };
         }

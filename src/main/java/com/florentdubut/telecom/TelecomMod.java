@@ -46,6 +46,7 @@ public class TelecomMod {
                 output.accept(ModItems.ROUTER_MAX.get());
                 output.accept(ModItems.ROUTER_PRO.get());
                 output.accept(ModItems.ANTENNA.get());
+                output.accept(ModItems.MICROWAVE_DISH.get());
                 output.accept(ModItems.SMARTPHONE.get());
                 output.accept(ModItems.NETWORK_TOOL.get());
                 output.accept(ModItems.NETWORK_MAP.get());

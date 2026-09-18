@@ -921,6 +921,77 @@ class TelecomHttpServerTest {
     }
 
     @Test
+    void antennaSnapshotUsesConfiguredRadioCapacityRatherThanBackhaul() throws Exception {
+        ServerLevel level = mock(ServerLevel.class);
+        TelecomNetworkGraph graph = new TelecomNetworkGraph();
+        NetworkNode node = new NetworkNode(new BlockPos(1, 64, 1), NetworkNode.NodeType.ANTENNA);
+        var frequency = com.florentdubut.telecom.network.TelecomFrequency.G4_1800;
+        node.setFrequenciesMask(1 << frequency.ordinal());
+        node.setRadioConfig(new com.florentdubut.telecom.network.AntennaRadioConfig(3, 0, 0, 30, 50));
+        graph.addNode(node);
+        try (var graphs = mockStatic(TelecomNetworkGraph.class)) {
+            graphs.when(() -> TelecomNetworkGraph.get(level)).thenReturn(graph);
+            var snapshot = TelecomHttpServer.class.getDeclaredMethod("networkSnapshot", ServerLevel.class, long.class);
+            snapshot.setAccessible(true);
+            var json = JsonParser.parseString((String) snapshot.invoke(server, level, Long.MAX_VALUE)).getAsJsonObject();
+            var antenna = json.getAsJsonArray("nodes").get(0).getAsJsonObject();
+            var radio = antenna.getAsJsonArray("frequencies").get(0).getAsJsonObject();
+            assertEquals(75, radio.get("max").getAsInt());
+            assertEquals(10, radio.get("widthMhz").getAsDouble());
+            assertEquals("AIRTIME_DOWN_EQUIVALENT", radio.get("usageMode").getAsString());
+            assertEquals(0, radio.get("usage").getAsInt());
+            assertEquals(node.getCapacityDown(), antenna.get("capacityDown").getAsInt());
+        }
+    }
+
+    @Test
+    void microwaveSnapshotSeparatesFailedDiagnosticsFromEdgesAndPreservesIdsAndConfiguration() throws Exception {
+        ServerLevel level = mock(ServerLevel.class);
+        TelecomNetworkGraph graph = mock(TelecomNetworkGraph.class);
+        BlockPos source = new BlockPos(-29999999, 64, 29999999), target = source.east(100);
+        var config = new com.florentdubut.telecom.network.MicrowaveConfig(target, 2, 18, 90, 5, true);
+        NetworkNode dish = new NetworkNode(source, NetworkNode.NodeType.MICROWAVE_DISH);
+        dish.setMicrowaveConfig(config);
+        when(graph.getNodes()).thenReturn(java.util.List.of(dish));
+        var cable = new NetworkEdge(source, target, 1000, 100, NetworkEdge.EdgeType.FIBER, java.util.List.of());
+        when(graph.getEdges()).thenReturn(java.util.List.of(cable));
+        var blocker = source.east(50);
+        var broken = new com.florentdubut.telecom.network.MicrowaveLinkService.LinkStatus(source, target, "blocked", 0, 1000, 2, blocker);
+        try (var graphs = mockStatic(TelecomNetworkGraph.class);
+             var microwave = mockStatic(com.florentdubut.telecom.network.MicrowaveLinkService.class)) {
+            graphs.when(() -> TelecomNetworkGraph.get(level)).thenReturn(graph);
+            microwave.when(() -> com.florentdubut.telecom.network.MicrowaveLinkService.links(level))
+                    .thenReturn(java.util.List.of(broken));
+            var snapshot = TelecomHttpServer.class.getDeclaredMethod("networkSnapshot", ServerLevel.class, long.class);
+            snapshot.setAccessible(true);
+            var json = JsonParser.parseString((String) snapshot.invoke(server, level, Long.MAX_VALUE)).getAsJsonObject();
+            assertEquals(1, json.getAsJsonArray("edges").size());
+            assertEquals("FIBER", json.getAsJsonArray("edges").get(0).getAsJsonObject().get("type").getAsString());
+            var nodeConfig = json.getAsJsonArray("nodes").get(0).getAsJsonObject().getAsJsonObject("microwave");
+            assertTrue(nodeConfig.get("peer").getAsJsonPrimitive().isString());
+            assertEquals(Long.toString(target.asLong()), nodeConfig.get("peer").getAsString());
+            assertEquals(18, nodeConfig.get("frequencyGhz").getAsInt());
+            assertTrue(nodeConfig.get("enabled").getAsBoolean());
+            var link = json.getAsJsonArray("microwaveLinks").get(0).getAsJsonObject();
+            assertTrue(link.get("source").getAsJsonPrimitive().isString());
+            assertEquals(Long.toString(source.asLong()), link.get("source").getAsString());
+            assertEquals(Long.toString(target.asLong()), link.get("target").getAsString());
+            assertEquals("blocked", link.get("state").getAsString());
+            assertEquals(0, link.get("capacityMbps").getAsInt());
+            assertEquals(2, link.get("latencyMs").getAsDouble());
+            assertEquals(blocker.getX(), link.getAsJsonObject("blocker").get("x").getAsInt());
+            assertEquals(target.getZ(), link.getAsJsonObject("targetPos").get("z").getAsInt());
+            var unpaired = new com.florentdubut.telecom.network.MicrowaveLinkService.LinkStatus(source, source, "unpaired", 0, 1000, 0, null);
+            microwave.when(() -> com.florentdubut.telecom.network.MicrowaveLinkService.links(level))
+                    .thenReturn(java.util.Collections.nCopies(129, unpaired));
+            json = JsonParser.parseString((String) snapshot.invoke(server, level, Long.MAX_VALUE)).getAsJsonObject();
+            assertEquals(128, json.getAsJsonArray("microwaveLinks").size());
+            assertTrue(json.getAsJsonArray("microwaveLinks").get(0).getAsJsonObject().get("blocker").isJsonNull());
+            verify(level, never()).getBlockEntity(any());
+        }
+    }
+
+    @Test
     void speedtestDestinationFormatsAndCatalogueRoutesAreValidatedBeforeScheduling() throws Exception {
         MinecraftServer minecraft = mock(MinecraftServer.class);
         var jobs = queueWorldServer(minecraft);

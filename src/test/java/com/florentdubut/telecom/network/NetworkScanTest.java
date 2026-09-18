@@ -53,6 +53,7 @@ class NetworkScanTest {
 
     @AfterEach
     void tearDown() {
+        RadioAccessService.clear();
         graphs.close();
         if (server != null) RadioTerrainCache.stop(server);
     }
@@ -151,6 +152,98 @@ class NetworkScanTest {
             when(antenna.isFrequencyEnabled(frequency)).thenReturn(true);
             when(level.getBlockEntity(position)).thenReturn(antenna);
         }
+    }
+
+    @Test
+    void configurationChangesInvalidatePhoneCacheWithoutChangingTheIp() throws Exception {
+        addAntenna(NEAR, TelecomFrequency.G4_700, true);
+        var initial = scan();
+        graph.getNode(NEAR).setRadioConfig(new AntennaRadioConfig(0, 0, 0, 20, 50));
+        CoverageService.invalidateAntennas(level);
+        var configured = scan();
+        assertEquals(initial.signalStrength() - 10, configured.signalStrength());
+        assertTrue(configured.maxDown() < initial.maxDown());
+        assertEquals(initial.ipAddress(), configured.ipAddress());
+        graph.getNode(NEAR).setFrequenciesMask(0);
+        CoverageService.invalidateAntennas(level);
+        assertFalse(scan().found());
+    }
+
+    @Test
+    void configuredPhoneAndSharedTraceAgreeAtSameReceptionHeight() throws Exception {
+        addAntenna(NEAR, TelecomFrequency.G4_700, true);
+        var config = new AntennaRadioConfig(1, 90, 10, 35, 100);
+        graph.getNode(NEAR).setRadioConfig(config);
+        var trace = new SignalPropagator.MultiTrace(NEAR, player.blockPosition().above(),
+                java.util.List.of(TelecomFrequency.G4_700), config);
+        while (!trace.advance(level, 256, Long.MAX_VALUE)) { }
+        assertEquals((int) trace.results().getFirst().powerDbm, scan().signalStrength());
+    }
+
+    @Test
+    void scanCachesOnlyOneSecondAndLogoutClearsAttachment() throws Exception {
+        addAntenna(NEAR, TelecomFrequency.G4_700, true);
+        var initial = RadioAccessService.scan(player);
+        clearInvocations(level, chunks);
+        when(level.getGameTime()).thenReturn(19L);
+        assertSame(initial, RadioAccessService.scan(player));
+        verify(level, never()).getBlockEntity(any());
+        when(level.getGameTime()).thenReturn(20L);
+        assertNotSame(initial, RadioAccessService.scan(player));
+        RadioAccessService.forget(player.getUUID());
+        verify(level).getBlockEntity(NEAR);
+        clearInvocations(level);
+        RadioAccessService.scan(player);
+        verify(level).getBlockEntity(NEAR);
+    }
+
+    @Test
+    void sameBandInterferenceReducesCapacityWithoutChangingReceivedPower() throws Exception {
+        addAntenna(NEAR, TelecomFrequency.G4_700, true);
+        var alone = scan();
+        addAntenna(new BlockPos(32, 66, 33), TelecomFrequency.G4_700, true);
+        var sharedSpectrum = scan();
+        assertEquals(alone.signalStrength(), sharedSpectrum.signalStrength());
+        assertTrue(sharedSpectrum.maxDown() < alone.maxDown());
+    }
+
+    @Test
+    void movingOutOfCoverageCannotReuseAnAuthoritativeOldScan() throws Exception {
+        addAntenna(NEAR, TelecomFrequency.G4_700, true);
+        assertTrue(scan().found());
+        when(player.blockPosition()).thenReturn(NEAR.offset(SignalPropagator.MAX_RANGE + 1, 0, 0));
+        assertFalse(scan().found());
+    }
+
+    @Test
+    void cachedScansDoNotEnumerateTheGraphAgain() {
+        addAntenna(NEAR, TelecomFrequency.G4_700, true);
+        graph = spy(graph);
+        graphs.when(() -> TelecomNetworkGraph.get(level)).thenReturn(graph);
+        var initial = RadioAccessService.scan(player);
+        clearInvocations(graph);
+        assertSame(initial, RadioAccessService.scan(player));
+        verify(graph, never()).getNodes();
+    }
+
+    @Test
+    void default2gHasUsableIntegerDownloadAndUpload() throws Exception {
+        addAntenna(NEAR, TelecomFrequency.G2_900, true);
+        var scan = scan();
+        assertTrue(scan.found());
+        assertEquals(1, scan.maxDown());
+        assertEquals(1, scan.maxUp());
+    }
+
+    @Test
+    void tooManySourcesReturnAnExplicitLimitInsteadOfAPartialInterferenceEstimate() throws Exception {
+        addAntenna(NEAR, TelecomFrequency.G4_700, true);
+        assertTrue(scan().found());
+        for (int i = 0; i < 129; i++) addAntenna(new BlockPos(160 + i, 70, 32), TelecomFrequency.G4_700, false);
+        var scan = scan();
+        assertFalse(scan.found());
+        assertEquals("Radio scan limit", scan.name());
+        assertEquals(0, scan.maxDown());
     }
 
     private NetworkScanResponsePayload scan() throws Exception {

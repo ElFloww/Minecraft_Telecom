@@ -24,6 +24,9 @@ public class ModBlockEntities {
     public static final java.util.function.Supplier<BlockEntityType<AntennaBlockEntity>> ANTENNA_BE = BLOCK_ENTITIES.register("antenna",
             () -> new BlockEntityType<>(AntennaBlockEntity::new, ModBlocks.ANTENNA.get()));
 
+    public static final java.util.function.Supplier<BlockEntityType<com.florentdubut.telecom.block.entity.MicrowaveDishBlockEntity>> MICROWAVE_DISH_BE = BLOCK_ENTITIES.register("microwave_dish",
+            () -> new BlockEntityType<>(com.florentdubut.telecom.block.entity.MicrowaveDishBlockEntity::new, ModBlocks.MICROWAVE_DISH.get()));
+
     public static final java.util.function.Supplier<BlockEntityType<com.florentdubut.telecom.block.entity.ServerBlockEntity>> SERVER_BE = BLOCK_ENTITIES.register("server",
             () -> new BlockEntityType<>(com.florentdubut.telecom.block.entity.ServerBlockEntity::new, ModBlocks.SERVER.get()));
 

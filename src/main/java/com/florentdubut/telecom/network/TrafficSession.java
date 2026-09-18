@@ -3,6 +3,7 @@ package com.florentdubut.telecom.network;
 import net.minecraft.core.BlockPos;
 
 import java.util.UUID;
+import java.util.Map;
 
 public class TrafficSession {
     public enum SessionState {
@@ -17,7 +18,7 @@ public class TrafficSession {
     private final UUID sessionId;
     private final String deviceId;
     private UUID ownerId;
-    private final BlockPos sourcePos;
+    private BlockPos sourcePos;
     private final BlockPos destPos;
     private SessionState state;
     private int ticksElapsed;
@@ -34,6 +35,10 @@ public class TrafficSession {
     // For mobile sessions: which antenna and frequencies are this session going through
     private BlockPos antennaPos = null;
     private int frequenciesMask = 0;
+    private Map<TelecomFrequency, Integer> radioDownCaps = Map.of();
+    private Map<TelecomFrequency, Integer> radioUpCaps = Map.of();
+    private boolean radioCapsConfigured;
+    private String radioTechnology = "";
     private String failureReason = "";
 
     public TrafficSession(BlockPos sourcePos, BlockPos destPos, String clientIp, int targetDownBw, int targetUpBw, int totalTicksPerPhase, boolean isPassive, String deviceId) {
@@ -136,7 +141,19 @@ public class TrafficSession {
 
     int getRequestedBandwidth(int hardwareMax) {
         if (state != SessionState.DOWNLOAD && state != SessionState.UPLOAD) return 0;
-        int ceiling = Math.max(0, Math.min(state == SessionState.UPLOAD ? targetUpBw : targetDownBw, hardwareMax));
+        // A real manual mobile test starts with scan maxima, not a permanent user demand limit.
+        // Passive traffic and synthetic/wired fixtures retain their explicit original targets.
+        boolean adaptiveMobile = radioCapsConfigured && !isPassive && ownerId != null && !isRouter();
+        int target = adaptiveMobile ? hardwareMax : state == SessionState.UPLOAD ? targetUpBw : targetDownBw;
+        int ceiling = Math.max(0, Math.min(target, hardwareMax));
+        if (radioCapsConfigured) {
+            Map<TelecomFrequency, Integer> caps = state == SessionState.UPLOAD ? radioUpCaps : radioDownCaps;
+            long total = 0;
+            for (var entry : caps.entrySet()) {
+                if ((frequenciesMask & (1 << entry.getKey().ordinal())) != 0) total += entry.getValue();
+            }
+            ceiling = (int) Math.min(ceiling, total);
+        }
         if (isPassive || ceiling == 0) return ceiling;
 
         // Mix both UUID halves and the phase; sampling never advances a random generator.
@@ -229,4 +246,40 @@ public class TrafficSession {
 
     public int getFrequenciesMask() { return frequenciesMask; }
     public void setFrequenciesMask(int mask) { this.frequenciesMask = mask; }
+
+    /** Refresh reception without restarting the phase, changing identity, or reselecting the server. */
+    public void updateRadioAttachment(BlockPos pos, int mask, Map<TelecomFrequency, Integer> downCaps,
+                                      Map<TelecomFrequency, Integer> upCaps) {
+        Map<TelecomFrequency, Integer> down = Map.copyOf(downCaps);
+        Map<TelecomFrequency, Integer> up = Map.copyOf(upCaps);
+        for (int cap : down.values()) if (cap < 0 || cap > 1_000_000) throw new IllegalArgumentException("invalid radio ceiling");
+        for (int cap : up.values()) if (cap < 0 || cap > 1_000_000) throw new IllegalArgumentException("invalid radio ceiling");
+        String technology = "";
+        for (TelecomFrequency frequency : TelecomFrequency.values()) {
+            if ((mask & (1 << frequency.ordinal())) != 0 && down.getOrDefault(frequency, 0) > 0
+                    && frequency.getTechnology().compareTo(technology) > 0) technology = frequency.getTechnology();
+        }
+        if (!technology.isEmpty()) {
+            // Keep initial same-technology jitter; a technology handover uses a stable radio latency.
+            if (!radioTechnology.isEmpty() && !radioTechnology.equals(technology)) {
+                extraPing = switch (technology) {
+                    case "5G" -> 15;
+                    case "4G" -> 40;
+                    case "3G" -> 95;
+                    default -> 300;
+                };
+            }
+            radioTechnology = technology;
+        }
+        sourcePos = pos.immutable();
+        antennaPos = sourcePos;
+        frequenciesMask = mask & ((1 << TelecomFrequency.values().length) - 1);
+        radioDownCaps = down;
+        radioUpCaps = up;
+        radioCapsConfigured = true;
+    }
+
+    public Map<TelecomFrequency, Integer> getRadioDownCaps() { return radioDownCaps; }
+    public Map<TelecomFrequency, Integer> getRadioUpCaps() { return radioUpCaps; }
+    public boolean hasRadioCaps() { return radioCapsConfigured; }
 }

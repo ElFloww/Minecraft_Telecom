@@ -84,9 +84,10 @@ public final class CoverageService {
         public boolean retryable() { return retryable; }
     }
 
-    private record Source(BlockPos position, int mask, boolean service, List<TelecomFrequency> frequencies) {
-        Source(BlockPos position, int mask, boolean service) {
-            this(position, mask, service, List.copyOf(java.util.Arrays.stream(FREQUENCIES)
+    private record Source(BlockPos position, int mask, boolean service, AntennaRadioConfig config,
+                          List<TelecomFrequency> frequencies) {
+        Source(BlockPos position, int mask, boolean service, AntennaRadioConfig config) {
+            this(position, mask, service, config, List.copyOf(java.util.Arrays.stream(FREQUENCIES)
                     .filter(frequency -> (mask & (1 << frequency.ordinal())) != 0).toList()));
         }
     }
@@ -177,7 +178,7 @@ public final class CoverageService {
 
             Source source = sources.get(sourceIndex);
             if (trace == null) {
-                trace = new SignalPropagator.MultiTrace(source.position(), receiver, source.frequencies());
+                trace = new SignalPropagator.MultiTrace(source.position(), receiver, source.frequencies(), source.config());
             }
             if (++traceQuanta > MAX_TRACE_QUANTA) {
                 failure = "Coverage work limit exceeded; use a coarser grid or select a single antenna";
@@ -329,7 +330,8 @@ public final class CoverageService {
         for (NetworkNode node : graph.getNodes()) {
             checkBudget(deadline);
             if (node.getType() == NetworkNode.NodeType.ANTENNA) {
-                sources.add(new Source(node.getPosition().immutable(), node.getFrequenciesMask(), connected.contains(node.getPosition())));
+                sources.add(new Source(node.getPosition().immutable(), node.getFrequenciesMask(),
+                        connected.contains(node.getPosition()), node.getRadioConfig()));
             }
         }
         state.sources = List.copyOf(sources);
@@ -376,6 +378,12 @@ public final class CoverageService {
     }
 
     public static void invalidateChunk(ServerLevel level, int chunkX, int chunkZ) {
+        MicrowaveLinkService.invalidateChunk(level, chunkX, chunkZ);
+        invalidateCoverageChunk(level, chunkX, chunkZ);
+    }
+
+    /** Lifecycle coverage refresh only; MicrowaveEvents handles live/cached terrain transitions. */
+    public static void invalidateCoverageChunk(ServerLevel level, int chunkX, int chunkZ) {
         State state = STATES.get(level);
         if (state == null) return;
         long chunk = ChunkPos.asLong(chunkX, chunkZ);
@@ -394,6 +402,7 @@ public final class CoverageService {
     }
 
     public static void invalidateAntennas(ServerLevel level) {
+        RadioAccessService.invalidate(level);
         State state = STATES.get(level);
         if (state != null) {
             state.spectrumDirty = true;

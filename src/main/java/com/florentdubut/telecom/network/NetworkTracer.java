@@ -14,6 +14,10 @@ public class NetworkTracer {
         TelecomNetworkGraph.get(level).markForRecalculation();
     }
 
+    public static void scheduleRecalculation(ServerLevel level, NetworkDiagnostics.Cause cause) {
+        TelecomNetworkGraph.get(level).markForRecalculation(cause);
+    }
+
     /**
      * Returns the EdgeType for a given cable block state, or null if it's not a cable.
      */
@@ -31,13 +35,17 @@ public class NetworkTracer {
             case NRA -> cable == NetworkEdge.EdgeType.BIG_FIBER || cable == NetworkEdge.EdgeType.MEDIUM_FIBER || cable == NetworkEdge.EdgeType.FIBER || cable == NetworkEdge.EdgeType.COPPER;
             case PM -> cable == NetworkEdge.EdgeType.MEDIUM_FIBER || cable == NetworkEdge.EdgeType.FIBER;
             case SR -> cable == NetworkEdge.EdgeType.FIBER || cable == NetworkEdge.EdgeType.COPPER;
-            case ROUTER, ANTENNA -> cable == NetworkEdge.EdgeType.FIBER || cable == NetworkEdge.EdgeType.COPPER;
+            case ROUTER, ANTENNA, MICROWAVE_DISH -> cable == NetworkEdge.EdgeType.FIBER || cable == NetworkEdge.EdgeType.COPPER;
             case PHONE -> false;
         };
     }
 
     public static boolean isCableCompatibleWithNodes(NetworkEdge.EdgeType cableType, NetworkNode.NodeType a, NetworkNode.NodeType b) {
         if (!doesNodeAcceptCable(a, cableType) || !doesNodeAcceptCable(b, cableType)) return false;
+        // Dish-local links bypass tier restrictions, not either endpoint's physical wire support.
+        if (a == NetworkNode.NodeType.MICROWAVE_DISH || b == NetworkNode.NodeType.MICROWAVE_DISH) {
+            return true;
+        }
         
         int tierA = getTier(a);
         int tierB = getTier(b);
@@ -53,7 +61,7 @@ public class NetworkTracer {
             case SERVER -> 1;
             case NRO, NRA -> 2;
             case PM, SR -> 3;
-            case ROUTER, ANTENNA -> 4;
+            case ROUTER, ANTENNA, MICROWAVE_DISH -> 4;
             case PHONE -> 5;
         };
     }
@@ -61,89 +69,115 @@ public class NetworkTracer {
     // Call this whenever a cable, server, router, or antenna is placed or broken
     public static void recalculateNetwork(ServerLevel level) {
         TelecomNetworkGraph graph = TelecomNetworkGraph.get(level);
+        NetworkDiagnostics diagnostics = graph.getDiagnostics();
+        NetworkDiagnostics.Trace trace = diagnostics.begin(graph.getNodes().size(), graph.getEdges().size());
+        boolean success = false;
+        try {
+            // 1. Prepare new edges list
+            java.util.List<NetworkEdge> newEdges = new java.util.ArrayList<>();
 
-        // 1. Prepare new edges list
-        java.util.List<NetworkEdge> newEdges = new java.util.ArrayList<>();
+            // Trace cables without discarding the persisted addresses.
+            Set<String> discoveredEdges = new HashSet<>();
+            Map<String, Integer> savedCapacities = new HashMap<>();
+            for (NetworkEdge edge : graph.getEdges()) {
+                if (edge.getType() == NetworkEdge.EdgeType.MICROWAVE) continue;
+                String suffix = "-" + edge.getType().name();
+                savedCapacities.merge(edge.getNodeA().toShortString() + "-" + edge.getNodeB().toShortString() + suffix,
+                        edge.getBandwidthMax(), Math::min);
+                savedCapacities.merge(edge.getNodeB().toShortString() + "-" + edge.getNodeA().toShortString() + suffix,
+                        edge.getBandwidthMax(), Math::min);
+            }
 
-        // Trace cables without discarding the persisted addresses.
-        Set<String> discoveredEdges = new HashSet<>();
-        Map<String, Integer> savedCapacities = new HashMap<>();
-        for (NetworkEdge edge : graph.getEdges()) {
-            String suffix = "-" + edge.getType().name();
-            savedCapacities.merge(edge.getNodeA().toShortString() + "-" + edge.getNodeB().toShortString() + suffix,
-                    edge.getBandwidthMax(), Math::min);
-            savedCapacities.merge(edge.getNodeB().toShortString() + "-" + edge.getNodeA().toShortString() + suffix,
-                    edge.getBandwidthMax(), Math::min);
-        }
+            for (NetworkNode startNode : graph.getNodes()) {
+                BlockPos startPos = startNode.getPosition();
+                if (trace != null) trace.chunkRequests++;
+                level.getChunk(startPos.getX() >> 4, startPos.getZ() >> 4, net.minecraft.world.level.chunk.status.ChunkStatus.FULL, true);
 
-        for (NetworkNode startNode : graph.getNodes()) {
-            BlockPos startPos = startNode.getPosition();
-            level.getChunk(startPos.getX() >> 4, startPos.getZ() >> 4, net.minecraft.world.level.chunk.status.ChunkStatus.FULL, true);
+                Queue<TraceStep> queue = new LinkedList<>();
+                Set<BlockPos> visited = new HashSet<>();
 
-            Queue<TraceStep> queue = new LinkedList<>();
-            Set<BlockPos> visited = new HashSet<>();
+                // Try each possible cable type outward from this node
+                for (NetworkEdge.EdgeType startType : NetworkEdge.EdgeType.values()) {
+                    if (startType == NetworkEdge.EdgeType.MICROWAVE) continue;
+                    queue.clear();
+                    visited.clear();
 
-            // Try each possible cable type outward from this node
-            for (NetworkEdge.EdgeType startType : NetworkEdge.EdgeType.values()) {
-                queue.clear();
-                visited.clear();
+                    queue.add(new TraceStep(startPos, 0, startType, new ArrayList<>()));
+                    visited.add(startPos);
 
-                queue.add(new TraceStep(startPos, 0, startType, new ArrayList<>()));
-                visited.add(startPos);
+                    while (!queue.isEmpty()) {
+                        TraceStep current = queue.poll();
+                        if (trace != null) trace.steps++;
+                        if (current.distance > 10000) continue;
 
-                while (!queue.isEmpty()) {
-                    TraceStep current = queue.poll();
-                    if (current.distance > 10000) continue;
+                        for (Direction dir : Direction.values()) {
+                            BlockPos neighbor = current.pos.relative(dir);
+                            if (visited.contains(neighbor)) continue;
 
-                    for (Direction dir : Direction.values()) {
-                        BlockPos neighbor = current.pos.relative(dir);
-                        if (visited.contains(neighbor)) continue;
+                            if (trace != null) trace.chunkRequests++;
+                            level.getChunk(neighbor.getX() >> 4, neighbor.getZ() >> 4, net.minecraft.world.level.chunk.status.ChunkStatus.FULL, true);
+                            if (trace != null) trace.blockReads++;
+                            BlockState state = level.getBlockState(neighbor);
 
-                        level.getChunk(neighbor.getX() >> 4, neighbor.getZ() >> 4, net.minecraft.world.level.chunk.status.ChunkStatus.FULL, true);
-                        BlockState state = level.getBlockState(neighbor);
+                            // Is it a node?
+                            NetworkNode targetNode = graph.getNode(neighbor);
+                            if (targetNode != null) {
+                                // Check cable/node compatibility
+                                if (!isCableCompatibleWithNodes(current.type, startNode.getType(), targetNode.getType())) {
+                                    visited.add(neighbor);
+                                    continue; // Invalid architectural link, skip
+                                }
 
-                        // Is it a node?
-                        NetworkNode targetNode = graph.getNode(neighbor);
-                        if (targetNode != null) {
-                            // Check cable/node compatibility
-                            if (!isCableCompatibleWithNodes(current.type, startNode.getType(), targetNode.getType())) {
+                                String edgeKey1 = startPos.toShortString() + "-" + neighbor.toShortString() + "-" + current.type.name();
+                                String edgeKey2 = neighbor.toShortString() + "-" + startPos.toShortString() + "-" + current.type.name();
+
+                                if (!discoveredEdges.contains(edgeKey1) && !discoveredEdges.contains(edgeKey2)) {
+                                    discoveredEdges.add(edgeKey1);
+
+                                    int bandwidth = savedCapacities.getOrDefault(edgeKey1, current.type.nominalBandwidthMbps());
+
+                                    List<BlockPos> finalPath = new ArrayList<>(current.pathBlocks);
+                                    if (trace != null) {
+                                        trace.pathCopies++;
+                                        trace.copiedReferences += current.pathBlocks.size();
+                                    }
+                                    NetworkEdge edge = new NetworkEdge(startPos, neighbor, bandwidth, current.distance + 1, current.type, finalPath);
+                                    if (trace != null) {
+                                        // NetworkEdge also takes an immutable defensive copy of the path.
+                                        trace.pathCopies++;
+                                        trace.copiedReferences += finalPath.size();
+                                    }
+                                    newEdges.add(edge);
+                                }
                                 visited.add(neighbor);
-                                continue; // Invalid architectural link, skip
+                                continue;
                             }
 
-                            String edgeKey1 = startPos.toShortString() + "-" + neighbor.toShortString() + "-" + current.type.name();
-                            String edgeKey2 = neighbor.toShortString() + "-" + startPos.toShortString() + "-" + current.type.name();
-
-                            if (!discoveredEdges.contains(edgeKey1) && !discoveredEdges.contains(edgeKey2)) {
-                                discoveredEdges.add(edgeKey1);
-
-                                int bandwidth = savedCapacities.getOrDefault(edgeKey1, current.type.nominalBandwidthMbps());
-
-                                List<BlockPos> finalPath = new ArrayList<>(current.pathBlocks);
-                                NetworkEdge edge = new NetworkEdge(startPos, neighbor, bandwidth, current.distance + 1, current.type, finalPath);
-                                newEdges.add(edge);
+                            // Is it a cable of the same type?
+                            NetworkEdge.EdgeType cableType = getCableType(state);
+                            if (cableType != null && cableType == current.type) {
+                                visited.add(neighbor);
+                                List<BlockPos> newPath = new ArrayList<>(current.pathBlocks);
+                                if (trace != null) {
+                                    trace.pathCopies++;
+                                    trace.copiedReferences += current.pathBlocks.size();
+                                }
+                                newPath.add(neighbor);
+                                queue.add(new TraceStep(neighbor, current.distance + 1, current.type, newPath));
                             }
-                            visited.add(neighbor);
-                            continue;
+                            // Different cable type: stop propagation; cable diameters don't mix.
                         }
-
-                        // Is it a cable of the same type?
-                        NetworkEdge.EdgeType cableType = getCableType(state);
-                        if (cableType != null && cableType == current.type) {
-                            visited.add(neighbor);
-                            List<BlockPos> newPath = new ArrayList<>(current.pathBlocks);
-                            newPath.add(neighbor);
-                            queue.add(new TraceStep(neighbor, current.distance + 1, current.type, newPath));
-                        }
-                        // Different cable type: stop propagation — cables of different diameters don't mix
                     }
                 }
             }
+
+            graph.setCableEdges(newEdges);
+
+            graph.ensureFixedAddresses();
+            success = true;
+        } finally {
+            diagnostics.finish(trace, success, graph.getEdges().size());
         }
-
-        graph.setEdges(newEdges);
-
-        graph.ensureFixedAddresses();
     }
 
     private static class TraceStep {

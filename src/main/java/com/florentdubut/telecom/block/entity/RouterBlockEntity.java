@@ -1,5 +1,7 @@
 package com.florentdubut.telecom.block.entity;
 
+import com.florentdubut.telecom.network.NetworkDiagnostics;
+
 import com.florentdubut.telecom.registry.ModBlockEntities;
 import com.florentdubut.telecom.network.NetworkNode;
 import com.florentdubut.telecom.network.TelecomNetworkGraph;
@@ -80,7 +82,7 @@ public class RouterBlockEntity extends BlockEntity {
                 node.setCapacityDown(getConfiguredMaxDown());
                 node.setCapacityUp(getConfiguredMaxUp());
                 graph.addNode(node);
-                com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel);
+                com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel, NetworkDiagnostics.Cause.NODE_LOAD);
             } else if (node.getType() == NetworkNode.NodeType.ROUTER) {
                 boolean requiresSync = node.requiresCapacitySync();
                 int down = requiresSync ? getConfiguredMaxDown() : Math.min(node.getCapacityDown(), getConfiguredMaxDown());
@@ -99,7 +101,7 @@ public class RouterBlockEntity extends BlockEntity {
         if (level instanceof ServerLevel serverLevel) {
             TelecomNetworkGraph graph = TelecomNetworkGraph.get(serverLevel);
             graph.removeNode(worldPosition);
-            com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel);
+            com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel, NetworkDiagnostics.Cause.NODE_REMOVE);
         }
     }
 }

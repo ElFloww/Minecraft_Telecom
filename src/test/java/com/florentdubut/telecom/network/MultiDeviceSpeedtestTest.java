@@ -303,8 +303,10 @@ class MultiDeviceSpeedtestTest {
     @Test
     void terminalResultCacheIsBoundedTo256DevicesWithoutChunkLoads() {
         connect(ANTENNA, NetworkNode.NodeType.ANTENNA);
+        int mask = 1 << TelecomFrequency.G2_900.ordinal();
+        graph.getNode(ANTENNA).setFrequenciesMask(mask);
         for (int i = 0; i < 257; i++) {
-            graph.startSpeedtest(ANTENNA, "phone-" + i, 100, 100, 0, 1, 1, false, null);
+            graph.startSpeedtest(ANTENNA, "phone-" + i, 100, 100, 0, mask, 1, false, null);
             tick(3);
         }
         assertNull(graph.getLastResultByDeviceId("mobile-ip:phone-0"));

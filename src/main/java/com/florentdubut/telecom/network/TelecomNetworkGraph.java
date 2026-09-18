@@ -23,6 +23,9 @@ public class TelecomNetworkGraph extends SavedData {
     private final Map<java.util.UUID, Integer> mobileAddresses = new HashMap<>();
     private int nextMobileAddress = 1;
     private long topologyRevision;
+    private final NetworkDiagnostics diagnostics = new NetworkDiagnostics();
+
+    public NetworkDiagnostics getDiagnostics() { return diagnostics; }
 
     public long getTopologyRevision() { return topologyRevision; }
 
@@ -65,6 +68,8 @@ public class TelecomNetworkGraph extends SavedData {
             if (nodeTag.contains("FreqMask")) {
                 node.setFrequenciesMask(nodeTag.getIntOr("FreqMask", 0));
             }
+            node.setRadioConfig(AntennaRadioConfig.read(nodeTag));
+            node.setMicrowaveConfig(MicrowaveConfig.read(nodeTag));
             if (capacityVersion == 1 || type == NetworkNode.NodeType.ROUTER) {
                 node.setCapacityDown(readInt(nodeTag, "CapDown", type.defaultCapacityMbps()));
                 node.setCapacityUp(readInt(nodeTag, "CapUp", type.defaultCapacityMbps()));
@@ -77,11 +82,12 @@ public class TelecomNetworkGraph extends SavedData {
         ListTag edgesTag = tag.getListOrEmpty("Edges");
         for (int i = 0; i < edgesTag.size(); i++) {
             CompoundTag edgeTag = edgesTag.getCompound(i).orElseThrow(() -> new IllegalArgumentException("invalid edge"));
+            NetworkEdge.EdgeType type = NetworkEdge.EdgeType.valueOf(edgeTag.getStringOr("Type", ""));
+            if (type == NetworkEdge.EdgeType.MICROWAVE) continue;
             BlockPos nodeA = edgeTag.read("NodeA", BlockPos.CODEC).orElseThrow(() -> new IllegalArgumentException("invalid edge source"));
             BlockPos nodeB = edgeTag.read("NodeB", BlockPos.CODEC).orElseThrow(() -> new IllegalArgumentException("invalid edge target"));
             int bandwidthMax = readInt(edgeTag, "BandwidthMax", 0);
             int length = readInt(edgeTag, "Length", Integer.MAX_VALUE);
-            NetworkEdge.EdgeType type = NetworkEdge.EdgeType.valueOf(edgeTag.getStringOr("Type", ""));
             java.util.List<BlockPos> pathBlocks = new java.util.ArrayList<>();
             if (edgeTag.contains("PathBlocks")) {
                 long[] blocks = edgeTag.getLongArray("PathBlocks").orElse(new long[0]);
@@ -144,6 +150,8 @@ public class TelecomNetworkGraph extends SavedData {
                 nodeTag.putString("CIDR", node.getNetworkCidr());
             }
             nodeTag.putInt("FreqMask", node.getFrequenciesMask());
+            node.getRadioConfig().writeTo(nodeTag);
+            node.getMicrowaveConfig().writeTo(nodeTag);
             nodeTag.putInt("CapDown", node.getCapacityDown());
             nodeTag.putInt("CapUp", node.getCapacityUp());
             nodeTag.putBoolean("CapacityNeedsSync", node.requiresCapacitySync());
@@ -153,6 +161,7 @@ public class TelecomNetworkGraph extends SavedData {
 
         ListTag edgesTag = new ListTag();
         for (NetworkEdge edge : edges) {
+            if (edge.getType() == NetworkEdge.EdgeType.MICROWAVE) continue;
             CompoundTag edgeTag = new CompoundTag();
             edgeTag.store("NodeA", BlockPos.CODEC, edge.getNodeA());
             edgeTag.store("NodeB", BlockPos.CODEC, edge.getNodeB());
@@ -282,13 +291,23 @@ public class TelecomNetworkGraph extends SavedData {
     private int delayedRecalculationTimer = -1;
 
     public void markForRecalculation() {
+        markForRecalculation(NetworkDiagnostics.Cause.UNSPECIFIED);
+    }
+
+    public void markForRecalculation(NetworkDiagnostics.Cause cause) {
         this.needsRecalculation = true;
+        diagnostics.request(cause, false);
     }
 
     public void scheduleDelayedRecalculation(int ticks) {
+        scheduleDelayedRecalculation(ticks, NetworkDiagnostics.Cause.UNSPECIFIED);
+    }
+
+    public void scheduleDelayedRecalculation(int ticks, NetworkDiagnostics.Cause cause) {
         if (this.delayedRecalculationTimer < 0 || this.delayedRecalculationTimer > ticks) {
             this.delayedRecalculationTimer = ticks;
         }
+        diagnostics.request(cause, true);
     }
 
     
@@ -367,6 +386,8 @@ public class TelecomNetworkGraph extends SavedData {
     private PhysicalNetwork physicalCache;
 
     private record NodeBudget(BlockPos pos, boolean upload) {}
+    private record RadioBudget(BlockPos pos, TelecomFrequency frequency) {}
+    private final Map<RadioBudget, Double> actualRadioUsage = new HashMap<>();
     private record PhysicalNetwork(Map<BlockPos, Integer> capacities,
                                    Map<NetworkEdge, java.util.Set<BlockPos>> blocks,
                                    Map<NetworkEdge, Integer> edgeCapacities) {
@@ -412,6 +433,7 @@ public class TelecomNetworkGraph extends SavedData {
         for (TrafficSession session : activeSessions) session.clearCurrentBandwidth();
         actualBlockUsageDown.clear();
         actualBlockUsageUp.clear();
+        actualRadioUsage.clear();
         totalBandwidthDown = 0;
         totalBandwidthUp = 0;
         for (NetworkEdge edge : edges) {
@@ -648,46 +670,25 @@ public class TelecomNetworkGraph extends SavedData {
             
             // Reduced probability to 0.5%
             if (hasPhone && Math.random() < 0.005) {
-                // Find nearest antenna for this player, tracking best signal AND best frequency
-                com.florentdubut.telecom.block.entity.AntennaBlockEntity bestAntenna = null;
-                TelecomFrequency bestFreq = null;
-                float bestSignal = -1000f;
-                String bestIp = null;
-
-                for (NetworkNode node : nodes.values()) {
-                    if (node.getType() == NetworkNode.NodeType.ANTENNA) {
-                        net.minecraft.world.level.block.entity.BlockEntity be = level.getBlockEntity(node.getPosition());
-                        if (be instanceof com.florentdubut.telecom.block.entity.AntennaBlockEntity antenna) {
-                            for (TelecomFrequency freq : TelecomFrequency.values()) {
-                                if (antenna.isFrequencyEnabled(freq)) {
-                                    float signal = com.florentdubut.telecom.network.SignalPropagator.calculateSignal(level, antenna.getBlockPos(), player.blockPosition().above(), freq).powerDbm;
-                                    if (signal > -120f && signal > bestSignal) {
-                                        bestSignal = signal;
-                                        bestAntenna = antenna;
-                                        bestFreq = freq;
-                                        bestIp = getMobileIp(player.getUUID());
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                if (bestAntenna != null && bestFreq != null) {
-                    final String finalBestIp = bestIp;
-                    boolean hasSession = getSessionByDeviceId(TrafficSession.mobileDeviceId(player.getUUID())) != null;
-                    if (!hasSession) {
-                        int randDown = 1 + (int)(Math.random() * 20);
-                        int randUp = 1 + (int)(Math.random() * 5);
-                        int extraPing = 20 + (int)(Math.random() * 50);
-                        startSpeedtest(bestAntenna.getBlockPos(), finalBestIp, randDown, randUp, extraPing, (1 << bestFreq.ordinal()), 100, true, player);
-                    }
+                if (getSessionByDeviceId(TrafficSession.mobileDeviceId(player.getUUID())) != null) continue;
+                var snapshot = RadioAccessService.scan(player);
+                var scan = snapshot.payload();
+                if (scan.found()) {
+                    int randDown = 1 + (int)(Math.random() * 20);
+                    int randUp = 1 + (int)(Math.random() * 5);
+                    int extraPing = 20 + (int)(Math.random() * 50);
+                    var result = startSpeedtest(scan.antennaPos(), getMobileIp(player.getUUID()), randDown, randUp,
+                            extraPing, scan.frequenciesMask(), 100, true, player, "");
+                    if (result.accepted()) result.session().updateRadioAttachment(scan.antennaPos(),
+                            scan.frequenciesMask(), snapshot.downCaps(), snapshot.upCaps());
                 }
             }
         }
     }
 
     public void tickTraffic(ServerLevel level) {
+        diagnostics.nextTick();
+        MicrowaveLinkService.tick(level, this);
         tickPassiveTraffic(level);
         resetUsage();
 
@@ -696,11 +697,12 @@ public class TelecomNetworkGraph extends SavedData {
         } else if (delayedRecalculationTimer == 0) {
             delayedRecalculationTimer = -1;
             needsRecalculation = true;
+            diagnostics.delayedReady();
         }
 
         if (needsRecalculation) {
             needsRecalculation = false;
-            NetworkTracer.recalculateNetwork(level);
+            diagnostics.runScheduled(() -> NetworkTracer.recalculateNetwork(level));
             return; // Skip this tick, it will resume next tick
         }
         if (activeSessions.isEmpty()) return;
@@ -718,12 +720,38 @@ public class TelecomNetworkGraph extends SavedData {
                 toRemove.add(session);
                 continue;
             }
-            if (!session.isRouter() && session.getOwnerId() != null
-                    && level.getServer().getPlayerList().getPlayer(session.getOwnerId()) == null) {
-                session.fail("device_unavailable");
-                sendSessionUpdate(level, session);
-                toRemove.add(session);
-                continue;
+            if (!session.isRouter() && session.getOwnerId() != null) {
+                var player = level.getServer().getPlayerList().getPlayer(session.getOwnerId());
+                if (player == null || !player.level().dimension().equals(level.dimension())) {
+                    session.fail("device_unavailable");
+                } else if (session.getFrequenciesMask() != 0 || session.hasRadioCaps()) {
+                    // The service bounds expensive scans with its reception cache, including handover hysteresis.
+                    var snapshot = RadioAccessService.scan(player);
+                    var scan = snapshot.payload();
+                    if (!scan.found()) session.fail(RadioAccessService.unavailableReason(scan));
+                    else session.updateRadioAttachment(scan.antennaPos(), scan.frequenciesMask(), snapshot.downCaps(), snapshot.upCaps());
+                }
+                if (session.isTerminal()) {
+                    sendSessionUpdate(level, session);
+                    toRemove.add(session);
+                    continue;
+                }
+            }
+            NetworkNode source = nodes.get(session.getSourcePos());
+            boolean radio = source != null && source.getType() == NetworkNode.NodeType.ANTENNA
+                    && (session.getFrequenciesMask() != 0 || session.hasRadioCaps());
+            Map<TelecomFrequency, Integer> downCaps = radio ? radioCeilings(session, source, false) : Map.of();
+            Map<TelecomFrequency, Integer> upCaps = radio ? radioCeilings(session, source, true) : Map.of();
+            if (radio) {
+                int enabledMask = session.getFrequenciesMask() & source.getFrequenciesMask();
+                if (session.hasRadioCaps()) session.updateRadioAttachment(source.getPosition(), enabledMask, downCaps, upCaps);
+                else session.setFrequenciesMask(enabledMask);
+                if (downCaps.isEmpty()) {
+                    session.fail("radio_lost");
+                    sendSessionUpdate(level, session);
+                    toRemove.add(session);
+                    continue;
+                }
             }
             NetworkNode server = nodes.get(session.getDestPos());
             PathStats stats = server != null && server.getType() == NetworkNode.NodeType.SERVER && nodes.containsKey(session.getSourcePos())
@@ -756,6 +784,9 @@ public class TelecomNetworkGraph extends SavedData {
             if (session.getState() == TrafficSession.SessionState.DOWNLOAD || session.getState() == TrafficSession.SessionState.UPLOAD) {
                 boolean upload = session.getState() == TrafficSession.SessionState.UPLOAD;
                 int hardwareMax = upload ? stats.uploadBandwidthMbps() : stats.bandwidthMbps();
+                Map<TelecomFrequency, Integer> radioCaps = upload ? upCaps : downCaps;
+                int radioTotal = radioCaps.values().stream().mapToInt(Integer::intValue).sum();
+                if (radio) hardwareMax = Math.min(hardwareMax, radioTotal);
                 int requested = session.getRequestedBandwidth(hardwareMax);
                 if (requested == 0) {
                     session.setActualBandwidth(0);
@@ -776,6 +807,18 @@ public class TelecomNetworkGraph extends SavedData {
                     for (BlockPos pos : sessionNodes) {
                         resources.add(new NodeBudget(pos, upload));
                     }
+                    Map<Object, Double> weights = new HashMap<>();
+                    // Parallel carriers use a proportional fixed split, not dynamic per-carrier redistribution.
+                    // A handset remains ONE max-min flow; UP consumes the same airtime budget as DOWN.
+                    for (var band : radioCaps.entrySet()) {
+                        RadioBudget budget = new RadioBudget(session.getSourcePos(), band.getKey());
+                        resources.add(budget);
+                        double share = (double) band.getValue() / radioTotal;
+                        int nominalDown = source.getRadioConfig().capacityMbps(band.getKey());
+                        int nominalUp = Math.max(1, (int) Math.floor(nominalDown * AntennaRadioConfig.uploadRatio(band.getKey())));
+                        // Normalize against rounded integer capacities, including the 2G one-Mbps minimum.
+                        weights.put(budget, upload ? share * ((double) nominalDown / nominalUp) : share);
+                    }
                     // Count after per-flow deduplication, before retaining any resources or capacities.
                     if (resources.size() > MAX_ALLOCATION_RESOURCE_REFERENCES - retainedResourceReferences) {
                         session.fail("network_limit");
@@ -792,9 +835,11 @@ public class TelecomNetworkGraph extends SavedData {
                         } else if (resource instanceof NodeBudget budget) {
                             NetworkNode node = nodes.get(budget.pos);
                             capacities.put(budget, node == null ? 0 : upload ? node.getCapacityUp() : node.getCapacityDown());
+                        } else if (resource instanceof RadioBudget budget) {
+                            capacities.put(budget, source.getRadioConfig().capacityMbps(budget.frequency));
                         }
                     }
-                    requests.put(session, new BandwidthAllocator.Request(session.getSessionId(), requested, resources));
+                    requests.put(session, new BandwidthAllocator.Request(session.getSessionId(), requested, resources, weights));
                 }
             }
             
@@ -824,6 +869,8 @@ public class TelecomNetworkGraph extends SavedData {
                         if (upload) node.setCurrentUsageUp(node.getCurrentUsageUp() + actual);
                         else node.setCurrentUsageDown(node.getCurrentUsageDown() + actual);
                     }
+                } else if (resource instanceof RadioBudget budget) {
+                    actualRadioUsage.merge(budget, actual * entry.getValue().weight(budget), Double::sum);
                 }
             }
         }
@@ -836,6 +883,20 @@ public class TelecomNetworkGraph extends SavedData {
             }
         }
         
+    }
+
+    private Map<TelecomFrequency, Integer> radioCeilings(TrafficSession session, NetworkNode antenna, boolean upload) {
+        Map<TelecomFrequency, Integer> result = new java.util.EnumMap<>(TelecomFrequency.class);
+        var reception = upload ? session.getRadioUpCaps() : session.getRadioDownCaps();
+        int mask = session.getFrequenciesMask() & antenna.getFrequenciesMask();
+        for (TelecomFrequency frequency : TelecomFrequency.values()) {
+            if ((mask & (1 << frequency.ordinal())) == 0) continue;
+            int nominal = antenna.getRadioConfig().capacityMbps(frequency);
+            if (upload) nominal = Math.max(1, (int) Math.floor(nominal * AntennaRadioConfig.uploadRatio(frequency)));
+            int cap = session.hasRadioCaps() ? Math.min(nominal, reception.getOrDefault(frequency, 0)) : nominal;
+            if (cap > 0) result.put(frequency, cap);
+        }
+        return result;
     }
     
     public int getTotalBandwidthUp() {
@@ -865,10 +926,23 @@ public class TelecomNetworkGraph extends SavedData {
 
     /**
      * Returns per-frequency utilization stats for a given antenna.
-     * For each frequency, returns a record with: actual Mbps used and max Mbps capacity.
+     * Actual usage is granted DOWN-equivalent airtime (UP scaled by nominal DOWN / nominal UP).
+     * Aggregate before rounding down for display, so fractional grants cannot overstate capacity.
      */
     public java.util.Map<TelecomFrequency, AntennaFreqStats> getAntennaUtilization(net.minecraft.core.BlockPos antennaPos) {
         java.util.Map<TelecomFrequency, AntennaFreqStats> result = new java.util.LinkedHashMap<>();
+        NetworkNode antenna = nodes.get(antennaPos);
+        if (antenna == null) return result;
+        if (antenna.getType() == NetworkNode.NodeType.ANTENNA) {
+            for (TelecomFrequency frequency : TelecomFrequency.values()) {
+                if ((antenna.getFrequenciesMask() & (1 << frequency.ordinal())) == 0) continue;
+                int max = antenna.getRadioConfig().capacityMbps(frequency);
+                double used = actualRadioUsage.getOrDefault(new RadioBudget(antennaPos, frequency), 0.0);
+                result.put(frequency, new AntennaFreqStats(Math.min(max, (int) Math.floor(used + 1e-7)), max));
+            }
+            return result;
+        }
+        // Legacy non-radio synthetic sessions may carry frequency metadata for display only.
         for (TrafficSession s : activeSessions) {
             if (s.getAntennaPos() != null && s.getAntennaPos().equals(antennaPos) && s.getFrequenciesMask() != 0) {
                 // Find how many frequencies are used
@@ -943,6 +1017,87 @@ public class TelecomNetworkGraph extends SavedData {
         setDirty();
     }
 
+    /** Replace derived operational links without touching parallel wired connections or retracing cables. */
+    public void setMicrowaveEdges(List<NetworkEdge> newEdges) {
+        reconcileEdges(newEdges, true);
+    }
+
+    /** Cable discovery must not discard the microwave service's current operational links. */
+    public void setCableEdges(List<NetworkEdge> newEdges) {
+        reconcileEdges(newEdges, false);
+    }
+
+    private record EdgeKey(BlockPos a, BlockPos b, NetworkEdge.EdgeType type) {
+        static EdgeKey of(NetworkEdge edge) {
+            boolean forward = edge.getNodeA().asLong() <= edge.getNodeB().asLong();
+            return new EdgeKey(forward ? edge.getNodeA() : edge.getNodeB(),
+                    forward ? edge.getNodeB() : edge.getNodeA(), edge.getType());
+        }
+    }
+
+    private record EdgeDefinition(EdgeKey key,
+                                  int nominal, int effective, int length, int latency, List<BlockPos> path) {
+        static EdgeDefinition of(NetworkEdge edge) {
+            boolean forward = edge.getNodeA().asLong() <= edge.getNodeB().asLong();
+            return new EdgeDefinition(EdgeKey.of(edge), edge.getBandwidthMax(),
+                    edge.getEffectiveBandwidthMbps(), edge.getLength(), edge.getLatencyMs(),
+                    forward ? edge.getPathBlocks() : edge.getPathBlocks().reversed());
+        }
+    }
+
+    private void reconcileEdges(List<NetworkEdge> newEdges, boolean microwave) {
+        // Match undirected definitions, retaining unchanged edge identities (allocator resources and telemetry).
+        Map<EdgeDefinition, java.util.ArrayDeque<NetworkEdge>> previous = new HashMap<>();
+        int oldCount = 0;
+        for (NetworkEdge edge : edges) {
+            if ((edge.getType() == NetworkEdge.EdgeType.MICROWAVE) != microwave) continue;
+            previous.computeIfAbsent(EdgeDefinition.of(edge), key -> new java.util.ArrayDeque<>()).add(edge);
+            oldCount++;
+        }
+        List<NetworkEdge> replacements = new ArrayList<>(newEdges.size());
+        boolean changed = oldCount != newEdges.size();
+        for (NetworkEdge edge : newEdges) {
+            if ((edge.getType() == NetworkEdge.EdgeType.MICROWAVE) != microwave) {
+                throw new IllegalArgumentException("wrong transport type for edge reconciliation");
+            }
+            var matches = previous.get(EdgeDefinition.of(edge));
+            if (matches != null && !matches.isEmpty()) {
+                replacements.add(matches.removeFirst());
+            } else {
+                replacements.add(edge);
+                changed = true;
+            }
+        }
+        if (!changed) return;
+        Map<EdgeKey, java.util.ArrayDeque<Integer>> replacementIndices = new HashMap<>();
+        for (int i = 0; i < replacements.size(); i++) {
+            replacementIndices.computeIfAbsent(EdgeKey.of(replacements.get(i)), key -> new java.util.ArrayDeque<>()).add(i);
+        }
+        boolean[] retained = new boolean[replacements.size()];
+        synchronized (edges) {
+            // Preserve BFS tie-breaking against parallel transports when only capacity or latency changes.
+            var iterator = edges.listIterator();
+            while (iterator.hasNext()) {
+                NetworkEdge edge = iterator.next();
+                if ((edge.getType() == NetworkEdge.EdgeType.MICROWAVE) != microwave) continue;
+                var indices = replacementIndices.get(EdgeKey.of(edge));
+                if (indices == null || indices.isEmpty()) {
+                    iterator.remove();
+                } else {
+                    int index = indices.removeFirst();
+                    iterator.set(replacements.get(index));
+                    retained[index] = true;
+                }
+            }
+            for (int i = 0; i < replacements.size(); i++) {
+                if (!retained[i]) edges.add(replacements.get(i));
+            }
+        }
+        topologyRevision++;
+        pathCache.clear();
+        if (!microwave) setDirty();
+    }
+
     public List<NetworkEdge> getEdges() {
         return java.util.Collections.unmodifiableList(edges);
     }
@@ -960,7 +1115,9 @@ public class TelecomNetworkGraph extends SavedData {
         long latency = 0;
         for (NetworkEdge edge : path) {
             // Simulated latency calculation
-            long edgeLatency = edge.getLength() / 10; // e.g. 1 tick per 10 blocks
+            long edgeLatency = edge.getType() == NetworkEdge.EdgeType.MICROWAVE
+                    ? (edge.getLatencyMs() + 49L) / 50L
+                    : edge.getLength() / 10; // Legacy wire delay: 1 tick per 10 blocks
             
             // Saturation penalty
             int capacity = edge.getEffectiveBandwidthMbps();
@@ -1072,8 +1229,11 @@ public class TelecomNetworkGraph extends SavedData {
                 case MEDIUM_FIBER -> 0.02f;
                 case BIG_FIBER -> 0.01f;
                 case COPPER -> 0.2f;
+                case MICROWAVE -> 0.0f;
             };
-            return new PathMetrics(totalPing + edge.getLength() * delayPerBlock,
+            float delay = edge.getType() == NetworkEdge.EdgeType.MICROWAVE
+                    ? edge.getLatencyMs() : edge.getLength() * delayPerBlock;
+            return new PathMetrics(totalPing + delay,
                     Math.min(Math.min(minBandwidth, effectiveCapacity), node == null ? 0 : node.getCapacityDown()),
                     Math.min(Math.min(minUploadBandwidth, effectiveCapacity), node == null ? 0 : node.getCapacityUp()));
         }

@@ -1,5 +1,6 @@
 package com.florentdubut.telecom.client.gui;
 
+import com.florentdubut.telecom.network.AntennaRadioConfig;
 import com.florentdubut.telecom.network.TelecomFrequency;
 import com.florentdubut.telecom.network.packet.AntennaConfigPayload;
 import com.florentdubut.telecom.network.packet.AntennaGuiSyncPayload;
@@ -8,203 +9,213 @@ import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.Checkbox;
 import net.minecraft.client.gui.components.EditBox;
+import net.minecraft.client.gui.components.Tooltip;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 import net.neoforged.neoforge.client.network.ClientPacketDistributor;
 
-import java.util.*;
+import java.util.function.Consumer;
 
 public class AntennaScreen extends Screen {
-
     private AntennaGuiSyncPayload payload;
-    private EditBox nameBox;
-    private final Map<TelecomFrequency, Checkbox> checkboxes = new LinkedHashMap<>();
-
-    // Auto-refresh timer
-    private int refreshTick = 0;
-    private static final int REFRESH_INTERVAL = 40; // every 40 ticks = 2 seconds
-
-    // Layout constants
-    private static final int WIN_W = 680;
-    private static final int WIN_H = 300;
-    private static final int LEFT_W  = 320; // config panel width
-    private static final int RIGHT_W = 340; // utilization panel width
-    private static final int PADDING = 12;
+    // Draft state is independent of telemetry and survives tab changes and resize.
+    private String draftName;
+    private int draftMask;
+    private int sectors;
+    private int bandwidth;
+    private String azimuth;
+    private String tilt;
+    private String power;
+    private Button saveButton;
+    private int tab;
+    private int page;
+    private int refreshTick;
+    private int winX, winY, winW, winH, rows;
 
     public AntennaScreen(AntennaGuiSyncPayload payload) {
-        super(Component.literal("Configuration Antenne"));
+        super(text("title"));
         this.payload = payload;
+        draftName = payload.antennaName();
+        draftMask = payload.enabledFrequenciesMask();
+        AntennaRadioConfig config = payload.radioConfig();
+        sectors = config.sectors();
+        bandwidth = config.bandwidthPercent();
+        azimuth = Integer.toString(config.azimuthDegrees());
+        tilt = Integer.toString(config.downtiltDegrees());
+        power = Integer.toString(config.powerDbm());
     }
 
-    /** Called when the server sends a fresh sync (on refresh) */
-    public void receiveUpdate(AntennaGuiSyncPayload newPayload) {
-        this.payload = newPayload;
-        // Re-sync checkbox states if mask changed
-        for (TelecomFrequency freq : TelecomFrequency.values()) {
-            Checkbox cb = checkboxes.get(freq);
-            if (cb != null) {
-                boolean shouldBeSelected = (payload.enabledFrequenciesMask() & (1 << freq.ordinal())) != 0;
-                // We can't directly set checkbox state without re-init, but that's OK —
-                // the utilization data (right panel) updates without touching checkboxes.
-            }
-        }
+    public void receiveUpdate(AntennaGuiSyncPayload update) {
+        if (payload.pos().equals(update.pos()) && payload.dimension().equals(update.dimension())
+                && payload.viewId().equals(update.viewId())) payload = update;
+    }
+
+    private static Component text(String key, Object... args) {
+        return Component.translatable("gui.telecom.antenna." + key, args);
     }
 
     @Override
     protected void init() {
         super.init();
+        winW = Math.min(520, width - 12);
+        winH = Math.min(320, height - 12);
+        winX = (width - winW) / 2;
+        winY = (height - winH) / 2;
+        rows = Math.max(1, (winH - 130) / 22);
+        page = Math.min(page, (TelecomFrequency.values().length - 1) / rows);
 
-        int winX = (this.width  - WIN_W) / 2;
-        int winY = (this.height - WIN_H) / 2;
+        EditBox name = new EditBox(font, winX + 66, winY + 25, winW - 78, 18, text("name"));
+        name.setMaxLength(32);
+        name.setValue(draftName);
+        name.setResponder(value -> draftName = value);
+        addRenderableWidget(name);
 
-        // ── Name field ────────────────────────────────
-        this.nameBox = new EditBox(this.font, winX + PADDING, winY + 32, 180, 16, Component.literal("Nom"));
-        this.nameBox.setValue(payload.antennaName());
-        this.nameBox.setMaxLength(32);
-        this.addRenderableWidget(this.nameBox);
-
-        // ── Frequency checkboxes (left panel, 4 columns) ──
-        String[] techs   = {"2G", "3G", "4G", "5G"};
-        int[] colOffsets = new int[4];
-        int colW      = (LEFT_W - PADDING * 2) / 4; // ~72px per tech column
-        int checkTopY = winY + 70;
-
-        for (TelecomFrequency freq : TelecomFrequency.values()) {
-            int colIdx = switch (freq.getTechnology()) {
-                case "2G" -> 0;
-                case "3G" -> 1;
-                case "4G" -> 2;
-                default   -> 3;
-            };
-            int x = winX + PADDING + colIdx * colW;
-            int y = checkTopY + colOffsets[colIdx] * 17;
-            boolean enabled = (payload.enabledFrequenciesMask() & (1 << freq.ordinal())) != 0;
-
-            Checkbox box = Checkbox.builder(Component.literal(freq.getFrequencyLabel()), this.font)
-                    .pos(x, y).selected(enabled).build();
-            this.addRenderableWidget(box);
-            checkboxes.put(freq, box);
-            colOffsets[colIdx]++;
+        String[] tabs = {"radio", "bands", "live"};
+        int tabWidth = (winW - 24) / 3;
+        for (int i = 0; i < tabs.length; i++) {
+            int selected = i;
+            Button button = Button.builder(text(tabs[i]), ignored -> {
+                tab = selected;
+                page = 0;
+                rebuildWidgets();
+            }).bounds(winX + 12 + i * tabWidth, winY + 49, tabWidth - 2, 20).build();
+            button.active = tab != i;
+            addRenderableWidget(button);
         }
 
-        // ── Save button ────────────────────────────────
-        this.addRenderableWidget(Button.builder(Component.literal("Sauvegarder"), button -> saveAndClose())
-                .bounds(winX + PADDING, winY + WIN_H - 30, 110, 20)
-                .build());
+        if (tab == 0) {
+            int fieldX = winX + winW - 104;
+            addRenderableWidget(Button.builder(sectorLabel(), button -> {
+                sectors = (sectors + 1) % 4;
+                button.setMessage(sectorLabel());
+            }).bounds(fieldX, winY + 77, 92, 20).tooltip(Tooltip.create(text("sectors_hint"))).build());
+            numberField("azimuth", azimuth, 1, value -> azimuth = value);
+            numberField("tilt", tilt, 2, value -> tilt = value);
+            numberField("power", power, 3, value -> power = value);
+            addRenderableWidget(Button.builder(text("percent", bandwidth), button -> {
+                bandwidth = bandwidth == 25 ? 50 : bandwidth == 50 ? 100 : 25;
+                button.setMessage(text("percent", bandwidth));
+            }).bounds(fieldX, winY + 165, 92, 20).tooltip(Tooltip.create(text("bandwidth_hint"))).build());
+        } else {
+            TelecomFrequency[] frequencies = TelecomFrequency.values();
+            if (tab == 1) {
+                for (int i = page * rows; i < Math.min(frequencies.length, (page + 1) * rows); i++) {
+                    TelecomFrequency frequency = frequencies[i];
+                    int bit = 1 << frequency.ordinal();
+                    Checkbox box = Checkbox.builder(Component.literal(frequency.getTechnology() + " " + frequency.getFrequencyLabel()), font)
+                            .pos(winX + 12, winY + 88 + (i % rows) * 22)
+                            .selected((draftMask & bit) != 0)
+                            .onValueChange((checkbox, selected) -> draftMask = selected ? draftMask | bit : draftMask & ~bit)
+                            .build();
+                    box.setTooltip(Tooltip.create(text("band_hint", referenceWidthMhz(frequency), bandwidth,
+                            referenceWidthMhz(frequency) * bandwidth / 100.0)));
+                    addRenderableWidget(box);
+                }
+            }
+            addRenderableWidget(Button.builder(Component.literal("<"), ignored -> { page--; rebuildWidgets(); })
+                    .bounds(winX + winW - 100, winY + winH - 28, 24, 20).build()).active = page > 0;
+            addRenderableWidget(Button.builder(Component.literal(">"), ignored -> { page++; rebuildWidgets(); })
+                    .bounds(winX + winW - 36, winY + winH - 28, 24, 20).build()).active = (page + 1) * rows < frequencies.length;
+        }
+
+        saveButton = addRenderableWidget(Button.builder(text("save"), ignored -> saveAndClose())
+                .bounds(winX + 12, winY + winH - 28, 104, 20).tooltip(Tooltip.create(text("shared_hint"))).build());
+        saveButton.active = pendingConfig() != null;
+    }
+
+    private Component sectorLabel() {
+        return sectors == 0 ? text("omni") : text("sector_count", sectors);
+    }
+
+    private void numberField(String key, String value, int row, Consumer<String> setter) {
+        EditBox box = new EditBox(font, winX + winW - 104, winY + 77 + row * 22, 92, 18, text(key));
+        box.setMaxLength(4);
+        box.setValue(value);
+        box.setTooltip(Tooltip.create(text(key + "_hint")));
+        box.setResponder(updated -> {
+            setter.accept(updated);
+            if (saveButton != null) saveButton.active = pendingConfig() != null;
+        });
+        addRenderableWidget(box);
+    }
+
+    AntennaRadioConfig pendingConfig() {
+        try {
+            int a = Integer.parseInt(azimuth);
+            int t = Integer.parseInt(tilt);
+            int p = Integer.parseInt(power);
+            if (a < 0 || a > 359 || t < -15 || t > 45 || p < 0 || p > 50) return null;
+            return new AntennaRadioConfig(sectors, a, t, p, bandwidth);
+        } catch (IllegalArgumentException invalid) {
+            return null;
+        }
+    }
+
+    AntennaConfigPayload savePayload() {
+        AntennaRadioConfig config = pendingConfig();
+        return config == null ? null : new AntennaConfigPayload(payload.pos(), draftName, draftMask, config, payload.dimension());
     }
 
     private void saveAndClose() {
-        int mask = 0;
-        for (TelecomFrequency freq : TelecomFrequency.values()) {
-            Checkbox box = checkboxes.get(freq);
-            if (box != null && box.selected()) mask |= (1 << freq.ordinal());
-        }
-        ClientPacketDistributor.sendToServer(new AntennaConfigPayload(payload.pos(), nameBox.getValue(), mask));
-        this.onClose();
+        AntennaConfigPayload save = savePayload();
+        if (save == null) return;
+        ClientPacketDistributor.sendToServer(save);
+        onClose();
+    }
+
+    static double referenceWidthMhz(TelecomFrequency frequency) {
+        return AntennaRadioConfig.referenceWidthMhz(frequency);
     }
 
     @Override
     public void tick() {
         super.tick();
-        refreshTick++;
-        if (refreshTick >= REFRESH_INTERVAL) {
+        if (++refreshTick >= 40) {
             refreshTick = 0;
-            // Ask the server for fresh utilization data
-            ClientPacketDistributor.sendToServer(new AntennaRefreshRequestPayload(payload.pos()));
+            ClientPacketDistributor.sendToServer(new AntennaRefreshRequestPayload(payload.pos(), payload.dimension(), payload.viewId()));
         }
     }
 
     @Override
-    public void renderBackground(GuiGraphics g, int mouseX, int mouseY, float pt) {
-        super.renderBackground(g, mouseX, mouseY, pt);
+    public void renderBackground(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+        super.renderBackground(g, mouseX, mouseY, partialTick);
+        g.fill(winX, winY, winX + winW, winY + winH, 0xEE111122);
+        g.renderOutline(winX, winY, winW, winH, 0xFF3366CC);
+    }
 
-        int winX = (this.width  - WIN_W) / 2;
-        int winY = (this.height - WIN_H) / 2;
-
-        // ── Window background ────────────────────────
-        g.fill(winX, winY, winX + WIN_W, winY + WIN_H, 0xEE111122);
-        g.renderOutline(winX, winY, WIN_W, WIN_H, 0xFF3366CC);
-
-        // ── Left panel: config ────────────────────────
-        g.fill(winX + 1, winY + 1, winX + LEFT_W, winY + WIN_H - 1, 0x551A1A2E);
-        g.drawCenteredString(this.font, "⚙ Configuration", winX + LEFT_W / 2, winY + 8, 0xFF88BBFF);
-        g.drawString(this.font, "Nom :", winX + PADDING, winY + 22, 0xFF888888);
-
-        // Tech column headers
-        String[] techLabels  = {"2G (GSM)", "3G", "4G (LTE)", "5G (NR)"};
-        int[]    techColors  = {0xFFAA88FF, 0xFFFF9944, 0xFF44DDAA, 0xFF44AAFF};
-        int colW = (LEFT_W - PADDING * 2) / 4;
-        for (int i = 0; i < 4; i++) {
-            g.drawString(this.font, techLabels[i],
-                winX + PADDING + i * colW + 2, winY + 59, techColors[i]);
-        }
-
-        // Divider between panels
-        g.fill(winX + LEFT_W, winY + 8, winX + LEFT_W + 1, winY + WIN_H - 8, 0xFF3366CC);
-
-        // ── Right panel: utilization ──────────────────
-        int rightX = winX + LEFT_W + PADDING;
-        g.drawCenteredString(this.font, "📡 Utilisation en temps réel",
-            winX + LEFT_W + RIGHT_W / 2, winY + 8, 0xFF88BBFF);
-
-        TelecomFrequency[] allFreqs = TelecomFrequency.values();
-        int lineH = 15;
-        int barMaxW = 140;
-        int barH    = 6;
-        int yOff    = winY + 28;
-
-        String currentTech = null;
-        for (TelecomFrequency freq : allFreqs) {
-            if ((payload.enabledFrequenciesMask() & (1 << freq.ordinal())) == 0) continue;
-
-            // Tech separator header
-            if (!freq.getTechnology().equals(currentTech)) {
-                currentTech = freq.getTechnology();
-                int headerColor = switch (currentTech) {
-                    case "2G" -> 0xFFAA88FF;
-                    case "3G" -> 0xFFFF9944;
-                    case "4G" -> 0xFF44DDAA;
-                    default   -> 0xFF44AAFF;
-                };
-                g.drawString(this.font, "── " + currentTech + " ──", rightX, yOff, headerColor);
-                yOff += lineH;
+    @Override
+    public void render(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+        super.render(g, mouseX, mouseY, partialTick);
+        g.drawCenteredString(font, title, width / 2, winY + 8, 0xFF88BBFF);
+        g.drawString(font, text("name"), winX + 12, winY + 30, 0xFFCCCCCC);
+        if (tab == 0) {
+            String[] labels = {"sectors", "azimuth", "tilt", "power", "bandwidth"};
+            for (int i = 0; i < labels.length; i++) {
+                g.drawString(font, text(labels[i]), winX + 12, winY + 83 + i * 22, 0xFFCCCCCC);
             }
-
-            int[] stats  = payload.freqUtilization().get(freq.ordinal());
-            int actual   = stats != null ? stats[0] : 0;
-            int max      = stats != null ? stats[1] : freq.getMaxSpeedMb();
-            float ratio  = max > 0 ? Math.min(1f, (float) actual / max) : 0f;
-            int pct      = (int)(ratio * 100);
-
-            int barColor = pct < 50 ? 0xFF00CC44 : (pct < 80 ? 0xFFFFCC00 : 0xFFFF3333);
-
-            String label = freq.getFrequencyLabel();
-            g.drawString(this.font, label, rightX, yOff, 0xFFCCCCCC);
-
-            int barX = rightX + 60;
-            // Background
-            g.fill(barX, yOff, barX + barMaxW, yOff + barH, 0xFF2A2A3A);
-            // Fill
-            if (ratio > 0) g.fill(barX, yOff, barX + (int)(barMaxW * ratio), yOff + barH, barColor);
-            // Border
-            g.renderOutline(barX, yOff, barMaxW, barH, 0xFF444466);
-
-            // Percentage + Mbps
-            g.drawString(this.font, pct + "% | " + actual + "/" + max + " Mbps",
-                barX + barMaxW + 4, yOff, 0xFFAAAAAA);
-
-            yOff += lineH;
+            g.drawString(font, text(pendingConfig() == null ? "invalid" : "shared"), winX + 12, winY + 190,
+                    pendingConfig() == null ? 0xFFFF6666 : 0xFF888888);
+        } else {
+            g.drawString(font, text(tab == 1 ? "preview" : "live_hint"), winX + 12, winY + 76, 0xFF888888);
+            TelecomFrequency[] frequencies = TelecomFrequency.values();
+            AntennaRadioConfig config = tab == 1 ? pendingConfig() : payload.radioConfig();
+            for (int i = page * rows; i < Math.min(frequencies.length, (page + 1) * rows); i++) {
+                TelecomFrequency frequency = frequencies[i];
+                int y = winY + 93 + i % rows * 22;
+                if (tab == 1) {
+                    Component capacity = config == null ? text("unavailable") : text("nominal", config.capacityMbps(frequency));
+                    g.drawString(font, capacity, winX + winW - 12 - font.width(capacity), y, 0xFF88BBFF);
+                } else {
+                    g.drawString(font, Component.literal(frequency.getTechnology() + " " + frequency.getFrequencyLabel()), winX + 12, y, 0xFFCCCCCC);
+                    int[] stats = payload.freqUtilization().get(i);
+                    Component usage = (payload.enabledFrequenciesMask() & (1 << i)) == 0 ? text("disabled")
+                            : text("usage", stats == null ? 0 : stats[0], config.capacityMbps(frequency));
+                    g.drawString(font, usage, winX + winW - 12 - font.width(usage), y, 0xFF88BBFF);
+                }
+            }
+            g.drawCenteredString(font, Component.literal((page + 1) + "/" + ((frequencies.length + rows - 1) / rows)),
+                    winX + winW - 56, winY + winH - 22, 0xFF888888);
         }
-
-        if (currentTech == null) {
-            g.drawCenteredString(this.font, "Aucune fréquence activée",
-                winX + LEFT_W + RIGHT_W / 2, winY + WIN_H / 2, 0xFF666666);
-        }
-    }
-
-    @Override
-    public void render(GuiGraphics g, int mouseX, int mouseY, float pt) {
-        super.render(g, mouseX, mouseY, pt);
     }
 
     @Override

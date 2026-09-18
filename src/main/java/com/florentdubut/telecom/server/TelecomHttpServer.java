@@ -402,6 +402,17 @@ public class TelecomHttpServer {
             item.addProperty("capacityUp", up);
             item.addProperty("capacity", Math.max(down, up));
             item.addProperty("capacityMode", "DIRECTIONAL");
+            if (node.getType() == NetworkNode.NodeType.MICROWAVE_DISH) {
+                var config = node.getMicrowaveConfig();
+                JsonObject microwave = new JsonObject();
+                microwave.addProperty("peer", config.peer() == null ? null : Long.toString(config.peer().asLong()));
+                microwave.addProperty("channel", config.channel());
+                microwave.addProperty("frequencyGhz", config.frequencyGhz());
+                microwave.addProperty("azimuthDegrees", config.azimuthDegrees());
+                microwave.addProperty("elevationDegrees", config.elevationDegrees());
+                microwave.addProperty("enabled", config.enabled());
+                item.add("microwave", microwave);
+            }
             if (node.getType() == NetworkNode.NodeType.ANTENNA) {
                 JsonArray techs = new JsonArray();
                 JsonArray frequencies = new JsonArray();
@@ -412,7 +423,9 @@ public class TelecomHttpServer {
                     JsonObject f = new JsonObject();
                     f.addProperty("technology", freq.getTechnology());
                     f.addProperty("label", freq.getFrequencyLabel());
-                    f.addProperty("max", freq.getMaxSpeedMb());
+                    f.addProperty("max", node.getRadioConfig().capacityMbps(freq));
+                    f.addProperty("widthMhz", com.florentdubut.telecom.network.RadioAccessService.channelWidthMhz(freq, node.getRadioConfig()));
+                    f.addProperty("usageMode", "AIRTIME_DOWN_EQUIVALENT");
                     var stats = utilization.get(freq);
                     f.addProperty("usage", stats == null ? 0 : stats.actualMbps());
                     frequencies.add(f);
@@ -423,6 +436,7 @@ public class TelecomHttpServer {
             nodes.add(item);
         }
         response.add("nodes", nodes);
+        var microwaveStatuses = com.florentdubut.telecom.network.MicrowaveLinkService.links(level);
         JsonArray edges = new JsonArray();
         for (NetworkEdge edge : graph.getEdges()) {
             checkBudget(deadline);
@@ -437,9 +451,42 @@ public class TelecomHttpServer {
             item.addProperty("nominalCapacity", edge.getBandwidthMax());
             item.addProperty("capacityMode", "SHARED");
             item.addProperty("length", edge.getLength());
+            item.addProperty("latencyMs", edge.getLatencyMs());
             edges.add(item);
         }
         response.add("edges", edges);
+        JsonArray microwaveLinks = new JsonArray();
+        for (var link : microwaveStatuses) {
+            checkBudget(deadline);
+            if (microwaveLinks.size() >= 128) break;
+            JsonObject item = new JsonObject();
+            item.addProperty("source", Long.toString(link.source().asLong()));
+            item.addProperty("target", Long.toString(link.target().asLong()));
+            item.addProperty("type", "MICROWAVE");
+            item.addProperty("state", link.state());
+            item.addProperty("capacityMbps", link.capacityMbps());
+            item.addProperty("nominalCapacityMbps", link.nominalCapacityMbps());
+            item.addProperty("latencyMs", link.latencyMs());
+            JsonObject source = new JsonObject(), target = new JsonObject();
+            source.addProperty("x", link.source().getX());
+            source.addProperty("y", link.source().getY());
+            source.addProperty("z", link.source().getZ());
+            target.addProperty("x", link.target().getX());
+            target.addProperty("y", link.target().getY());
+            target.addProperty("z", link.target().getZ());
+            item.add("sourcePos", source);
+            item.add("targetPos", target);
+            if (link.blocker() == null) item.add("blocker", com.google.gson.JsonNull.INSTANCE);
+            else {
+                JsonObject blocker = new JsonObject();
+                blocker.addProperty("x", link.blocker().getX());
+                blocker.addProperty("y", link.blocker().getY());
+                blocker.addProperty("z", link.blocker().getZ());
+                item.add("blocker", blocker);
+            }
+            microwaveLinks.add(item);
+        }
+        response.add("microwaveLinks", microwaveLinks);
         String snapshot = response.toString();
         checkBudget(deadline);
         return snapshot;

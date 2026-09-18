@@ -1,5 +1,7 @@
 package com.florentdubut.telecom.block.entity;
 
+import com.florentdubut.telecom.network.NetworkDiagnostics;
+
 import com.florentdubut.telecom.registry.ModBlockEntities;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.block.entity.BlockEntity;
@@ -19,7 +21,7 @@ public class CableBlockEntity extends BlockEntity {
 
     public void onRemoved() {
         if (level instanceof ServerLevel serverLevel) {
-            com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel);
+            com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel, NetworkDiagnostics.Cause.CABLE_REMOVE);
         }
     }
 }

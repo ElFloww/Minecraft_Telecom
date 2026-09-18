@@ -36,6 +36,9 @@ public class ModBlocks {
     public static final DeferredBlock<Block> ANTENNA = BLOCKS.registerBlock("antenna",
             AntennaBlock::new, () -> BlockBehaviour.Properties.of().noOcclusion().strength(1.5f));
 
+    public static final DeferredBlock<Block> MICROWAVE_DISH = BLOCKS.registerBlock("microwave_dish",
+            com.florentdubut.telecom.block.MicrowaveDishBlock::new, () -> BlockBehaviour.Properties.of().noOcclusion().strength(1.5f));
+
     public static final DeferredBlock<Block> MEDIUM_FIBER_CABLE = BLOCKS.registerBlock("medium_fiber_cable",
             com.florentdubut.telecom.block.MediumFiberCableBlock::new, () -> BlockBehaviour.Properties.of().noOcclusion().strength(1.0f));
 

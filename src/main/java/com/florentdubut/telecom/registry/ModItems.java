@@ -26,6 +26,8 @@ public class ModItems {
 
     public static final DeferredItem<BlockItem> ANTENNA = ITEMS.registerSimpleBlockItem(ModBlocks.ANTENNA);
 
+    public static final DeferredItem<BlockItem> MICROWAVE_DISH = ITEMS.registerSimpleBlockItem(ModBlocks.MICROWAVE_DISH);
+
     public static final DeferredItem<BlockItem> MEDIUM_FIBER_CABLE = ITEMS.registerSimpleBlockItem(ModBlocks.MEDIUM_FIBER_CABLE);
 
     public static final DeferredItem<BlockItem> BIG_FIBER_CABLE = ITEMS.registerSimpleBlockItem(ModBlocks.BIG_FIBER_CABLE);

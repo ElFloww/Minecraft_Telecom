@@ -1,6 +1,9 @@
 package com.florentdubut.telecom.block.entity;
 
+import com.florentdubut.telecom.network.NetworkDiagnostics;
+
 import com.florentdubut.telecom.registry.ModBlockEntities;
+import com.florentdubut.telecom.network.AntennaRadioConfig;
 import com.florentdubut.telecom.network.NetworkNode;
 import com.florentdubut.telecom.network.TelecomNetworkGraph;
 import com.florentdubut.telecom.network.TelecomFrequency;
@@ -19,6 +22,7 @@ public class AntennaBlockEntity extends BlockEntity {
     private String antennaName = "Relay-" + (int)(Math.random() * 10000);
     // Bitmask of enabled frequencies. e.g., if bit 0 is 1, then TelecomFrequency.values()[0] is enabled.
     private int enabledFrequenciesMask = 0;
+    private AntennaRadioConfig radioConfig = AntennaRadioConfig.DEFAULT;
 
     public AntennaBlockEntity(BlockPos pos, BlockState state) {
         super(ModBlockEntities.ANTENNA_BE.get(), pos, state);
@@ -46,10 +50,12 @@ public class AntennaBlockEntity extends BlockEntity {
             if (node == null) {
                 node = new NetworkNode(worldPosition, NetworkNode.NodeType.ANTENNA);
                 graph.addNode(node);
-                com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel);
+                com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel, NetworkDiagnostics.Cause.NODE_LOAD);
             }
-            if (node.getFrequenciesMask() != enabledFrequenciesMask) {
+            if (node.getFrequenciesMask() != enabledFrequenciesMask || !node.getRadioConfig().equals(radioConfig)) {
                 node.setFrequenciesMask(enabledFrequenciesMask);
+                node.setRadioConfig(radioConfig);
+                graph.setDirty();
                 com.florentdubut.telecom.network.CoverageService.invalidateAntennas(serverLevel);
             }
         }
@@ -59,7 +65,7 @@ public class AntennaBlockEntity extends BlockEntity {
         if (level instanceof ServerLevel serverLevel) {
             TelecomNetworkGraph graph = TelecomNetworkGraph.get(serverLevel);
             graph.removeNode(worldPosition);
-            com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel);
+            com.florentdubut.telecom.network.NetworkTracer.scheduleRecalculation(serverLevel, NetworkDiagnostics.Cause.NODE_REMOVE);
         }
     }
 
@@ -68,6 +74,7 @@ public class AntennaBlockEntity extends BlockEntity {
         super.saveAdditional(tag);
         tag.putString("antennaName", antennaName);
         tag.putInt("enabledFrequenciesMask", enabledFrequenciesMask);
+        radioConfig.writeTo(tag);
     }
 
     @Override
@@ -75,6 +82,7 @@ public class AntennaBlockEntity extends BlockEntity {
         super.loadAdditional(tag);
         antennaName = tag.getStringOr("antennaName", antennaName);
         enabledFrequenciesMask = tag.getIntOr("enabledFrequenciesMask", 0);
+        radioConfig = AntennaRadioConfig.read(tag);
     }
 
     @Override
@@ -101,6 +109,21 @@ public class AntennaBlockEntity extends BlockEntity {
         return enabledFrequenciesMask;
     }
 
+    public AntennaRadioConfig getRadioConfig() { return radioConfig; }
+
+    public void setRadioConfig(AntennaRadioConfig config) {
+        java.util.Objects.requireNonNull(config);
+        if (radioConfig.equals(config)) return;
+        radioConfig = config;
+        setChanged();
+        if (level instanceof ServerLevel serverLevel) {
+            restoreNode();
+            TelecomNetworkGraph.get(serverLevel).setDirty();
+            com.florentdubut.telecom.network.CoverageService.invalidateAntennas(serverLevel);
+        }
+        if (level != null) level.sendBlockUpdated(worldPosition, getBlockState(), getBlockState(), 3);
+    }
+
     public boolean isFrequencyEnabled(TelecomFrequency freq) {
         return (enabledFrequenciesMask & (1 << freq.ordinal())) != 0;
     }
@@ -116,6 +139,7 @@ public class AntennaBlockEntity extends BlockEntity {
                 com.florentdubut.telecom.network.NetworkNode node = graph.getNode(worldPosition);
                 if (node != null) {
                     node.setFrequenciesMask(mask);
+                    graph.setDirty();
                 }
                 com.florentdubut.telecom.network.CoverageService.invalidateAntennas(serverLevel);
             }

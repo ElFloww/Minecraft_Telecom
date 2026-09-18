@@ -711,6 +711,7 @@ const COLORS = {
     SERVER: '#ef4444',
     ROUTER: '#f97316',
     ANTENNA: '#06b6d4',
+    MICROWAVE_DISH: '#a78bfa',
     NRO: '#d946ef',
     NRA: '#84cc16',
     PM: '#eab308',
@@ -757,6 +758,11 @@ async function fetchNetworkData() {
             mapImageStore.select(terrainMapId, data.mapImage);
             updateTerrain();
             networkData = data;
+            // Hovered objects belong to the previous snapshot, including stationary-pointer clicks.
+            hoveredNode = hoveredEdge = null;
+            tooltip.innerHTML = '';
+            tooltip.style.display = 'none';
+            if (mapPointer) document.body.style.cursor = isDragging ? 'grabbing' : 'grab';
             for (const node of data.nodes) {
                 speedtestStore.capture(node, terrainGeneration, Date.now(), reducedMotion?.matches);
                 const pending = speedtestPending.get(node.id);
@@ -802,10 +808,13 @@ async function fetchNetworkData() {
                     detailsPanel.style.display = 'none';
                 }
             } else if (selectedEdge) {
-                const upToDate = networkData.edges.find(e => e.source === selectedEdge.source && e.target === selectedEdge.target);
+                const upToDate = displayEdges().find(e => edgeIdentity(e) === edgeIdentity(selectedEdge));
                 if (upToDate) {
                     selectedEdge = upToDate;
                     showEdgeDetails(upToDate);
+                } else {
+                    selectedEdge = null;
+                    detailsPanel.style.display = 'none';
                 }
             }
         }
@@ -1148,8 +1157,25 @@ function showNodeDetails(node) {
         <div class="progress-container" style="height: 4px;"><div class="progress-bar" style="width: ${loadPctUp}%; background: hsl(${120 - loadPctUp*1.2}, 100%, 50%)"></div></div>
     `;
 
+    if (node.type === 'MICROWAVE_DISH') {
+        html += '<div class="section-title">Faisceau hertzien (FH)</div>';
+        if (node.microwave) {
+            const config = node.microwave;
+            html += `<div class="info-row"><span class="label">Pair (ID)</span><span>${escapeHtml(config.peer ?? 'Non appairé')}</span></div>
+                <div class="info-row"><span class="label">Canal / GHz</span><span>${escapeHtml(config.channel)} / ${escapeHtml(config.frequencyGhz)}</span></div>
+                <div class="info-row"><span class="label">Azimut / élévation</span><span>${escapeHtml(config.azimuthDegrees)} / ${escapeHtml(config.elevationDegrees)}</span></div>
+                <div class="info-row"><span class="label">Activé</span><span>${config.enabled === true ? 'Oui' : 'Non'}</span></div>`;
+        }
+        for (const link of networkData.microwaveLinks ?? []) {
+            if (link.source === node.id || link.target === node.id) html += microwaveDetails(link);
+        }
+    }
+
     if (node.type === 'ANTENNA' && node.frequencies && node.frequencies.length > 0) {
         html += `<div class="section-title">Radio : utilisation par Fréquence</div>`;
+        if (node.frequencies.some(freq => freq.usageMode === 'AIRTIME_DOWN_EQUIVALENT')) {
+            html += `<div class="speedtest-caption">Charge radio en équivalent descendant : DOWN + UP normalisé.</div>`;
+        }
         
         for (const freq of node.frequencies) {
             let freqLoad = loadPercent(freq.usage, freq.max);
@@ -1241,8 +1267,14 @@ function showEdgeDetails(edge) {
     speedtestViewId = null;
     speedtestViewGeneration++;
     detailsPanel.style.display = 'flex';
-    detailsTitle.innerText = `Câble: ${edge.type}`;
+    detailsTitle.innerText = edge.type === 'MICROWAVE' ? 'Faisceau hertzien (FH)' : `Câble: ${edge.type}`;
     detailsTitle.style.color = '#fff';
+    if (edge.type === 'MICROWAVE') {
+        detailsContent.innerHTML = microwaveDetails(edge)
+            + `<div class="info-row"><span class="label">Charge partagée (DOWN + UP)</span><span>${edgeLoadPercent(edge).toFixed(1)}%</span></div>
+                <div class="info-row"><span class="label">DOWN / UP</span><span>${formatSpeed(edge.usageDown)} / ${formatSpeed(edge.usageUp)}</span></div>`;
+        return;
+    }
     
     const loadPct = edgeLoadPercent(edge);
     
@@ -1270,6 +1302,69 @@ function distToSegment(p, v, w) {
     let t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
     t = Math.max(0, Math.min(1, t));
     return Math.hypot(p.x - (v.x + t * (w.x - v.x)), p.y - (v.y + t * (w.y - v.y)));
+}
+
+function edgeIdentity(edge) {
+    return JSON.stringify([edge.type, ...[edge.source, edge.target].sort()]);
+}
+
+function microwaveColor(state) {
+    if (state === 'ready') return '#38bdf8';
+    if (state === 'degraded') return '#fbbf24';
+    if (['pending', 'unknown', 'limit'].includes(state)) return '#94a3b8';
+    if (['disabled', 'unpaired'].includes(state)) return '#64748b';
+    return '#ef4444';
+}
+
+function microwaveDetails(link) {
+    const labels = { ready: 'Prêt', degraded: 'Dégradé', blocked: 'Obstrué', fresnel_blocked: 'Fresnel obstrué',
+        misaligned: 'Mal aligné', channel_mismatch: 'Canaux incompatibles', unpaired: 'Non appairé', disabled: 'Désactivé',
+        out_of_range: 'Hors portée', unknown: 'Inconnu', pending: 'En attente', limit: 'Limite atteinte' };
+    const position = p => p ? `${p.x}, ${p.y}, ${p.z}` : 'Aucun';
+    return `<div class="microwave-details">
+        <div class="info-row"><span class="label">État FH</span><span style="color:${microwaveColor(link.state)}">${escapeHtml(labels[link.state] ?? link.state ?? 'Inconnu')}</span></div>
+        <div class="info-row"><span class="label">Source / cible (ID)</span><span>${escapeHtml(link.source)} / ${escapeHtml(link.target)}</span></div>
+        <div class="info-row"><span class="label">Capacité effective / nominale partagée</span><span>${formatSpeed(link.capacityMbps ?? link.capacity)} / ${formatSpeed(link.nominalCapacityMbps ?? link.nominalCapacity)}</span></div>
+        <div class="info-row"><span class="label">Latence</span><span>${escapeHtml(link.latencyMs ?? '?')} ms</span></div>
+        <div class="info-row"><span class="label">Obstacle (X,Y,Z)</span><span>${escapeHtml(position(link.blocker))}</span></div>
+        </div>`;
+}
+
+// Diagnostics are a display overlay only. Path statistics always use networkData.edges.
+let displayedEdgesSource, displayedLinksSource, displayedEdgesCache;
+function displayEdges() {
+    if (displayedEdgesSource === networkData.edges && displayedLinksSource === networkData.microwaveLinks) return displayedEdgesCache;
+    displayedEdgesSource = networkData.edges;
+    displayedLinksSource = networkData.microwaveLinks;
+    const links = (networkData.microwaveLinks ?? []).slice(0, 128).map(link => ({ ...link, type: 'MICROWAVE' }));
+    const physical = new Map(networkData.edges.map(edge => [edgeIdentity(edge), edge]));
+    const keys = new Set(links.map(edgeIdentity));
+    displayedEdgesCache = [...links.map(link => ({ ...physical.get(edgeIdentity(link)), ...link,
+        capacity: link.capacityMbps, nominalCapacity: link.nominalCapacityMbps, capacityMode: 'SHARED' })),
+        ...networkData.edges.filter(edge => !keys.has(edgeIdentity(edge))).map(edge => edge.type !== 'MICROWAVE' ? edge
+            : { ...edge, state: edge.capacity > 0 ? edge.capacity < edge.nominalCapacity ? 'degraded' : 'ready' : 'unknown' })];
+    return displayedEdgesCache;
+}
+
+function cableLineWidth() {
+    return Math.max(0.5, zoom);
+}
+
+function edgePoints(edge) {
+    if (edge.source === edge.target) return null;
+    const a = nodeMap.get(edge.source) ?? edge.sourcePos, b = nodeMap.get(edge.target) ?? edge.targetPos;
+    if (!a || !b) return null;
+    const p = { x: a.x * zoom + pan.x, y: a.z * zoom + pan.y };
+    const q = { x: b.x * zoom + pan.x, y: b.z * zoom + pan.y };
+    const length = Math.hypot(q.x - p.x, q.y - p.y);
+    if (!Number.isFinite(length) || length === 0) return null;
+    if (edge.type === 'MICROWAVE') {
+        // Clear the cable stroke plus the widest FH half-stroke (1.5px) and a 4px gap.
+        const offset = Math.max(6, cableLineWidth() / 2 + 1.5 + 4);
+        const dx = -(q.y - p.y) / length * offset, dy = (q.x - p.x) / length * offset;
+        p.x += dx; q.x += dx; p.y += dy; q.y += dy;
+    }
+    return [p, q];
 }
 
 function countDownstream(startNode) {
@@ -1386,16 +1481,16 @@ window.addEventListener('pointermove', e => {
     }
     
     if (!hoveredNode && document.getElementById('show-infra').checked) {
-        for (const edge of networkData.edges) {
-            const n1 = nodeMap.get(edge.source);
-            const n2 = nodeMap.get(edge.target);
-            if (n1 && n2) {
-                const p1 = { x: n1.x * zoom + pan.x, y: n1.z * zoom + pan.y };
-                const p2 = { x: n2.x * zoom + pan.x, y: n2.z * zoom + pan.y };
+        let closest = Infinity;
+        for (const edge of displayEdges()) {
+            const points = edgePoints(edge);
+            if (points) {
+                const [p1, p2] = points;
                 const dist = distToSegment({x: mouseX, y: mouseY}, p1, p2);
-                if (dist < 6) {
+                const tolerance = edge.type === 'MICROWAVE' ? 6 : Math.max(6, cableLineWidth() / 2 + 3);
+                if (dist < tolerance && dist < closest) {
                     hoveredEdge = edge;
-                    break;
+                    closest = dist;
                 }
             }
         }
@@ -1407,6 +1502,10 @@ window.addEventListener('pointermove', e => {
         tooltip.style.left = (e.clientX + 15) + 'px';
         tooltip.style.top = (e.clientY + 15) + 'px';
         tooltip.innerHTML = `<div class="title" style="color: ${COLORS[hoveredNode.type] || '#fff'}; border: none; padding: 0; margin: 0;">${escapeHtml(hoveredNode.type)} <span style="font-size: 0.75rem; color: #94a3b8">(Clic pour détails)</span></div><div>${hoveredNode.type === 'ANTENNA' ? 'Collecte filaire : ' : ''}Charge directionnelle : ${nodeLoadPercent(hoveredNode).toFixed(1)}%</div>`;
+        if (hoveredNode.type === 'MICROWAVE_DISH') {
+            tooltip.innerHTML += (networkData.microwaveLinks ?? []).filter(link => link.source === hoveredNode.id
+                || link.target === hoveredNode.id).map(microwaveDetails).join('');
+        }
         document.body.style.cursor = 'pointer';
     } else if (hoveredEdge) {
         tooltip.style.display = 'block';
@@ -1416,6 +1515,7 @@ window.addEventListener('pointermove', e => {
         let color = `hsl(${120 - loadPct*1.2}, 100%, 50%)`;
         if(loadPct === 0) color = '#94a3b8';
         tooltip.innerHTML = `<div class="title" style="color: ${color}; border: none; padding: 0; margin: 0;">Câble ${escapeHtml(hoveredEdge.type)} <span style="font-size: 0.75rem; color: #94a3b8">(Clic pour détails)</span></div><div>Charge partagée (DOWN + UP) : ${loadPct.toFixed(1)}%</div>`;
+        if (hoveredEdge.type === 'MICROWAVE') tooltip.innerHTML = microwaveDetails(hoveredEdge);
         document.body.style.cursor = 'pointer';
     } else {
         tooltip.style.display = 'none';
@@ -1587,19 +1687,31 @@ function draw() {
     const showInfra = document.getElementById('show-infra');
     if (!showInfra || showInfra.checked) {
         // SMALLER CABLES!
-        ctx.lineWidth = Math.max(0.5, 1 * zoom);
+        ctx.lineWidth = cableLineWidth();
         
-        for (const edge of networkData.edges) {
-            const n1 = nodeMap.get(edge.source);
-            const n2 = nodeMap.get(edge.target);
-            
-            if (n1 && n2) {
-                const x1 = n1.x * zoom + pan.x;
-                const y1 = n1.z * zoom + pan.y;
-                const x2 = n2.x * zoom + pan.x;
-                const y2 = n2.z * zoom + pan.y;
+        for (const edge of displayEdges()) {
+            const points = edgePoints(edge);
+            if (points) {
+                const [{ x: x1, y: y1 }, { x: x2, y: y2 }] = points;
                 if (Math.max(x1, x2) < -20 || Math.min(x1, x2) > canvas.width + 20
                     || Math.max(y1, y2) < -20 || Math.min(y1, y2) > canvas.height + 20) continue;
+                if (edge.type === 'MICROWAVE') {
+                    ctx.strokeStyle = microwaveColor(edge.state);
+                    ctx.lineWidth = hoveredEdge && edgeIdentity(hoveredEdge) === edgeIdentity(edge) ? 3 : 2;
+                    ctx.lineDashOffset = 0;
+                    ctx.setLineDash([7, 5]);
+                    ctx.beginPath();
+                    ctx.moveTo(x1, y1);
+                    ctx.lineTo(x2, y2);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                    ctx.lineWidth = cableLineWidth();
+                    if (edge.blocker) {
+                        ctx.strokeStyle = '#ef4444';
+                        ctx.strokeRect(edge.blocker.x * zoom + pan.x - 3, edge.blocker.z * zoom + pan.y - 3, 6, 6);
+                    }
+                    continue;
+                }
                 
                 const loadPct = edgeLoadPercent(edge);
                 
@@ -1632,7 +1744,7 @@ function draw() {
                     ctx.lineTo(x2, y2);
                     ctx.stroke();
                     // Reset line width for next edge
-                    ctx.lineWidth = Math.max(0.5, 1 * zoom);
+                    ctx.lineWidth = cableLineWidth();
                 }
                 ctx.setLineDash([]);
             }
@@ -1657,7 +1769,13 @@ function draw() {
             
             ctx.fillStyle = color;
             ctx.beginPath();
-            ctx.arc(x, y, radius, 0, Math.PI * 2);
+            if (node.type === 'MICROWAVE_DISH') {
+                ctx.moveTo(x, y - radius);
+                ctx.lineTo(x + radius, y);
+                ctx.lineTo(x, y + radius);
+                ctx.lineTo(x - radius, y);
+                ctx.closePath();
+            } else ctx.arc(x, y, radius, 0, Math.PI * 2);
             ctx.fill();
             
             ctx.shadowBlur = 0;

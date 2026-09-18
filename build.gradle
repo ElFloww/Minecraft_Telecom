@@ -83,6 +83,7 @@ neoForge {
             type = "gameTestServer"
             gameDirectory = project.file('build/gametest')
             systemProperty 'telecom.http.enabled', 'false'
+            systemProperty 'telecom.networkBaseline', providers.gradleProperty('networkBaseline').getOrElse('false')
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
         }
 

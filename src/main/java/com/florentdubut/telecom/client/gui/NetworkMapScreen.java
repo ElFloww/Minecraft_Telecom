@@ -3,6 +3,8 @@ package com.florentdubut.telecom.client.gui;
 import com.florentdubut.telecom.network.TelecomFrequency;
 import com.florentdubut.telecom.network.packet.CoverageTilePayload;
 import com.florentdubut.telecom.network.packet.MapNodeData;
+import com.florentdubut.telecom.network.packet.MapMicrowaveData;
+import com.florentdubut.telecom.network.packet.NetworkMapResponsePayload;
 import com.florentdubut.telecom.network.packet.RequestNetworkMapPayload;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
@@ -18,6 +20,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.UUID;
 
 public class NetworkMapScreen extends Screen {
     private static final String[] TECHNOLOGIES = {"all", "2G", "3G", "4G", "5G"};
@@ -25,6 +28,8 @@ public class NetworkMapScreen extends Screen {
     private static final String[] LEGEND = {"strong", "medium", "weak", "below", "none", "unknown"};
     private final CoverageMapState coverage = new CoverageMapState();
     private List<MapNodeData> nodes = List.of();
+    private List<MapMicrowaveData> microwaveLinks = List.of();
+    private UUID viewId = UUID.randomUUID();
     private boolean loading = true;
     private boolean centered;
     private boolean closed;
@@ -65,6 +70,12 @@ public class NetworkMapScreen extends Screen {
     @Override
     protected void init() {
         super.init();
+        if (closed || !dimension.equals(currentDimension())) {
+            viewId = UUID.randomUUID();
+            nodes = List.of();
+            microwaveLinks = List.of();
+            loading = true;
+        }
         closed = false;
         dimension = currentDimension();
         int columns = width >= 640 ? 6 : 3;
@@ -190,9 +201,11 @@ public class NetworkMapScreen extends Screen {
         return value;
     }
 
-    public void receiveData(List<MapNodeData> nodesData) {
-        if (closed || !dimension.equals(currentDimension())) return;
-        nodes = List.copyOf(nodesData);
+    public void receiveData(NetworkMapResponsePayload payload) {
+        if (closed || !viewId.equals(payload.viewId()) || !dimension.equals(payload.dimension())
+                || !dimension.equals(currentDimension()) || minecraft == null || minecraft.screen != this) return;
+        nodes = payload.nodes();
+        microwaveLinks = payload.microwaveLinks();
         loading = false;
     }
 
@@ -212,8 +225,8 @@ public class NetworkMapScreen extends Screen {
             return;
         }
         if (!lastHeight.equals(selectedHeight())) viewChanged();
-        if (loading && minecraft.getConnection() != null && ticks % 20 == 0) {
-            ClientPacketDistributor.sendToServer(new RequestNetworkMapPayload());
+        if (minecraft.getConnection() != null && ticks % 40 == 1) {
+            ClientPacketDistributor.sendToServer(new RequestNetworkMapPayload(viewId, dimension));
         }
         // Let a pan, zoom, or edit settle before creating expensive server jobs.
         if (!coverageEnabled || !validHeight || isDragging || ticks - viewChangedAt < 4
@@ -245,6 +258,7 @@ public class NetworkMapScreen extends Screen {
         graphics.enableScissor(0, mapTop, width, mapBottom);
         List<Component> tooltip = new ArrayList<>();
         if (coverageEnabled) renderCoverage(graphics, mouseX, mouseY, tooltip);
+        MapMicrowaveData hoveredLink = renderMicrowaveLinks(graphics, mouseX, mouseY);
         MapNodeData hoveredNode = null;
         for (MapNodeData node : nodes) {
             int x = screenX(node.pos().getX()), y = screenZ(node.pos().getZ());
@@ -253,6 +267,7 @@ public class NetworkMapScreen extends Screen {
                 case "SERVER" -> 0xFFFF0000;
                 case "ROUTER" -> 0xFFFFAA00;
                 case "ANTENNA" -> 0xFF00FFFF;
+                case "MICROWAVE_DISH" -> 0xFFA78BFA;
                 case "NRO" -> 0xFFFF00FF;
                 case "NRA" -> 0xFFAAFF00;
                 case "PM" -> 0xFFFFFF00;
@@ -280,11 +295,58 @@ public class NetworkMapScreen extends Screen {
                 tooltip.add(Component.literal(hoveredNode.type()));
                 tooltip.add(text("position", hoveredNode.pos().toShortString()));
                 if (hoveredNode.ipAddress() != null && !hoveredNode.ipAddress().isEmpty()) tooltip.add(text("ip", hoveredNode.ipAddress()));
-                if (hoveredNode.extraInfo() != null && !hoveredNode.extraInfo().isEmpty()) tooltip.add(text("technology", hoveredNode.extraInfo()));
+                if (hoveredNode.extraInfo() != null && !hoveredNode.extraInfo().isEmpty()) tooltip.add(
+                        hoveredNode.type().equals("MICROWAVE_DISH") ? Component.literal(hoveredNode.extraInfo())
+                                : text("technology", hoveredNode.extraInfo()));
                 if (hoveredNode.type().equals("ANTENNA")) tooltip.add(text("antenna_hint"));
+                if (hoveredNode.type().equals("MICROWAVE_DISH")) {
+                    for (var link : microwaveLinks) {
+                        if (link.source().equals(hoveredNode.pos()) || link.target().equals(hoveredNode.pos())) {
+                            addMicrowaveTooltip(tooltip, link);
+                        }
+                    }
+                }
+            } else if (hoveredLink != null) {
+                addMicrowaveTooltip(tooltip, hoveredLink);
             }
             if (!tooltip.isEmpty()) graphics.setComponentTooltipForNextFrame(font, tooltip, mouseX, mouseY);
         }
+    }
+
+    private MapMicrowaveData renderMicrowaveLinks(GuiGraphics graphics, int mouseX, int mouseY) {
+        MapMicrowaveData hovered = null;
+        for (var link : microwaveLinks) {
+            double[] line = MicrowaveMapGeometry.clip(screenX(link.source().getX()), screenZ(link.source().getZ()),
+                    screenX(link.target().getX()), screenZ(link.target().getZ()), width, mapTop, mapBottom);
+            if (line == null) continue;
+            double dx = line[2] - line[0], dy = line[3] - line[1];
+            double length = Math.hypot(dx, dy);
+            int color = MicrowaveMapGeometry.color(link.state());
+            graphics.pose().pushMatrix();
+            graphics.pose().translate((float) line[0], (float) line[1]);
+            graphics.pose().rotate((float) Math.atan2(dy, dx));
+            int dashes = Math.min(1024, Math.max(1, (int) Math.ceil(length / 12)));
+            for (int i = 0; i < dashes; i++) {
+                int x = (int) (length * i / dashes);
+                graphics.fill(x, -1, Math.min(x + 6, (int) Math.ceil(length)), 1, color);
+            }
+            graphics.pose().popMatrix();
+            if (MicrowaveMapGeometry.hit(line, mouseX, mouseY)) hovered = link;
+            if (link.blocker() != null) {
+                int x = screenX(link.blocker().getX()), y = screenZ(link.blocker().getZ());
+                graphics.renderOutline(x - 3, y - 3, 6, 6, 0xFFEF4444);
+            }
+        }
+        return hovered;
+    }
+
+    private static void addMicrowaveTooltip(List<Component> tooltip, MapMicrowaveData link) {
+        tooltip.add(text("position", link.source().toShortString()));
+        tooltip.add(Component.translatable("gui.telecom.microwave.peer", link.target().toShortString()));
+        tooltip.add(Component.translatable("gui.telecom.microwave.state." + link.state()));
+        tooltip.add(Component.translatable("gui.telecom.microwave.capacity", link.capacityMbps(), link.nominalCapacityMbps()));
+        tooltip.add(Component.translatable("gui.telecom.microwave.latency", String.format(Locale.ROOT, "%.2f", link.latencyMs())));
+        if (link.blocker() != null) tooltip.add(Component.translatable("gui.telecom.microwave.blocker", link.blocker().toShortString()));
     }
 
     private void renderCoverage(GuiGraphics graphics, int mouseX, int mouseY, List<Component> tooltip) {
@@ -360,7 +422,13 @@ public class NetworkMapScreen extends Screen {
                 : text("summary", ready, tiles.size(), tiles.isEmpty() ? 0 : Math.round(progress * 100 / tiles.size()),
                     tiles.isEmpty() ? PRECISIONS[precisionIndex] : tiles.getFirst().step());
         graphics.drawString(font, font.plainSubstrByWidth(status.getString(), Math.max(1, width - 8)), 4, mapBottom + 3, 0xFFFFFFFF);
-        if (!coverageEnabled) return;
+        if (!coverageEnabled) {
+            graphics.fill(4, mapBottom + 17, 10, mapBottom + 23, 0xFFA78BFA);
+            graphics.drawString(font, Component.translatable("block.telecom.microwave_dish"), 14, mapBottom + 16, 0xFFDDDDDD);
+            for (int x = 4; x < 28; x += 12) graphics.fill(x, mapBottom + 32, x + 6, mapBottom + 34, 0xFF38BDF8);
+            graphics.drawString(font, Component.literal("FH"), 32, mapBottom + 29, 0xFF38BDF8);
+            return;
+        }
         Component details = text("details", pending, busy, invalid);
         graphics.drawString(font, font.plainSubstrByWidth(details.getString(), Math.max(1, width - 8)), 4, mapBottom + 14, 0xFFBBBBBB);
         if (mouseY >= mapBottom && mouseY < mapBottom + 24) {

@@ -350,7 +350,8 @@ async function dashboard({ fetcher, bitmap, offscreen, manualTimers = false, red
     const requests = [], draws = [], timers = [], logs = [];
     const elements = new Map(), documentListeners = {}, windowListeners = {};
     const canvasContext = new Proxy({}, { get(target, key) {
-        return key in target ? target[key] : (...args) => draws.push({ method: key, args, color: target.fillStyle, stroke: target.strokeStyle });
+        return key in target ? target[key] : (...args) => draws.push({ method: key, args, color: target.fillStyle,
+            stroke: target.strokeStyle, lineWidth: target.lineWidth });
     } });
     const context = vm.createContext({
         ...coverage, ...zone, MapImageStore, SpeedtestStore, speedtestPlot, OffscreenCanvas: offscreen,
@@ -809,6 +810,137 @@ test('shared cable load is identical in details, hover and drawing, including de
     }
 });
 
+test('FH diagnostics draw once, retain failed beams and keep parallel cable identity and usage', async () => {
+    const a = '9007199254740993', b = '9007199254740994';
+    for (const state of ['ready', 'degraded', 'blocked', 'fresnel_blocked', 'pending', 'unknown', 'misaligned', 'limit']) {
+        const operational = ['ready', 'degraded'].includes(state);
+        const nodes = [{ id: a, type: 'MICROWAVE_DISH', x: 40, y: 64, z: 40 },
+            { id: b, type: 'MICROWAVE_DISH', x: 240, y: 64, z: 40 }];
+        const cable = { source: a, target: b, type: 'FIBER', capacity: 100, usageDown: 20, usageUp: 30 };
+        const beam = { source: a, target: b, type: 'MICROWAVE', state, capacityMbps: operational ? 100 : 0,
+            nominalCapacityMbps: 600, latencyMs: 0.25, blocker: operational ? null : { x: 100, y: 64, z: 40 } };
+        const edges = operational ? [cable, { ...cable, type: 'MICROWAVE' }] : [cable];
+        const { run, draws, elements, windowListeners } = await dashboard({ fetcher: async () => ({
+            status: 200, json: async () => ({ nodes, edges, microwaveLinks: [beam] }),
+        }) });
+        run('pan={x:0,y:0};zoom=1;draw()');
+        assert.equal(run('displayEdges().length'), 2);
+        assert.equal(run('networkData.edges.length'), operational ? 2 : 1);
+        assert.equal(draws.filter(d => d.method === 'setLineDash' && d.args[0][0] === 7).length, 1);
+        assert.ok(draws.some(d => d.method === 'stroke' && d.stroke === run(`microwaveColor('${state}')`)));
+        windowListeners.pointermove({ clientX: 440, clientY: 46, target: run('canvas') });
+        assert.equal(run('hoveredEdge.type'), 'MICROWAVE');
+        assert.match(elements.get('tooltip').innerHTML, /0\.25 ms/);
+        assert.match(elements.get('tooltip').innerHTML, /9007199254740993/);
+        if (!operational) assert.match(elements.get('tooltip').innerHTML, /100, 64, 40/);
+        run('selectedEdge=hoveredEdge;showEdgeDetails(selectedEdge)');
+        await run('fetchNetworkData()');
+        assert.equal(run('selectedEdge.type'), 'MICROWAVE', 'refresh must not select the parallel cable');
+        assert.equal(run('edgeLoadPercent(selectedEdge)'), operational ? 50 : 0);
+        windowListeners.pointermove({ clientX: 440, clientY: 40, target: run('canvas') });
+        assert.equal(run('hoveredEdge.type'), 'FIBER');
+    }
+});
+
+test('parallel FH and cable stay visually separated and select the nearest transport at low and high zoom', async () => {
+    for (const zoom of [0.25, 1, 8, 32]) {
+        const nodes = [{ id: '9007199254740993', type: 'MICROWAVE_DISH', x: 40, y: 64, z: 40 },
+            { id: '9007199254740994', type: 'MICROWAVE_DISH', x: 240, y: 64, z: 40 }];
+        const cable = { source: nodes[0].id, target: nodes[1].id, type: 'FIBER', capacity: 100, usageDown: 0, usageUp: 0 };
+        const beam = { ...cable, type: 'MICROWAVE', state: 'ready', capacityMbps: 100, nominalCapacityMbps: 600 };
+        const { run, elements, draws, windowListeners } = await dashboard({ fetcher: async () => ({
+            status: 200, json: async () => ({ nodes, edges: [cable, { ...cable, type: 'MICROWAVE' }], microwaveLinks: [beam] }),
+        }) });
+        run(`zoom=${zoom};pan={x:400-140*zoom,y:40-40*zoom};draw()`);
+        const beamY = run('edgePoints(displayEdges()[0])[0].y');
+        const wireStroke = draws.find(d => d.method === 'stroke' && d.stroke === 'rgba(255, 255, 255, 0.5)');
+        assert.equal(wireStroke.lineWidth, Math.max(0.5, zoom));
+        assert.ok(beamY - 40 - wireStroke.lineWidth / 2 - 1.5 >= 4, 'even highlighted FH clears the actual wire stroke');
+        assert.ok(draws.some(d => d.method === 'lineTo' && d.args[1] === beamY), 'hit geometry matches rendered beam');
+        for (const [y, type] of [[41, 'FIBER'], [beamY - 1, 'MICROWAVE'], [40 - wireStroke.lineWidth / 2 + 0.1, 'FIBER']]) {
+            windowListeners.pointermove({ clientX: 700, clientY: y, target: run('canvas') });
+            assert.equal(run('hoveredEdge?.type'), type, `zoom ${zoom}, y ${y}`);
+            elements.get('network-map').listeners.click({});
+            assert.equal(run('selectedEdge.type'), type);
+            assert.equal(run('selectedEdge.source'), nodes[0].id);
+            assert.equal(run('selectedEdge.target'), nodes[1].id);
+        }
+    }
+});
+
+test('accepted snapshots invalidate stationary node and FH hovers before stale tooltips or clicks can survive', async () => {
+    for (const hover of ['node', 'edge']) {
+        for (const change of ['blocked', 'removed']) {
+            const nodes = [{ id: '1', type: 'MICROWAVE_DISH', x: 40, y: 64, z: 40, microwave: { enabled: true } },
+                { id: '2', type: 'MICROWAVE_DISH', x: 240, y: 64, z: 40 }];
+            const beam = { source: '1', target: '2', type: 'MICROWAVE', state: 'ready', capacityMbps: 100,
+                nominalCapacityMbps: 600, latencyMs: 1 };
+            let snapshot = { nodes, edges: [{ ...beam, capacity: 100 }], microwaveLinks: [beam] };
+            const { run, elements, windowListeners } = await dashboard({ fetcher: async () => ({
+                status: 200, json: async () => snapshot,
+            }) });
+            run('pan={x:0,y:0};zoom=1');
+            const pointer = { clientX: hover === 'node' ? 340 : 440, clientY: hover === 'node' ? 40 : 46, target: run('canvas') };
+            windowListeners.pointermove(pointer);
+            assert.match(elements.get('tooltip').innerHTML, /Prêt/);
+            assert.equal(elements.get('tooltip').style.display, 'block');
+            snapshot = change === 'removed' ? { nodes: [], edges: [], microwaveLinks: [] }
+                : { nodes: [{ ...nodes[0], microwave: { enabled: false } }, nodes[1]], edges: [],
+                    microwaveLinks: [{ ...beam, state: 'blocked', capacityMbps: 0, blocker: { x: 100, y: 64, z: 40 } }] };
+            await run('fetchNetworkData()');
+            assert.equal(run('hoveredNode'), null);
+            assert.equal(run('hoveredEdge'), null);
+            assert.equal(elements.get('tooltip').style.display, 'none');
+            assert.doesNotMatch(elements.get('tooltip').innerHTML, /Prêt/);
+            elements.get('network-map').listeners.click({});
+            assert.equal(run('selectedNode'), null);
+            assert.equal(run('selectedEdge'), null);
+            assert.equal(elements.get('details-panel').style.display, 'none');
+            windowListeners.pointermove(pointer);
+            elements.get('network-map').listeners.click({});
+            if (change === 'blocked') {
+                assert.match(elements.get('tooltip').innerHTML, /Obstrué/);
+                assert.match(elements.get('details-content').innerHTML, /100, 64, 40/);
+                if (hover === 'node') assert.equal(run('selectedNode.microwave.enabled'), false);
+                else assert.equal(run('selectedEdge.state'), 'blocked');
+            } else {
+                assert.equal(run('selectedNode'), null);
+                assert.equal(run('selectedEdge'), null);
+            }
+        }
+    }
+});
+
+test('FH failed overlays never add downstream paths; unpaired diagnostics stay on dish and exclude radio selector', async () => {
+    const { run, elements, draws, windowListeners } = await dashboard();
+    run(`networkData={nodes:[{id:'1',type:'SERVER',x:40,y:64,z:40,capacity:1000},
+        {id:'2',type:'ROUTER',x:240,y:64,z:40,capacity:100},
+        {id:'3',type:'MICROWAVE_DISH',x:40,y:64,z:140,capacity:100}],edges:[],
+        microwaveLinks:[{source:'1',target:'2',type:'MICROWAVE',state:'blocked',capacityMbps:0,nominalCapacityMbps:600,latencyMs:1},
+        {source:'3',target:'3',type:'MICROWAVE',state:'unpaired',capacityMbps:0,nominalCapacityMbps:600,latencyMs:0}]};
+        nodeMap=new Map(networkData.nodes.map(n=>[n.id,n]));pan={x:0,y:0};zoom=1;updateCoverageAntennas();draw();
+        showNodeDetails(networkData.nodes[2])`);
+    assert.equal(run('countDownstream(networkData.nodes[0])'), 0);
+    assert.equal(draws.filter(d => d.method === 'setLineDash' && d.args[0][0] === 7).length, 1);
+    assert.match(elements.get('details-content').innerHTML, /Non appairé/);
+    assert.equal(elements.get('coverage-antenna').children.length, 1);
+    windowListeners.pointermove({ clientX: 340, clientY: 140, target: run('canvas') });
+    assert.match(elements.get('tooltip').innerHTML, /Non appairé/);
+    run(`networkData.edges=[{source:'1',target:'2',type:'MICROWAVE',capacity:100}];`);
+    assert.equal(run('countDownstream(networkData.nodes[0])'), 1);
+    run(`showNodeDetails({id:'x',type:'MICROWAVE_DISH',microwave:{peer:'<img src=x>',channel:'<b>',frequencyGhz:11}});
+        showEdgeDetails({type:'MICROWAVE',source:'<img>',target:'2',state:'<script>',blocker:{x:'<svg>',y:2,z:3}})`);
+    assert.doesNotMatch(elements.get('details-content').innerHTML, /<img>|<script>|<svg>/);
+    assert.match(elements.get('details-content').innerHTML, /&lt;script&gt;/);
+});
+
+test('FH missing graph endpoint uses diagnostic positions and degenerate projections do not hover', async () => {
+    const { run } = await dashboard();
+    assert.equal(run(`edgePoints({source:'1',target:'1',type:'MICROWAVE',sourcePos:{x:0,z:0},targetPos:{x:0,z:0}})`), null);
+    assert.equal(run(`edgePoints({source:'1',target:'2',type:'MICROWAVE',sourcePos:{x:0,z:0},targetPos:{x:0,z:0}})`), null);
+    assert.notEqual(run(`edgePoints({source:'1',target:'2',type:'MICROWAVE',sourcePos:{x:0,z:0},targetPos:{x:10,z:0}})`), null);
+});
+
 test('asymmetric node load uses each directional budget in details, hover and animation', async () => {
     for (const mode of [undefined, 'DIRECTIONAL']) {
         const node = { id: '1', type: 'ROUTER', x: 40, y: 64, z: 40, capacity: 1000,
@@ -873,6 +1005,18 @@ test('server catalogue describes a downstream path ceiling, not guaranteed duple
     assert.match(html, /plafond descendant du trajet 100 Mbps/);
     assert.match(html, /&lt;img src=x&gt;/);
     assert.doesNotMatch(html, /<img|duplex|garanti/);
+});
+
+test('configured radio reports normalized airtime separately from wired data usage', async () => {
+    const { run, elements } = await dashboard();
+    run(`showNodeDetails({type:'ANTENNA',x:0,y:64,z:0,capacityDown:1000,capacityUp:1000,
+        usageDown:0,usageUp:22,frequencies:[{label:'1800 MHz',technology:'4G',max:75,usage:75,
+        usageMode:'AIRTIME_DOWN_EQUIVALENT'}]})`);
+    const html = elements.get('details-content').innerHTML;
+    assert.match(html, /DOWN \+ UP normalisé/);
+    assert.match(html, /22 Mbps/);
+    assert.match(html, /75 Mbps \/ 75 Mbps/);
+    assert.match(html, /width: 100%/);
 });
 
 const routers = () => ['-9223372036854775808', '9223372036854775807'].map((id, x) => ({
